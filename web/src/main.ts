@@ -96,6 +96,8 @@ const state: AppState = {
   activeTab: "tasks",
   calendarMonth: { year: startMonth.getUTCFullYear(), month: startMonth.getUTCMonth() + 1 },
   calendarMember: null,
+  editingEventId: null,
+  expandedDay: null,
   status: { text: "", tone: "info" },
   probeDate: null,
 };
@@ -529,7 +531,6 @@ function header(): HTMLElement {
         ),
       ]),
     ]),
-    h("p", { class: "tagline", text: t("app.tagline") }),
     summaryBar(),
   ]);
 }
@@ -602,7 +603,6 @@ function render(): void {
           h("p", { id: "readonly-banner", class: "hint warn", text: t("role.readOnly") }),
           panel,
         ]),
-    h("footer", {}, [h("p", { text: t("footer.offline") }), h("p", { text: t("footer.engine") })]),
   );
   restoreFocus(focus);
 

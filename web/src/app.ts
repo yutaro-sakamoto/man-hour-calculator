@@ -76,6 +76,10 @@ export interface AppState {
   calendarMonth: { year: number; month: number };
   /** 月表示で見ている人員の添字。`null` なら全員の合計。 */
   calendarMember: number | null;
+  /** 編集している予定の id。`null` なら編集していない。 */
+  editingEventId: string | null;
+  /** 予定をすべて出している日 (`YYYY-MM-DD`)。狭い升に収まらないとき。 */
+  expandedDay: string | null;
   status: { text: string; tone: "info" | "error" };
   /** スケジュールタブで確率を見る日。 */
   probeDate: string | null;

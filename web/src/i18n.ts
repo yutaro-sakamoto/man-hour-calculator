@@ -4,7 +4,6 @@ import type { Lang } from "./format.ts";
 
 const ja = {
   "app.title": "工数見積もり",
-  "app.tagline": "3 点見積もりから総工数の確率分布と完了日を求めます",
   "lang.ja": "日本語",
   "lang.en": "English",
 
@@ -245,6 +244,15 @@ const ja = {
   "cal.totalCapacity": "期間全体で {value} 人日",
   "cal.events": "予定",
   "cal.addEvent": "予定を追加",
+  "cal.addEventOn": "{date} に予定を追加",
+  "cal.newEventName": "新しい予定",
+  "cal.untitledEvent": "(名前なし)",
+  "cal.editEvent": "予定を編集",
+  "cal.closeEditor": "閉じる",
+  "cal.doneEditing": "完了",
+  "cal.moreEvents": "ほか {count} 件",
+  "cal.fewerEvents": "折りたたむ",
+  "cal.toggleForced": "{date} を休日出勤にする / 戻す",
   "cal.eventName": "内容",
   "cal.eventFrom": "開始",
   "cal.eventTo": "終了",
@@ -258,9 +266,9 @@ const ja = {
   "cal.legendWorkday": "稼働日",
   "cal.legendWeekend": "週末",
   "cal.legendHoliday": "祝日",
-  "cal.legendEvent": "予定あり",
   "cal.legendForced": "休日出勤",
-  "cal.clickHint": "日付をクリックすると休日出勤の指定を切り替えられます。",
+  "cal.clickHint":
+    "升の空いているところを押すとその日に予定を足せます。予定を押すと編集できます。日付の数字を押すと休日出勤の指定が切り替わります。",
   "cal.dayCapacity": "{date}: {value} 人日",
 
   "results.heading": "総工数の分布",
@@ -360,10 +368,6 @@ const ja = {
   "error.unknown": "未知のエラー (コード {code}) が発生しました。",
   "error.boot": "WASM の読み込みに失敗しました: {message}",
 
-  "footer.offline":
-    "このページは 1 枚の HTML で完結しており、外部への通信はありません。オフラインでもそのまま動きます。",
-  "footer.engine": "計算コアは Rust を WebAssembly にビルドしたものです。",
-
   "members.heading": "人員",
   "members.add": "人員を追加",
   "members.remove": "{name} を削除",
@@ -413,7 +417,6 @@ type Dictionary = Record<keyof typeof ja, string>;
 
 const en: Dictionary = {
   "app.title": "Effort Estimator",
-  "app.tagline": "Turns three-point estimates into a probability distribution and a finish date",
   "lang.ja": "日本語",
   "lang.en": "English",
 
@@ -655,6 +658,15 @@ const en: Dictionary = {
   "cal.totalCapacity": "{value} person-days over the whole range",
   "cal.events": "Events",
   "cal.addEvent": "Add event",
+  "cal.addEventOn": "Add an event on {date}",
+  "cal.newEventName": "New event",
+  "cal.untitledEvent": "(untitled)",
+  "cal.editEvent": "Edit event",
+  "cal.closeEditor": "Close",
+  "cal.doneEditing": "Done",
+  "cal.moreEvents": "+{count} more",
+  "cal.fewerEvents": "Show fewer",
+  "cal.toggleForced": "Work on {date} anyway, or not",
   "cal.eventName": "Description",
   "cal.eventFrom": "From",
   "cal.eventTo": "To",
@@ -669,9 +681,9 @@ const en: Dictionary = {
   "cal.legendWorkday": "Working day",
   "cal.legendWeekend": "Weekend",
   "cal.legendHoliday": "Holiday",
-  "cal.legendEvent": "Has an event",
   "cal.legendForced": "Working anyway",
-  "cal.clickHint": "Click a date to toggle whether the team works on it.",
+  "cal.clickHint":
+    "Click empty space in a cell to add an event that day. Click an event to edit it. Click the date number to toggle working on a day off.",
   "cal.dayCapacity": "{date}: {value} person-days",
 
   "results.heading": "Distribution of total effort",
@@ -773,10 +785,6 @@ const en: Dictionary = {
   "error.invalidRows": "{count} task(s) have estimates that cannot be read.",
   "error.unknown": "Unexpected error (code {code}).",
   "error.boot": "Failed to load the WASM module: {message}",
-
-  "footer.offline":
-    "This page is a single self-contained HTML file. It makes no network requests and works offline.",
-  "footer.engine": "The computation core is Rust compiled to WebAssembly.",
 
   "members.heading": "People",
   "members.add": "Add person",

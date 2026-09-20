@@ -61,6 +61,18 @@ async function actAs(page, name) {
   await picker.selectOption(value);
 }
 
+/** 升のなかの予定を押して、編集の窓を開く。 */
+async function openEvent(page, name) {
+  await page.locator(`.event-chip:has-text("${name}")`).first().click();
+  await expect(page.locator(".modal-card")).toBeVisible();
+}
+
+/** 編集の窓を閉じる。開いたままだと後ろの操作が届かない。 */
+async function closeEditor(page) {
+  await page.locator('.modal-card button[title="閉じる"]').click();
+  await expect(page.locator(".modal-card")).toHaveCount(0);
+}
+
 /** ファイルメニューを開いて項目を選ぶ。 */
 async function fileMenu(page, label) {
   await page.click(".menu > summary");
@@ -270,8 +282,8 @@ test("祝日と休日出勤がカレンダーに反映される", async ({ page 
   await expect(holiday).toHaveClass(/holiday/);
   await expect(holiday).toHaveClass(/off/);
 
-  // クリックで休日出勤に切り替わる。
-  await recompute(page, () => holiday.click());
+  // 日付の数字を押すと休日出勤に切り替わる (升の空きは予定の追加に使う)。
+  await recompute(page, () => holiday.locator(".day-number").click());
   await expect(page.locator('.day[aria-label*="2026-09-21"]')).toHaveClass(
     /forced/,
   );
@@ -334,24 +346,24 @@ test("共有した予定は参加者全員の稼働を削る", async ({ page }) 
   const before = await capacityFor("0");
 
   // 参加者から 1 人目を外すと、その人の稼働は戻る。
-  await openTab(page, "calendar");
-  const firstEvent = page.locator(".event-card").first();
+  await openEvent(page, "全体定例");
   await recompute(page, () =>
-    firstEvent
-      .locator('.participant-list input[type="checkbox"]')
+    page
+      .locator('.modal-card .participant-list input[type="checkbox"]')
       .first()
       .uncheck(),
   );
+  await closeEditor(page);
   expect(await capacityFor("0")).toBeGreaterThan(before);
 });
 
 test("隔週の予定は 1 週おきにしか効かない", async ({ page }) => {
   await open(page);
   await openTab(page, "calendar");
-  const events = page.locator(".event-card");
-  await expect(events).toHaveCount(2);
-  // 2 件目はサンプルで隔週に設定してある。
-  await expect(events.nth(1).locator("select").first()).toHaveValue("2");
+  // 「隔週の振り返り」はサンプルで隔週に設定してある。
+  await openEvent(page, "隔週の振り返り");
+  await expect(page.locator(".modal-card select").first()).toHaveValue("2");
+  await closeEditor(page);
 
   const capacityOn = async (date) => {
     const label = await page
@@ -363,9 +375,11 @@ test("隔週の予定は 1 週おきにしか効かない", async ({ page }) => 
   // 開始日が日曜なので、隔週の予定は日曜にしか当たらない (= 稼働日には影響しない)。
   // 毎週の定例だけが平日の稼働を削っていることを、繰り返しを切って確かめる。
   const before = await capacityOn("2026-09-28");
+  await openEvent(page, "全体定例");
   await recompute(page, () =>
-    events.first().locator("select").first().selectOption("0"),
+    page.locator(".modal-card select").first().selectOption("0"),
   );
+  await closeEditor(page);
   expect(await capacityOn("2026-09-28")).toBeGreaterThan(before);
 });
 
@@ -382,10 +396,11 @@ test("予定の時刻は 5 分単位で効く", async ({ page }) => {
   const before = await capacityOn("2026-09-28");
 
   // 10:00〜10:45 を 10:00〜10:05 に縮めると、その 40 分ぶん稼働が戻る。
-  const firstEvent = page.locator(".event-card").first();
+  await openEvent(page, "全体定例");
   await recompute(page, () =>
-    firstEvent.locator('input[type="time"]').nth(1).fill("10:05"),
+    page.locator('.modal-card input[type="time"]').nth(1).fill("10:05"),
   );
+  await closeEditor(page);
   const after = await capacityOn("2026-09-28");
   // 1 人日 = 8 時間なので 40 分は 1/12 人日。
   expect(after - before).toBeGreaterThan(0.07);
@@ -973,4 +988,136 @@ test("接続先を入れ違えると理由が出て、ローカルのまま続�
   await expect(page.locator("#status")).toContainText("URL");
   // ローカルのまま動き続ける。
   await expect(page.locator("tr[data-project]")).toHaveCount(1);
+});
+
+/* ===== カレンダーのなかの予定 ===== */
+
+test("予定はカレンダーの升のなかに出る", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+
+  // 毎週の定例は 9/21 と 9/28 の両方に出る。別の一覧を見に行かなくてよい。
+  for (const date of ["2026-09-21", "2026-09-28"]) {
+    const cell = page.locator(`.day[data-day="${date}"]`);
+    await expect(cell.locator(".event-chip")).toHaveCount(1);
+    await expect(cell.locator(".event-chip")).toContainText("全体定例");
+    await expect(cell.locator(".chip-time")).toContainText("10:00");
+  }
+  // 予定の無い日には何も出ない。
+  await expect(
+    page.locator('.day[data-day="2026-09-29"] .event-chip'),
+  ).toHaveCount(0);
+});
+
+test("升の空いているところを押すと、その日の予定を足して編集できる", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "calendar");
+  const cell = page.locator('.day[data-day="2026-09-29"]');
+  await expect(cell.locator(".event-chip")).toHaveCount(0);
+
+  await cell.locator(".day-add").click();
+  // その場で編集の窓が開き、名前に焦点が合っている。
+  await expect(page.locator(".modal-card")).toBeVisible();
+  await expect(
+    page.locator('.modal-card input[aria-label="内容"]'),
+  ).toBeFocused();
+
+  await page.locator('.modal-card input[aria-label="内容"]').fill("打ち合わせ");
+  await closeEditor(page);
+
+  // 押した日に入る。
+  await expect(cell.locator(".event-chip")).toHaveCount(1);
+  await expect(cell.locator(".event-chip")).toContainText("打ち合わせ");
+  await expect(
+    page.locator('.day[data-day="2026-09-30"] .event-chip'),
+  ).toHaveCount(0);
+});
+
+test("予定を押すと編集でき、消すと升からも消える", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+
+  await openEvent(page, "全体定例");
+  await recompute(page, () =>
+    page.locator('.modal-card input[aria-label="内容"]').fill("朝会"),
+  );
+  await closeEditor(page);
+  // 繰り返す予定なので、出ているところすべてが変わる。
+  await expect(
+    page.locator('.day[data-day="2026-09-21"] .event-chip'),
+  ).toContainText("朝会");
+  await expect(
+    page.locator('.day[data-day="2026-09-28"] .event-chip'),
+  ).toContainText("朝会");
+
+  await openEvent(page, "朝会");
+  await recompute(page, () =>
+    page.click('.modal-card button:text("この予定を削除")'),
+  );
+  await expect(page.locator(".modal-card")).toHaveCount(0);
+  await expect(
+    page.locator('.day[data-day="2026-09-21"] .event-chip'),
+  ).toHaveCount(0);
+});
+
+test("編集の窓は背景と Esc でも閉じる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+
+  await openEvent(page, "全体定例");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".modal-card")).toHaveCount(0);
+
+  await openEvent(page, "全体定例");
+  // 窓の外 (背景) を押す。
+  await page.locator(".modal-backdrop").click({ position: { x: 5, y: 5 } });
+  await expect(page.locator(".modal-card")).toHaveCount(0);
+});
+
+test("期間をまたぐ予定は、その全日に出る", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+
+  await page.locator('.day[data-day="2026-09-29"] .day-add').click();
+  await page.locator('.modal-card input[aria-label="内容"]').fill("出張");
+  await page.locator('.modal-card input[type="date"]').nth(1).fill("2026-10-01");
+  await closeEditor(page);
+
+  for (const date of ["2026-09-29", "2026-09-30"]) {
+    await expect(
+      page.locator(`.day[data-day="${date}"] .event-chip`),
+    ).toContainText("出張");
+  }
+  // 初日だけ時刻が出て、続きの日には出ない。
+  await expect(
+    page.locator('.day[data-day="2026-09-29"] .chip-time'),
+  ).toHaveCount(1);
+  await expect(
+    page.locator('.day[data-day="2026-09-30"] .chip-time'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('.day[data-day="2026-09-30"] .event-chip'),
+  ).toHaveClass(/continues-from/);
+});
+
+test("予定が多い日は畳まれ、開くと全部出る", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+  const cell = page.locator('.day[data-day="2026-09-29"]');
+
+  for (let i = 0; i < 5; i++) {
+    await cell.locator(".day-add").click();
+    await page
+      .locator('.modal-card input[aria-label="内容"]')
+      .fill(`予定 ${String(i)}`);
+    await closeEditor(page);
+  }
+  // 升に入るのは 3 件まで。残りはまとめて出す。
+  await expect(cell.locator(".event-chip")).toHaveCount(3);
+  await expect(cell.locator(".day-more")).toContainText("2");
+
+  await cell.locator(".day-more").click();
+  await expect(cell.locator(".event-chip")).toHaveCount(5);
 });

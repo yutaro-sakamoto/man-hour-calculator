@@ -1,4 +1,13 @@
-/** カレンダータブ。期間の設定・予定・月表示。 */
+/**
+ * カレンダータブ。
+ *
+ * 予定は**月表示の升のなか**に出す。別に一覧を持つと、「9/28 に何がある
+ * のか」を知るために 2 か所を見比べることになる。予定を押せばその場で
+ * 直せて、空いているところを押せばその日に足せる。
+ *
+ * 升には稼働量も出る。予定を入れると減る量がその場で見えるので、
+ * 「この打ち合わせを動かすとどれくらい楽になるか」が分かる。
+ */
 
 import { DAY_FLAG } from "../abi.ts";
 import type { AppActions, AppState } from "../app.ts";
@@ -11,6 +20,7 @@ import {
   weekdayLabels,
 } from "../format.ts";
 import { lang, t } from "../i18n.ts";
+import { occurrencesOn, shortTime, type Occurrence } from "../model/events.ts";
 import { memberLabel } from "../model/members.ts";
 import { newId } from "../model/project.ts";
 import { isNonWorkingDay } from "../model/schedule.ts";
@@ -105,12 +115,27 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
   ]);
 }
 
-function renderEvent(
-  state: AppState,
-  actions: AppActions,
-  event: CalendarEventItem,
-  index: number,
-): HTMLElement {
+/* ===== 予定の編集 ===== */
+
+/**
+ * 予定を 1 件直す窓。
+ *
+ * 画面は変更のたびに作り直すので、`<dialog>` の開閉に頼らず、開いているか
+ * どうかを状態 (`editingEventId`) で持つ。閉じるのは、背景・×・Esc の 3 つ。
+ */
+function renderEditor(state: AppState, actions: AppActions): HTMLElement | null {
+  const editingId = state.editingEventId;
+  if (editingId === null) return null;
+  const index = state.document.calendar.events.findIndex((item) => item.id === editingId);
+  const event = state.document.calendar.events[index];
+  // 消された直後などは、黙って閉じる。
+  if (event === undefined) return null;
+
+  const close = (): void => {
+    actions.patch((draft) => {
+      draft.editingEventId = null;
+    });
+  };
   const patch = (change: Partial<CalendarEventItem>): void => {
     actions.mutate((document) => {
       const target = document.calendar.events[index];
@@ -136,137 +161,172 @@ function renderEvent(
       },
     });
 
-  return h("div", { class: "event-card" }, [
-    h("div", { class: "event-head" }, [
-      textInput(
-        event.name,
-        (value) => {
-          patch({ name: value });
-        },
-        {
-          class: "event-name",
-          dataset: { focus: `event:${event.id}:name` },
-          attrs: { placeholder: t("cal.eventName"), "aria-label": t("cal.eventName") },
-        },
-      ),
-      iconButton("×", t("cal.removeEvent"), () => {
-        actions.mutate((document) => {
-          document.calendar.events.splice(index, 1);
-        });
-      }),
-    ]),
-    h("div", { class: "controls" }, [
-      field(
-        t("cal.eventFrom"),
-        dateInput(event.startDate, (value) => {
-          if (value === null) return;
-          patch({ startDate: value, endDate: value > event.endDate ? value : event.endDate });
-        }),
-      ),
-      field(
-        t("cal.eventTo"),
-        dateInput(event.endDate, (value) => {
-          if (value !== null) patch({ endDate: value });
-        }),
-      ),
-      h("label", { class: "field" }, [
-        h("span", { class: "field-label", text: t("cal.eventTime") }),
-        h("div", { class: "time-range" }, [
-          h("label", { class: "toggle compact" }, [
-            checkbox(allDay, (checked) => {
-              patch(
-                checked
-                  ? { startTime: null, endTime: null }
-                  : { startTime: "10:00", endTime: "11:00" },
-              );
-            }),
-            h("span", { text: t("cal.allDay") }),
-          ]),
-          allDay ? null : timeInput(event.startTime ?? "10:00", "startTime"),
-          allDay ? null : h("span", { class: "muted", text: "–" }),
-          allDay ? null : timeInput(event.endTime ?? "11:00", "endTime"),
-        ]),
-      ]),
-      field(
-        t("cal.repeat"),
-        select(
-          String(event.repeatWeeks),
-          REPEAT_CHOICES.map((choice) => ({ value: choice.value, label: t(choice.label) })),
-          (value) => {
-            patch({ repeatWeeks: Number(value) });
-          },
+  const nameInput = textInput(
+    event.name,
+    (value) => {
+      patch({ name: value });
+    },
+    {
+      class: "event-name",
+      dataset: { focus: `event:${event.id}:name` },
+      attrs: { placeholder: t("cal.eventName"), "aria-label": t("cal.eventName") },
+    },
+  );
+
+  const panel = h(
+    "div",
+    {
+      class: "event-card modal-card",
+      dataset: { event: event.id },
+      attrs: { role: "dialog", "aria-modal": "true", "aria-label": t("cal.editEvent") },
+    },
+    [
+      h("div", { class: "event-head" }, [nameInput, iconButton("×", t("cal.closeEditor"), close)]),
+      h("div", { class: "controls" }, [
+        field(
+          t("cal.eventFrom"),
+          dateInput(event.startDate, (value) => {
+            if (value === null) return;
+            patch({ startDate: value, endDate: value > event.endDate ? value : event.endDate });
+          }),
         ),
-      ),
-      event.repeatWeeks === 0
-        ? null
-        : field(
-            t("cal.until"),
-            dateInput(event.until, (value) => {
-              patch({ until: value });
-            }),
+        field(
+          t("cal.eventTo"),
+          dateInput(event.endDate, (value) => {
+            if (value !== null) patch({ endDate: value });
+          }),
+        ),
+        h("label", { class: "field" }, [
+          h("span", { class: "field-label", text: t("cal.eventTime") }),
+          h("div", { class: "time-range" }, [
+            h("label", { class: "toggle compact" }, [
+              checkbox(allDay, (checked) => {
+                patch(
+                  checked
+                    ? { startTime: null, endTime: null }
+                    : { startTime: "10:00", endTime: "11:00" },
+                );
+              }),
+              h("span", { text: t("cal.allDay") }),
+            ]),
+            allDay ? null : timeInput(event.startTime ?? "10:00", "startTime"),
+            allDay ? null : h("span", { class: "muted", text: "–" }),
+            allDay ? null : timeInput(event.endTime ?? "11:00", "endTime"),
+          ]),
+        ]),
+        field(
+          t("cal.repeat"),
+          select(
+            String(event.repeatWeeks),
+            REPEAT_CHOICES.map((choice) => ({ value: choice.value, label: t(choice.label) })),
+            (value) => {
+              patch({ repeatWeeks: Number(value) });
+            },
           ),
-    ]),
-    h("div", { class: "participants" }, [
-      h("span", { class: "field-label", text: t("cal.participants") }),
-      members.length === 0
-        ? h("span", { class: "muted", text: t("cal.allMembers") })
-        : h(
-            "div",
-            { class: "participant-list" },
-            members.map((member, memberIndex) =>
-              h("label", { class: "toggle compact" }, [
-                checkbox(event.memberIds.includes(member.id), (checked) => {
-                  const next = checked
-                    ? [...event.memberIds, member.id]
-                    : event.memberIds.filter((id) => id !== member.id);
-                  patch({ memberIds: next });
-                }),
-                h("span", { text: memberLabel(member, memberIndex) }),
-              ]),
+        ),
+        event.repeatWeeks === 0
+          ? null
+          : field(
+              t("cal.until"),
+              dateInput(event.until, (value) => {
+                patch({ until: value });
+              }),
             ),
-          ),
-      event.memberIds.length === 0
-        ? h("span", { class: "chip muted", text: t("cal.allMembers") })
-        : null,
-    ]),
-  ]);
+      ]),
+      h("div", { class: "participants" }, [
+        h("span", { class: "field-label", text: t("cal.participants") }),
+        members.length === 0
+          ? h("span", { class: "muted", text: t("cal.allMembers") })
+          : h(
+              "div",
+              { class: "participant-list" },
+              members.map((member, memberIndex) =>
+                h("label", { class: "toggle compact" }, [
+                  checkbox(event.memberIds.includes(member.id), (checked) => {
+                    const next = checked
+                      ? [...event.memberIds, member.id]
+                      : event.memberIds.filter((id) => id !== member.id);
+                    patch({ memberIds: next });
+                  }),
+                  h("span", { text: memberLabel(member, memberIndex) }),
+                ]),
+              ),
+            ),
+        event.memberIds.length === 0
+          ? h("span", { class: "chip muted", text: t("cal.allMembers") })
+          : null,
+      ]),
+      h("div", { class: "row-actions" }, [
+        button(t("cal.removeEvent"), () => {
+          actions.mutate((document) => {
+            document.calendar.events.splice(index, 1);
+          });
+          close();
+        }),
+        button(t("cal.doneEditing"), close, { class: "primary" }),
+      ]),
+    ],
+  );
+
+  // 開いた直後は名前に合わせる。すでに窓のなかを触っているときは奪わない
+  // (描き直しのたびに入力欄から飛ばされてしまうため)。
+  queueMicrotask(() => {
+    if (!panel.contains(document.activeElement)) nameInput.focus();
+  });
+
+  return h(
+    "div",
+    {
+      class: "modal-backdrop",
+      on: {
+        click: (domEvent) => {
+          if (domEvent.target === domEvent.currentTarget) close();
+        },
+        keydown: (domEvent) => {
+          if (domEvent.key === "Escape") close();
+        },
+      },
+    },
+    [panel],
+  );
 }
 
-function renderEvents(state: AppState, actions: AppActions): HTMLElement {
-  const events = state.document.calendar.events;
-  return card(t("cal.events"), [
-    h("p", { class: "hint", text: t("cal.eventHint") }),
-    events.length === 0
-      ? h("p", { class: "empty", text: t("cal.noEvents") })
-      : h(
-          "div",
-          { class: "event-list" },
-          events.map((event, index) => renderEvent(state, actions, event, index)),
-        ),
-    h("div", { class: "row-actions" }, [
-      button(
-        t("cal.addEvent"),
-        () => {
-          actions.mutate((document) => {
-            const today = document.calendar.today;
-            document.calendar.events.push({
-              id: newId(),
-              name: "",
-              startDate: today,
-              endDate: today,
-              startTime: "10:00",
-              endTime: "11:00",
-              repeatWeeks: 0,
-              until: null,
-              memberIds: document.calendar.members.map((member) => member.id),
-            });
+/* ===== 月表示 ===== */
+
+/** 升のなかに出す予定 1 件。押すと編集できる。 */
+function renderChip(actions: AppActions, occurrence: Occurrence): HTMLElement {
+  const { event, allDay, starts, ends } = occurrence;
+  const name = event.name.trim() === "" ? t("cal.untitledEvent") : event.name;
+  const classes = ["event-chip"];
+  if (allDay) classes.push("all-day");
+  if (!starts) classes.push("continues-from");
+  if (!ends) classes.push("continues-to");
+
+  return h(
+    "button",
+    {
+      class: classes.join(" "),
+      dataset: { event: event.id },
+      attrs: { type: "button", title: `${shortTime(event)} ${name}`.trim() },
+      on: {
+        click: (domEvent) => {
+          // 升そのものの「空いているところ」判定に巻き込まれないようにする。
+          domEvent.stopPropagation();
+          actions.patch((draft) => {
+            draft.editingEventId = event.id;
           });
         },
-        { class: "primary" },
-      ),
-    ]),
-  ]);
+      },
+    },
+    [
+      allDay || !starts ? null : h("span", { class: "chip-time", text: shortTime(event) }),
+      h("span", { class: "chip-name", text: name }),
+    ],
+  );
 }
+
+/** 升に入れる予定の数。これを超えたら「+n 件」にまとめる。 */
+const CHIPS_PER_DAY = 3;
 
 function renderMonth(state: AppState, actions: AppActions): HTMLElement {
   const { year, month } = state.calendarMonth;
@@ -275,6 +335,7 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
   const labels = weekdayLabels(lang());
   const leading = (((first + 4) % 7) + 7) % 7;
   const viewing = state.calendarMember;
+  const events = state.document.calendar.events;
 
   /** 表示中の人員 (または全員) のその日の工数とフラグ。 */
   const dayInfo = (index: number): { capacity: number; flags: number } => {
@@ -297,6 +358,27 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
     return { capacity, flags: allOff ? flags | DAY_FLAG.weekend : flags & ~DAY_FLAG.weekend };
   };
 
+  /** その日に新しい予定を足して、そのまま編集に入る。 */
+  const addOn = (iso: string): void => {
+    const id = newId();
+    actions.mutate((document) => {
+      document.calendar.events.push({
+        id,
+        name: t("cal.newEventName"),
+        startDate: iso,
+        endDate: iso,
+        startTime: "10:00",
+        endTime: "11:00",
+        repeatWeeks: 0,
+        until: null,
+        memberIds: document.calendar.members.map((member) => member.id),
+      });
+    });
+    actions.patch((draft) => {
+      draft.editingEventId = id;
+    });
+  };
+
   const cells: HTMLElement[] = [];
   for (let i = 0; i < leading; i++) cells.push(h("div", { class: "day empty" }));
 
@@ -306,42 +388,101 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
     const inRange = result !== null && index >= 0 && index < result.nDays;
     const { capacity, flags } = dayInfo(index);
     const iso = isoFromDay(day);
+    const onDay = occurrencesOn(events, day);
+    const expanded = state.expandedDay === iso;
+    const shown = expanded ? onDay : onDay.slice(0, CHIPS_PER_DAY);
+    const hidden = onDay.length - shown.length;
+
     const classes = ["day"];
     if (!inRange) classes.push("outside");
     else if (isNonWorkingDay(flags)) classes.push("off");
     if ((flags & DAY_FLAG.holiday) !== 0) classes.push("holiday");
-    if ((flags & DAY_FLAG.event) !== 0) classes.push("has-event");
     if ((flags & DAY_FLAG.forcedWorkday) !== 0) classes.push("forced");
     if (state.document.calendar.today === iso) classes.push("today");
 
     cells.push(
       h(
-        "button",
+        "div",
         {
           class: classes.join(" "),
+          dataset: { day: iso, events: String(onDay.length) },
           attrs: {
-            type: "button",
             "aria-label": t("cal.dayCapacity", {
               date: iso,
               value: formatNumber(capacity, lang(), 2),
             }),
           },
-          on: {
-            click: () => {
-              actions.mutate((document) => {
-                const list = document.calendar.forcedWorkdays;
-                const at = list.indexOf(iso);
-                if (at >= 0) list.splice(at, 1);
-                else list.push(iso);
-              });
-            },
-          },
         },
         [
-          h("span", { class: "day-number", text: String(offset + 1) }),
-          h("span", {
-            class: "day-capacity",
-            text: inRange && capacity > 0 ? formatNumber(capacity, lang(), 1) : "",
+          h("div", { class: "day-head" }, [
+            // 数字を押すと、休日でもその日は稼働する扱いにできる。
+            // 空いているところは「予定を足す」に使うので、切り替えはここに置く。
+            h("button", {
+              class: "day-number",
+              text: String(offset + 1),
+              title: t("cal.toggleForced", { date: iso }),
+              attrs: { type: "button", "aria-label": t("cal.toggleForced", { date: iso }) },
+              on: {
+                click: () => {
+                  actions.mutate((document) => {
+                    const list = document.calendar.forcedWorkdays;
+                    const at = list.indexOf(iso);
+                    if (at >= 0) list.splice(at, 1);
+                    else list.push(iso);
+                  });
+                },
+              },
+            }),
+            h("span", {
+              class: "day-capacity",
+              text: inRange && capacity > 0 ? formatNumber(capacity, lang(), 1) : "",
+            }),
+          ]),
+          h(
+            "div",
+            { class: "day-events" },
+            shown.map((occurrence) => renderChip(actions, occurrence)),
+          ),
+          hidden > 0
+            ? h("button", {
+                class: "day-more",
+                text: t("cal.moreEvents", { count: hidden }),
+                attrs: { type: "button" },
+                on: {
+                  click: (domEvent) => {
+                    domEvent.stopPropagation();
+                    actions.patch((draft) => {
+                      draft.expandedDay = iso;
+                    });
+                  },
+                },
+              })
+            : null,
+          expanded && onDay.length > CHIPS_PER_DAY
+            ? h("button", {
+                class: "day-more",
+                text: t("cal.fewerEvents"),
+                attrs: { type: "button" },
+                on: {
+                  click: (domEvent) => {
+                    domEvent.stopPropagation();
+                    actions.patch((draft) => {
+                      draft.expandedDay = null;
+                    });
+                  },
+                },
+              })
+            : null,
+          // 残りの余白。押すとその日に予定を足す。
+          h("button", {
+            class: "day-add",
+            title: t("cal.addEventOn", { date: iso }),
+            attrs: { type: "button", "aria-label": t("cal.addEventOn", { date: iso }) },
+            on: {
+              click: () => {
+                addOn(iso);
+              },
+            },
           }),
         ],
       ),
@@ -357,6 +498,8 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
           : next > 12
             ? { year: year + 1, month: 1 }
             : { year, month: next };
+      // 別の月に移ったら、開きっぱなしの升は畳む。
+      s.expandedDay = null;
     });
   };
 
@@ -416,10 +559,6 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
         t("cal.legendHoliday"),
       ]),
       h("span", { class: "legend-item" }, [
-        h("i", { class: "swatch event" }),
-        t("cal.legendEvent"),
-      ]),
-      h("span", { class: "legend-item" }, [
         h("i", { class: "swatch forced" }),
         t("cal.legendForced"),
       ]),
@@ -431,7 +570,7 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
 export function renderCalendarTab(state: AppState, actions: AppActions): HTMLElement {
   return h("div", {}, [
     renderBasics(state, actions),
-    renderEvents(state, actions),
     renderMonth(state, actions),
+    renderEditor(state, actions),
   ]);
 }
