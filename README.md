@@ -166,6 +166,7 @@ SQLite も画面（HTML）もバイナリのなかに入っているので、デ
 | `docs/API.md` | クライアント–サーバの分け方と権限モデル |
 | `docs/openapi.yaml` | API の HTTP 仕様 |
 | `docs/SERVER.md` | サーバの建て方・認証・保存先・運用 |
+| `docs/AWS.md` | API Gateway + Lambda + DynamoDB に置くときの構成と手順 |
 
 ### 人員と工数から日付へ
 
@@ -258,7 +259,8 @@ b' = m' + (b − m)·(1 − p)
 
 ## これから
 
-- AWS（API Gateway + Lambda + DynamoDB）向けの構成
+- AWS（API Gateway + Lambda + DynamoDB）への配置。構成と手順は `docs/AWS.md` に
+  書いてあり、`Store` の実装とハンドラの外側だけが残っています
 - タスク間相関（単一ファクター・ガウシアンコピュラ）。ABI には場所を確保済み
 - [Kani](https://model-checking.github.io/kani/) による有界モデル検査と、
   不変条件 ⇔ 検証手段の追跡表（`docs/VERIFICATION.md`）
