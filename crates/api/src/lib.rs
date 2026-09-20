@@ -23,9 +23,9 @@ pub mod store;
 pub use error::{ApiError, ApiResult, ErrorCode};
 pub use health::{health, ProjectHealth};
 pub use model::{
-    AccessEntry, Document, Principal, Project, ProjectGroup, ProjectGroupId, ProjectId,
-    ProjectMeta, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User, UserGroup,
-    UserGroupId, UserId,
+    AccessEntry, Comment, CommentId, Document, Principal, Project, ProjectGroup, ProjectGroupId,
+    ProjectId, ProjectMeta, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User,
+    UserGroup, UserGroupId, UserId,
 };
 pub use permission::{Actor, Permission};
 pub use service::Service;

@@ -10,9 +10,9 @@
 use crate::error::{ApiError, ApiResult};
 use crate::health;
 use crate::model::{
-    AccessEntry, Document, Principal, Project, ProjectGroup, ProjectGroupId, ProjectId,
-    ProjectMeta, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User, UserGroup,
-    UserGroupId, UserId,
+    AccessEntry, Comment, CommentId, Document, Principal, Project, ProjectGroup, ProjectGroupId,
+    ProjectId, ProjectMeta, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User,
+    UserGroup, UserGroupId, UserId,
 };
 use crate::permission::{Actor, Permission};
 use crate::store::Store;
@@ -620,7 +620,106 @@ impl<S: Store> Service<S> {
         Ok(project.meta.access)
     }
 
+    /* ===== コメント ===== */
+
+    /// そのプロジェクトのコメント。`task` を渡すとそのタスク宛てだけ。
+    pub fn list_comments(
+        &self,
+        actor: &Actor,
+        id: &ProjectId,
+        task: Option<&str>,
+    ) -> ApiResult<Vec<Comment>> {
+        let project = self.lookup(id)?;
+        let role = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::ProjectRead, role)?;
+
+        let mut comments = self.store.comments(id)?;
+        if let Some(task) = task {
+            comments.retain(|comment| comment.task_id.as_deref() == Some(task));
+        }
+        Ok(comments)
+    }
+
+    /// 書き込む。閲覧できれば書ける。
+    pub fn post_comment(
+        &mut self,
+        actor: &Actor,
+        id: &ProjectId,
+        now: &str,
+        comment_id: CommentId,
+        task: Option<String>,
+        body: &str,
+    ) -> ApiResult<Comment> {
+        let project = self.lookup(id)?;
+        let role = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::CommentPost, role)?;
+        if self.store.comment(&comment_id)?.is_some() {
+            return Err(ApiError::conflict("同じ id のコメントがあります"));
+        }
+
+        let comment = Comment {
+            id: comment_id,
+            project_id: id.clone(),
+            task_id: task,
+            author: actor.user_id.clone(),
+            body: trimmed(body, "コメント")?,
+            created_at: now.to_string(),
+            updated_at: None,
+        };
+        self.store.put_comment(comment.clone())?;
+        Ok(comment)
+    }
+
+    /// 書き直す。**書いた本人だけ**。
+    ///
+    /// 所有者でも他人の発言は直せない。消すことはできるが、書き換えて
+    /// しまえるのは別のこと。
+    pub fn edit_comment(
+        &mut self,
+        actor: &Actor,
+        id: &CommentId,
+        now: &str,
+        body: &str,
+    ) -> ApiResult<Comment> {
+        let mut comment = self.lookup_comment(id)?;
+        if comment.author != actor.user_id {
+            return Err(ApiError::forbidden("自分が書いたコメントだけ直せます"));
+        }
+        // 書ける状態であること自体は、いまも確かめる (権限を外されたあとに
+        // 書き直せてしまわないように)。
+        let project = self.lookup(&comment.project_id)?;
+        let role = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::CommentPost, role)?;
+
+        comment.body = trimmed(body, "コメント")?;
+        comment.updated_at = Some(now.to_string());
+        self.store.put_comment(comment.clone())?;
+        Ok(comment)
+    }
+
+    /// 消す。書いた本人か、プロジェクトの所有者。
+    pub fn delete_comment(&mut self, actor: &Actor, id: &CommentId) -> ApiResult<()> {
+        let comment = self.lookup_comment(id)?;
+        let project = self.lookup(&comment.project_id)?;
+        let role = self.resolve(actor, &project.meta)?;
+
+        let mine = comment.author == actor.user_id;
+        if mine {
+            self.require(actor, Permission::CommentPost, role)?;
+        } else {
+            self.require(actor, Permission::ProjectManage, role)?;
+        }
+        self.store.remove_comment(id)?;
+        Ok(())
+    }
+
     /* ===== 内部 ===== */
+
+    fn lookup_comment(&self, id: &CommentId) -> ApiResult<Comment> {
+        self.store
+            .comment(id)?
+            .ok_or_else(|| ApiError::not_found("コメントが見つかりません"))
+    }
 
     fn lookup(&self, id: &ProjectId) -> ApiResult<Project> {
         self.store
@@ -779,7 +878,7 @@ mod tests {
     use super::*;
     use crate::error::ErrorCode;
     use crate::health::ProjectHealth;
-    use crate::model::{Priority, Task};
+    use crate::model::{CommentId, Priority, Task};
     use crate::store::MemoryStore;
 
     const NOW: &str = "2026-09-20T10:00:00Z";
@@ -1566,6 +1665,262 @@ mod tests {
                 .unwrap_err()
                 .code,
             ErrorCode::NotFound
+        );
+    }
+
+    /* ===== コメント ===== */
+
+    #[test]
+    fn a_viewer_can_comment_but_not_write() {
+        // 見てもらって意見だけもらう、ができるようにしてある。
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Viewer,
+        );
+
+        let bob = actor(&service, "bob");
+        let comment = service
+            .post_comment(
+                &bob,
+                &ProjectId::new("p1"),
+                LATER,
+                CommentId::new("c1"),
+                None,
+                "見積もりが楽観的では?",
+            )
+            .expect("閲覧者でも書ける");
+        assert_eq!(comment.author, UserId::new("bob"));
+        assert_eq!(comment.task_id, None);
+        assert_eq!(comment.updated_at, None);
+
+        // それでも内容は書き換えられない。
+        let bob = actor(&service, "bob");
+        assert_eq!(
+            service
+                .save_document(
+                    &bob,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    Document::default(),
+                    None
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Forbidden
+        );
+    }
+
+    #[test]
+    fn someone_with_no_access_can_neither_read_nor_write_comments() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+        service
+            .post_comment(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                CommentId::new("c1"),
+                None,
+                "内緒の話",
+            )
+            .unwrap();
+
+        let carol = actor(&service, "carol");
+        assert_eq!(
+            service
+                .list_comments(&carol, &ProjectId::new("p1"), None)
+                .unwrap_err()
+                .code,
+            ErrorCode::Forbidden
+        );
+        assert_eq!(
+            service
+                .post_comment(
+                    &carol,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    CommentId::new("c2"),
+                    None,
+                    "よそ者",
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Forbidden
+        );
+    }
+
+    #[test]
+    fn comments_can_be_narrowed_to_one_task() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        for (id, task) in [("c1", None), ("c2", Some("t1")), ("c3", Some("t2"))] {
+            let alice = actor(&service, "alice");
+            service
+                .post_comment(
+                    &alice,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    CommentId::new(id),
+                    task.map(str::to_string),
+                    "何か",
+                )
+                .unwrap();
+        }
+
+        let alice = actor(&service, "alice");
+        assert_eq!(
+            service
+                .list_comments(&alice, &ProjectId::new("p1"), None)
+                .unwrap()
+                .len(),
+            3,
+            "指定しなければ全部"
+        );
+        let only = service
+            .list_comments(&alice, &ProjectId::new("p1"), Some("t1"))
+            .unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0].id, CommentId::new("c2"));
+    }
+
+    #[test]
+    fn only_the_author_may_rewrite_a_comment() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Viewer,
+        );
+        let bob = actor(&service, "bob");
+        service
+            .post_comment(
+                &bob,
+                &ProjectId::new("p1"),
+                LATER,
+                CommentId::new("c1"),
+                None,
+                "最初の意見",
+            )
+            .unwrap();
+
+        // 所有者でも他人の発言は直せない。
+        let alice = actor(&service, "alice");
+        assert_eq!(
+            service
+                .edit_comment(&alice, &CommentId::new("c1"), LATER, "書き換えた")
+                .unwrap_err()
+                .code,
+            ErrorCode::Forbidden
+        );
+
+        let bob = actor(&service, "bob");
+        let edited = service
+            .edit_comment(
+                &bob,
+                &CommentId::new("c1"),
+                "2026-09-22T09:00:00Z",
+                "直した",
+            )
+            .unwrap();
+        assert_eq!(edited.body, "直した");
+        assert_eq!(edited.updated_at.as_deref(), Some("2026-09-22T09:00:00Z"));
+        assert_eq!(edited.created_at, LATER, "書いた時刻は動かない");
+    }
+
+    #[test]
+    fn an_owner_may_remove_someone_elses_comment() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Viewer,
+        );
+        let bob = actor(&service, "bob");
+        service
+            .post_comment(
+                &bob,
+                &ProjectId::new("p1"),
+                LATER,
+                CommentId::new("c1"),
+                None,
+                "消される意見",
+            )
+            .unwrap();
+
+        // 閲覧者は他人のコメントを消せない。
+        let carol = actor(&service, "carol");
+        assert!(service
+            .delete_comment(&carol, &CommentId::new("c1"))
+            .is_err());
+
+        let alice = actor(&service, "alice");
+        assert!(service
+            .delete_comment(&alice, &CommentId::new("c1"))
+            .is_ok());
+        let alice = actor(&service, "alice");
+        assert!(service
+            .list_comments(&alice, &ProjectId::new("p1"), None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn an_empty_comment_is_refused() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+        assert_eq!(
+            service
+                .post_comment(
+                    &alice,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    CommentId::new("c1"),
+                    None,
+                    "   ",
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Invalid
+        );
+    }
+
+    #[test]
+    fn deleting_a_project_takes_its_comments_with_it() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+        service
+            .post_comment(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                CommentId::new("c1"),
+                None,
+                "何か",
+            )
+            .unwrap();
+
+        let alice = actor(&service, "alice");
+        service
+            .delete_project(&alice, &ProjectId::new("p1"))
+            .unwrap();
+        assert_eq!(
+            service.store().comment(&CommentId::new("c1")).unwrap(),
+            None,
+            "行き先の無いコメントを残さない"
         );
     }
 

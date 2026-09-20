@@ -93,11 +93,6 @@ header h1 {
   letter-spacing: -0.01em;
   white-space: nowrap;
 }
-.tagline {
-  margin: 6px 0 0;
-  color: var(--ink-secondary);
-  font-size: 13px;
-}
 .project-name {
   flex: 1 1 200px;
   min-width: 140px;
@@ -751,28 +746,28 @@ select.assignee {
   color: var(--ink-muted);
   padding-bottom: 2px;
 }
+/*
+ * 升は「日付と稼働量 → 予定 → 余白」の 3 段。余白は押せるボタンで、
+ * 押すとその日に予定が足される。予定そのものはそれぞれ押せる。
+ */
 .day {
-  height: 58px;
+  min-height: 104px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--surface-sunken);
   color: var(--ink);
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 4px 6px;
-  cursor: pointer;
-  font: inherit;
+  padding: 3px 4px 0;
+  position: relative;
+  overflow: hidden;
 }
 .day.empty {
   border: 0;
   background: transparent;
-  cursor: default;
 }
 .day.outside {
-  opacity: 0.35;
-  cursor: default;
+  opacity: 0.45;
 }
 .day.off {
   background: var(--offday);
@@ -780,9 +775,6 @@ select.assignee {
 }
 .day.holiday {
   border-color: color-mix(in srgb, var(--critical) 45%, var(--border));
-}
-.day.has-event {
-  box-shadow: inset 0 -3px 0 var(--warning);
 }
 .day.forced {
   background: var(--series-soft);
@@ -792,16 +784,150 @@ select.assignee {
   outline: 2px solid var(--series);
   outline-offset: -2px;
 }
+.day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+}
 .day-number {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  cursor: pointer;
+  padding: 1px 5px;
+  min-width: 22px;
+}
+.day-number:hover,
+.day-number:focus-visible {
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+.day.today .day-number {
+  background: var(--series);
+  color: #fff;
+  font-weight: 650;
 }
 .day-capacity {
   font-size: 10px;
   color: var(--ink-muted);
-  align-self: flex-end;
   font-variant-numeric: tabular-nums;
 }
+.day-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+/* 予定 1 件。狭いので、はみ出す名前は切る (全文は title に入れてある)。 */
+.event-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--series) 16%, var(--surface));
+  color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--series);
+}
+.event-chip:hover,
+.event-chip:focus-visible {
+  background: color-mix(in srgb, var(--series) 28%, var(--surface));
+}
+.event-chip.all-day {
+  background: color-mix(in srgb, var(--warning) 30%, var(--surface));
+  box-shadow: inset 2px 0 0 var(--warning);
+}
+/* 前後の日から続いている予定は、角を落として「まだ続く」ことを示す。 */
+.event-chip.continues-from {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  box-shadow: none;
+}
+.event-chip.continues-to {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.chip-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+  flex: none;
+}
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.day-more {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  color: var(--ink-secondary);
+  font-size: 10px;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.day-more:hover,
+.day-more:focus-visible {
+  text-decoration: underline;
+}
+/*
+ * 升の残りの余白。予定の下に置き、余った高さを全部もらう。
+ * 重ねて敷かないのは、予定で埋まった日に「空いているところ」が
+ * 無くなってしまわないようにするため。最低限の高さは必ず残す。
+ */
+.day-add {
+  flex: 1 1 auto;
+  min-height: 18px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 1px 0 3px;
+}
+.day-add:hover {
+  background: color-mix(in srgb, var(--series) 7%, transparent);
+}
+.day-add:focus-visible {
+  outline: 2px solid var(--series);
+  outline-offset: -2px;
+}
+.day.empty .day-add,
+.day.empty .day-number {
+  display: none;
+}
+
+/* ===== 予定を直す窓 ===== */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(in srgb, #000 45%, transparent);
+  overflow-y: auto;
+}
+.modal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgb(0 0 0 / 30%);
+  width: min(560px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 14px 16px 16px;
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -830,9 +956,6 @@ select.assignee {
 }
 .swatch.holiday {
   border-color: var(--critical);
-}
-.swatch.event {
-  background: var(--warning);
 }
 .swatch.forced {
   background: var(--series-soft);
@@ -1024,15 +1147,6 @@ details.data-view .scroll {
 }
 .probe-table td:last-child {
   white-space: nowrap;
-}
-
-footer {
-  color: var(--ink-muted);
-  font-size: 12px;
-  padding: 24px 2px 0;
-}
-footer p {
-  margin: 4px 0;
 }
 
 .visually-hidden {
@@ -1297,4 +1411,156 @@ td.num.short {
   .foldout-title {
     font-size: 13px;
   }
+}
+
+/* ===== コメント ===== */
+.comment-open {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+.comment-open.has-comments {
+  border-color: color-mix(in srgb, var(--series) 45%, var(--border));
+  color: var(--series);
+}
+.comments-card {
+  width: min(680px, 100%);
+}
+.comments-heading {
+  flex: 1 1 auto;
+  font-size: 14px;
+}
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 14px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.comment {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px 4px;
+  background: var(--surface-sunken);
+}
+.comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+.comment-author {
+  font-size: 13px;
+  color: var(--ink);
+}
+.comment-time,
+.comment-edited {
+  font-variant-numeric: tabular-nums;
+}
+.spacer {
+  flex: 1 1 auto;
+}
+.comment-composer {
+  border-top: 1px solid var(--grid);
+  padding-top: 10px;
+}
+.composer-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.composer-tabs button[aria-pressed="true"] {
+  background: var(--series);
+  color: #fff;
+  border-color: transparent;
+}
+.comment-input {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  resize: vertical;
+}
+.comment-preview {
+  border: 1px dashed var(--grid);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: 88px;
+}
+
+/*
+ * コメントの本文。他人が書いた Markdown を組み立てたもの。
+ * 周りより一段小さくして、画面の見出しと張り合わないようにする。
+ */
+.markdown {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.markdown > *:first-child {
+  margin-top: 0;
+}
+.markdown > *:last-child {
+  margin-bottom: 0;
+}
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown pre,
+.markdown blockquote {
+  margin: 6px 0;
+}
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 12px 0 4px;
+  font-weight: 650;
+  /* 本文と見分けはつくが、画面の見出しとは張り合わない大きさ。 */
+  font-size: 15px;
+}
+.markdown h5,
+.markdown h6 {
+  font-size: 14px;
+  color: var(--ink-secondary);
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+}
+.markdown code {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.92em;
+  font-family: ui-monospace, "SFMono-Regular", "Consolas", monospace;
+}
+.markdown pre {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  overflow-x: auto;
+}
+.markdown pre code {
+  background: none;
+  padding: 0;
+}
+.markdown blockquote {
+  border-left: 3px solid var(--axis);
+  padding-left: 10px;
+  color: var(--ink-secondary);
+}
+.markdown a {
+  color: var(--series);
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--grid);
+  margin: 10px 0;
 }

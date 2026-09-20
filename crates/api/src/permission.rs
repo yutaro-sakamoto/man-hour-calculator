@@ -23,6 +23,11 @@ pub enum Permission {
     ProjectCreate,
     /// アカウントを管理する。
     UserManage,
+    /// コメントを書く。
+    ///
+    /// 閲覧できれば書ける。見積もりに口を出すのに編集権限まで要るのは
+    /// 窮屈で、「見てもらって意見だけもらう」ができなくなる。
+    CommentPost,
 }
 
 /// 操作している人。
@@ -110,6 +115,7 @@ impl Actor {
             Permission::ProjectRead => Self::has(role, ProjectRole::Viewer),
             Permission::ProjectWrite => Self::has(role, ProjectRole::Editor),
             Permission::ProjectManage => Self::has(role, ProjectRole::Owner),
+            Permission::CommentPost => Self::has(role, ProjectRole::Viewer),
         }
     }
 
@@ -169,6 +175,17 @@ mod tests {
             assert_eq!(member().may(ProjectRead, role), read, "{role:?} の読み");
             assert_eq!(member().may(ProjectWrite, role), write, "{role:?} の書き");
             assert_eq!(member().may(ProjectManage, role), manage, "{role:?} の管理");
+        }
+    }
+
+    #[test]
+    fn a_viewer_may_still_comment() {
+        // 見てもらって意見だけもらう、ができるようにしておく。
+        use Permission::CommentPost;
+        use ProjectRole::*;
+        assert!(!member().may(CommentPost, None), "見られない人は書けない");
+        for role in [Viewer, Editor, Owner] {
+            assert!(member().may(CommentPost, Some(role)), "{role:?}");
         }
     }
 

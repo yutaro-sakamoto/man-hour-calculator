@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 use crate::model::{
-    AccessEntry, Document, Principal, Project, ProjectGroup, ProjectGroupId, ProjectId,
-    ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User, UserGroup, UserGroupId, UserId,
+    AccessEntry, Comment, CommentId, Document, Principal, Project, ProjectGroup, ProjectGroupId,
+    ProjectId, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User, UserGroup,
+    UserGroupId, UserId,
 };
 use crate::service::{NewUser, ProjectPatch, Service, UserPatch};
 use crate::store::Store;
@@ -153,6 +154,31 @@ pub enum Request {
     },
 
     #[serde(rename_all = "camelCase")]
+    ListComments {
+        id: ProjectId,
+        /// 渡すとそのタスク宛てだけを返す。
+        #[serde(default)]
+        task_id: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    PostComment {
+        id: ProjectId,
+        comment_id: CommentId,
+        #[serde(default)]
+        task_id: Option<String>,
+        body: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    EditComment {
+        comment_id: CommentId,
+        body: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    DeleteComment {
+        comment_id: CommentId,
+    },
+
+    #[serde(rename_all = "camelCase")]
     ListAccess {
         id: ProjectId,
     },
@@ -207,6 +233,10 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/v1/projects/{projectId}"),
     ("PUT", "/v1/projects/{projectId}/document"),
     ("POST", "/v1/projects/{projectId}/duplicate"),
+    ("GET", "/v1/projects/{projectId}/comments"),
+    ("POST", "/v1/projects/{projectId}/comments"),
+    ("PATCH", "/v1/comments/{commentId}"),
+    ("DELETE", "/v1/comments/{commentId}"),
     ("GET", "/v1/projects/{projectId}/access"),
     (
         "PUT",
@@ -262,6 +292,11 @@ impl Request {
             Self::DeleteProject { .. } => ("DELETE", "/v1/projects/{projectId}"),
             Self::DuplicateProject { .. } => ("POST", "/v1/projects/{projectId}/duplicate"),
 
+            Self::ListComments { .. } => ("GET", "/v1/projects/{projectId}/comments"),
+            Self::PostComment { .. } => ("POST", "/v1/projects/{projectId}/comments"),
+            Self::EditComment { .. } => ("PATCH", "/v1/comments/{commentId}"),
+            Self::DeleteComment { .. } => ("DELETE", "/v1/comments/{commentId}"),
+
             Self::ListAccess { .. } => ("GET", "/v1/projects/{projectId}/access"),
             Self::SetAccess { .. } => (
                 "PUT",
@@ -285,6 +320,7 @@ impl Request {
                 | Self::ListProjectGroups
                 | Self::ListProjects
                 | Self::GetProject { .. }
+                | Self::ListComments { .. }
                 | Self::ListAccess { .. }
         )
     }
@@ -304,6 +340,8 @@ pub enum Reply {
     Project(Box<Project>),
     Summary(Box<ProjectSummary>),
     Access(Vec<AccessEntry>),
+    Comment(Box<Comment>),
+    Comments(Vec<Comment>),
     Empty,
 }
 
@@ -490,6 +528,25 @@ fn run<S: Store>(service: &mut Service<S>, envelope: Envelope) -> crate::error::
             service.duplicate_project(&actor, &id, now, new_id, &name)?,
         )),
 
+        Request::ListComments { id, task_id } => {
+            Reply::Comments(service.list_comments(&actor, &id, task_id.as_deref())?)
+        }
+        Request::PostComment {
+            id,
+            comment_id,
+            task_id,
+            body,
+        } => Reply::Comment(Box::new(
+            service.post_comment(&actor, &id, now, comment_id, task_id, &body)?,
+        )),
+        Request::EditComment { comment_id, body } => Reply::Comment(Box::new(
+            service.edit_comment(&actor, &comment_id, now, &body)?,
+        )),
+        Request::DeleteComment { comment_id } => {
+            service.delete_comment(&actor, &comment_id)?;
+            Reply::Empty
+        }
+
         Request::ListAccess { id } => Reply::Access(service.list_access(&actor, &id)?),
         Request::SetAccess {
             id,
@@ -638,6 +695,23 @@ mod tests {
                 id: ProjectId::new("p"),
                 new_id: ProjectId::new("q"),
                 name: "q".into(),
+            },
+            Request::ListComments {
+                id: ProjectId::new("p"),
+                task_id: None,
+            },
+            Request::PostComment {
+                id: ProjectId::new("p"),
+                comment_id: CommentId::new("c"),
+                task_id: None,
+                body: "やあ".into(),
+            },
+            Request::EditComment {
+                comment_id: CommentId::new("c"),
+                body: "やあ (修正)".into(),
+            },
+            Request::DeleteComment {
+                comment_id: CommentId::new("c"),
             },
             Request::ListAccess {
                 id: ProjectId::new("p"),

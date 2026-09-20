@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    Project, ProjectGroup, ProjectGroupId, ProjectId, ProjectMeta, User, UserGroup, UserGroupId,
-    UserId,
+    Comment, CommentId, Project, ProjectGroup, ProjectGroupId, ProjectId, ProjectMeta, User,
+    UserGroup, UserGroupId, UserId,
 };
 
 /// 永続化の口。
@@ -39,6 +39,12 @@ pub trait Store {
     fn remove_project_group(&mut self, id: &ProjectGroupId) -> ApiResult<bool>;
 
     /// 中身 (`Document`) を含まない一覧。
+    /// そのプロジェクトのコメント。古い順。
+    fn comments(&self, project: &ProjectId) -> ApiResult<Vec<Comment>>;
+    fn comment(&self, id: &CommentId) -> ApiResult<Option<Comment>>;
+    fn put_comment(&mut self, comment: Comment) -> ApiResult<()>;
+    fn remove_comment(&mut self, id: &CommentId) -> ApiResult<bool>;
+
     fn project_metas(&self) -> ApiResult<Vec<ProjectMeta>>;
     fn project(&self, id: &ProjectId) -> ApiResult<Option<Project>>;
     fn put_project(&mut self, project: Project) -> ApiResult<()>;
@@ -58,6 +64,9 @@ pub struct MemoryStore {
     pub user_groups: Vec<UserGroup>,
     pub project_groups: Vec<ProjectGroup>,
     pub projects: Vec<Project>,
+    /// コメント。内容とは別に持つ (寿命も、書ける人の範囲も違うため)。
+    #[serde(default)]
+    pub comments: Vec<Comment>,
 }
 
 /// 現在の保存形式のバージョン。
@@ -102,6 +111,18 @@ impl<T: Store + ?Sized> Store for &mut T {
     }
     fn remove_project_group(&mut self, id: &ProjectGroupId) -> ApiResult<bool> {
         (**self).remove_project_group(id)
+    }
+    fn comments(&self, project: &ProjectId) -> ApiResult<Vec<Comment>> {
+        (**self).comments(project)
+    }
+    fn comment(&self, id: &CommentId) -> ApiResult<Option<Comment>> {
+        (**self).comment(id)
+    }
+    fn put_comment(&mut self, comment: Comment) -> ApiResult<()> {
+        (**self).put_comment(comment)
+    }
+    fn remove_comment(&mut self, id: &CommentId) -> ApiResult<bool> {
+        (**self).remove_comment(id)
     }
     fn project_metas(&self) -> ApiResult<Vec<ProjectMeta>> {
         (**self).project_metas()
@@ -323,7 +344,40 @@ impl Store for MemoryStore {
     fn remove_project(&mut self, id: &ProjectId) -> ApiResult<bool> {
         let before = self.projects.len();
         self.projects.retain(|project| &project.meta.id != id);
+        // プロジェクトが消えたら、そこに付いていたコメントも一緒に消す。
+        // 行き先の無いコメントを残しても読み返す手立てが無い。
+        self.comments.retain(|comment| &comment.project_id != id);
         Ok(self.projects.len() != before)
+    }
+
+    fn comments(&self, project: &ProjectId) -> ApiResult<Vec<Comment>> {
+        let mut out: Vec<Comment> = self
+            .comments
+            .iter()
+            .filter(|comment| &comment.project_id == project)
+            .cloned()
+            .collect();
+        // 古い順。会話として読めるようにする。
+        out.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+        Ok(out)
+    }
+
+    fn comment(&self, id: &CommentId) -> ApiResult<Option<Comment>> {
+        Ok(self.comments.iter().find(|item| &item.id == id).cloned())
+    }
+
+    fn put_comment(&mut self, comment: Comment) -> ApiResult<()> {
+        match self.comments.iter_mut().find(|item| item.id == comment.id) {
+            Some(slot) => *slot = comment,
+            None => self.comments.push(comment),
+        }
+        Ok(())
+    }
+
+    fn remove_comment(&mut self, id: &CommentId) -> ApiResult<bool> {
+        let before = self.comments.len();
+        self.comments.retain(|comment| &comment.id != id);
+        Ok(self.comments.len() != before)
     }
 }
 

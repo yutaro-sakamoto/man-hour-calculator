@@ -13,6 +13,8 @@ import type { ApiClient, NewUserInput, ProjectPatchInput, UserPatchInput } from 
 import {
   ApiError,
   type AccessEntry,
+  type Comment,
+  type CommentId,
   type ApiErrorCode,
   type Principal,
   type Project,
@@ -201,6 +203,32 @@ export class HttpApiClient implements ApiClient {
 
   duplicateProject(id: ProjectId, newId: ProjectId, name: string): Promise<Project> {
     return this.send("POST", `/v1/projects/${seg(id)}/duplicate`, { newId, name });
+  }
+
+  listComments(id: ProjectId, taskId?: string): Promise<Comment[]> {
+    const query = taskId === undefined ? "" : `?taskId=${encodeURIComponent(taskId)}`;
+    return this.send("GET", `/v1/projects/${seg(id)}/comments${query}`);
+  }
+
+  postComment(
+    id: ProjectId,
+    commentId: CommentId,
+    body: string,
+    taskId?: string,
+  ): Promise<Comment> {
+    return this.send("POST", `/v1/projects/${seg(id)}/comments`, {
+      commentId,
+      body,
+      ...(taskId === undefined ? {} : { taskId }),
+    });
+  }
+
+  editComment(commentId: CommentId, body: string): Promise<Comment> {
+    return this.send("PATCH", `/v1/comments/${seg(commentId)}`, { body });
+  }
+
+  deleteComment(commentId: CommentId): Promise<void> {
+    return this.send("DELETE", `/v1/comments/${seg(commentId)}`);
   }
 
   listAccess(id: ProjectId): Promise<AccessEntry[]> {

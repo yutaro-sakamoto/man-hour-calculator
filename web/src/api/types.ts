@@ -135,6 +135,28 @@ export interface ProjectSummary {
   memberCount: number;
 }
 
+export type CommentId = string;
+
+/**
+ * プロジェクトやタスクへのコメント。
+ *
+ * 内容 (`ProjectDocument`) の**外**にある。内容の保存は毎回まるごと
+ * 置き換えるので、同じ中に入れると 2 人が同時に書いたときに片方が消える。
+ * 閲覧しかできない人にも書かせたい、という事情もある。
+ */
+export interface Comment {
+  id: CommentId;
+  projectId: ProjectId;
+  /** タスク宛てならそのタスク id。プロジェクト宛てなら null。 */
+  taskId: string | null;
+  author: UserId;
+  /** Markdown。組み立てるのは画面側。 */
+  body: string;
+  createdAt: string;
+  /** 書き直した時刻。一度も直していなければ null。 */
+  updatedAt: string | null;
+}
+
 /** プロジェクトの中身。画面が編集するのはここ。 */
 export interface ProjectDocument {
   tasks: Task[];

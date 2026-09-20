@@ -622,6 +622,7 @@ async fn postgres_behaves_the_same_as_sqlite() {
         for table in [
             "schema_version",
             "api_tokens",
+            "comments",
             "project_access",
             "projects",
             "project_group_access",
@@ -744,4 +745,181 @@ async fn a_named_origin_may_call_the_api() {
             .and_then(|v| v.to_str().ok()),
         Some("https://よそ.example")
     );
+}
+
+/* ===== コメント ===== */
+
+#[tokio::test]
+async fn a_viewer_can_comment_over_http() {
+    let server = sqlite();
+    server
+        .ok(
+            "POST",
+            "/v1/projects",
+            "alice",
+            Some(json!({"id": "p1", "name": "案件"})),
+        )
+        .await;
+    server
+        .ok(
+            "PUT",
+            "/v1/projects/p1/access/user/bob",
+            "alice",
+            Some(json!({"role": "viewer"})),
+        )
+        .await;
+
+    // 閲覧しかできない人でも書ける。
+    let (status, posted) = server
+        .send(
+            "POST",
+            "/v1/projects/p1/comments",
+            Some("bob"),
+            Some(json!({"commentId": "c1", "body": "見積もりが楽観的では?"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(posted["author"], "bob");
+    assert_eq!(posted["taskId"], Value::Null);
+
+    let (_, listed) = server.get("/v1/projects/p1/comments", "alice").await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+    assert_eq!(listed[0]["body"], "見積もりが楽観的では?");
+
+    // 共有していない人には見えないし、書けない。
+    let (status, _) = server.get("/v1/projects/p1/comments", "root").await;
+    assert_eq!(status, StatusCode::OK, "管理者は見える");
+    let server2 = &server;
+    let (status, _) = server2
+        .send(
+            "POST",
+            "/v1/projects/p1/comments",
+            None,
+            Some(json!({"commentId": "c2", "body": "誰?"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn comments_can_be_filtered_by_task() {
+    let server = sqlite();
+    server
+        .ok(
+            "POST",
+            "/v1/projects",
+            "alice",
+            Some(json!({"id": "p1", "name": "案件"})),
+        )
+        .await;
+    for (id, task) in [("c1", None), ("c2", Some("t1"))] {
+        let mut body = json!({"commentId": id, "body": "何か"});
+        if let Some(task) = task {
+            body["taskId"] = json!(task);
+        }
+        server
+            .ok("POST", "/v1/projects/p1/comments", "alice", Some(body))
+            .await;
+    }
+
+    let (_, all) = server.get("/v1/projects/p1/comments", "alice").await;
+    assert_eq!(all.as_array().map(Vec::len), Some(2));
+    let (_, only) = server
+        .get("/v1/projects/p1/comments?taskId=t1", "alice")
+        .await;
+    assert_eq!(only.as_array().map(Vec::len), Some(1));
+    assert_eq!(only[0]["id"], "c2");
+}
+
+#[tokio::test]
+async fn only_the_author_may_rewrite_a_comment_over_http() {
+    let server = sqlite();
+    server
+        .ok(
+            "POST",
+            "/v1/projects",
+            "alice",
+            Some(json!({"id": "p1", "name": "案件"})),
+        )
+        .await;
+    server
+        .ok(
+            "PUT",
+            "/v1/projects/p1/access/user/bob",
+            "alice",
+            Some(json!({"role": "editor"})),
+        )
+        .await;
+    server
+        .ok(
+            "POST",
+            "/v1/projects/p1/comments",
+            "bob",
+            Some(json!({"commentId": "c1", "body": "最初の意見"})),
+        )
+        .await;
+
+    // 所有者でも他人の発言は直せない。
+    let (status, _) = server
+        .send(
+            "PATCH",
+            "/v1/comments/c1",
+            Some("alice"),
+            Some(json!({"body": "改ざん"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let edited = server
+        .ok(
+            "PATCH",
+            "/v1/comments/c1",
+            "bob",
+            Some(json!({"body": "直した"})),
+        )
+        .await;
+    assert_eq!(edited["body"], "直した");
+    assert_ne!(edited["updatedAt"], Value::Null);
+
+    // 消すほうは所有者にもできる。
+    let (status, _) = server
+        .send("DELETE", "/v1/comments/c1", Some("alice"), None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, listed) = server.get("/v1/projects/p1/comments", "alice").await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn deleting_a_project_takes_its_comments_with_it_over_http() {
+    let server = sqlite();
+    server
+        .ok(
+            "POST",
+            "/v1/projects",
+            "alice",
+            Some(json!({"id": "p1", "name": "案件"})),
+        )
+        .await;
+    server
+        .ok(
+            "POST",
+            "/v1/projects/p1/comments",
+            "alice",
+            Some(json!({"commentId": "c1", "body": "何か"})),
+        )
+        .await;
+    server.ok("DELETE", "/v1/projects/p1", "alice", None).await;
+
+    // 同じ id でプロジェクトを作り直しても、前のコメントは出てこない。
+    server
+        .ok(
+            "POST",
+            "/v1/projects",
+            "alice",
+            Some(json!({"id": "p1", "name": "作り直し"})),
+        )
+        .await;
+    let (_, listed) = server.get("/v1/projects/p1/comments", "alice").await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(0));
 }

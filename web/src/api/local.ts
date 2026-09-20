@@ -15,6 +15,8 @@ import type { ApiClient, NewUserInput, ProjectPatchInput, UserPatchInput } from 
 import {
   ApiError,
   type AccessEntry,
+  type Comment,
+  type CommentId,
   type ApiErrorCode,
   type Principal,
   type Project,
@@ -218,6 +220,33 @@ export class LocalApiClient implements ApiClient {
 
   duplicateProject(id: ProjectId, newId: ProjectId, name: string): Promise<Project> {
     return this.write({ op: "duplicateProject", id, newId, name });
+  }
+
+  listComments(id: ProjectId, taskId?: string): Promise<Comment[]> {
+    return this.read({ op: "listComments", id, ...(taskId === undefined ? {} : { taskId }) });
+  }
+
+  postComment(
+    id: ProjectId,
+    commentId: CommentId,
+    body: string,
+    taskId?: string,
+  ): Promise<Comment> {
+    return this.write({
+      op: "postComment",
+      id,
+      commentId,
+      body,
+      ...(taskId === undefined ? {} : { taskId }),
+    });
+  }
+
+  editComment(commentId: CommentId, body: string): Promise<Comment> {
+    return this.write({ op: "editComment", commentId, body });
+  }
+
+  async deleteComment(commentId: CommentId): Promise<void> {
+    await this.write({ op: "deleteComment", commentId });
   }
 
   listAccess(id: ProjectId): Promise<AccessEntry[]> {
