@@ -13,6 +13,7 @@
 //! HTTP に載せたときの対応は `docs/API.md` と `docs/openapi.yaml` を参照。
 
 pub mod error;
+pub mod health;
 pub mod model;
 pub mod permission;
 pub mod protocol;
@@ -20,9 +21,11 @@ pub mod service;
 pub mod store;
 
 pub use error::{ApiError, ApiResult, ErrorCode};
+pub use health::{health, ProjectHealth};
 pub use model::{
-    Document, Project, ProjectAccess, ProjectId, ProjectRole, ProjectSummary, SystemRole, User,
-    UserId,
+    AccessEntry, Document, Principal, Project, ProjectGroup, ProjectGroupId, ProjectId,
+    ProjectMeta, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User, UserGroup,
+    UserGroupId, UserId,
 };
 pub use permission::{Actor, Permission};
 pub use service::Service;

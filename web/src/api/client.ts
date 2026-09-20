@@ -11,14 +11,20 @@
  */
 
 import type {
+  AccessEntry,
+  Principal,
   Project,
-  ProjectAccess,
   ProjectDocument,
+  ProjectGroup,
+  ProjectGroupId,
   ProjectId,
   ProjectRole,
+  ProjectStatus,
   ProjectSummary,
   SystemRole,
   User,
+  UserGroup,
+  UserGroupId,
   UserId,
 } from "./types.ts";
 
@@ -37,6 +43,21 @@ export interface UserPatchInput {
   systemRole?: SystemRole;
 }
 
+/**
+ * プロジェクトの見出しの変更。省略した項目は据え置き。
+ *
+ * `clearGroup` / `clearDueDate` があるのは、「空にする」と「触らない」を
+ * 区別するため (JSON では `undefined` が消えてしまうので、明示的な旗にする)。
+ */
+export interface ProjectPatchInput {
+  name?: string;
+  groupId?: ProjectGroupId;
+  clearGroup?: boolean;
+  /** YYYY-MM-DD。 */
+  dueDate?: string;
+  clearDueDate?: boolean;
+}
+
 export interface ApiClient {
   /** この接続先の呼び名 (画面に出す)。 */
   readonly label: string;
@@ -50,15 +71,38 @@ export interface ApiClient {
   updateUser: (id: UserId, patch: UserPatchInput) => Promise<User>;
   deleteUser: (id: UserId) => Promise<void>;
 
+  listUserGroups: () => Promise<UserGroup[]>;
+  createUserGroup: (id: UserGroupId, name: string) => Promise<UserGroup>;
+  renameUserGroup: (id: UserGroupId, name: string) => Promise<UserGroup>;
+  deleteUserGroup: (id: UserGroupId) => Promise<void>;
+  addGroupMember: (id: UserGroupId, userId: UserId) => Promise<UserGroup>;
+  removeGroupMember: (id: UserGroupId, userId: UserId) => Promise<UserGroup>;
+
+  listProjectGroups: () => Promise<ProjectGroup[]>;
+  createProjectGroup: (id: ProjectGroupId, name: string) => Promise<ProjectGroup>;
+  renameProjectGroup: (id: ProjectGroupId, name: string) => Promise<ProjectGroup>;
+  deleteProjectGroup: (id: ProjectGroupId) => Promise<void>;
+  setGroupAccess: (
+    id: ProjectGroupId,
+    principal: Principal,
+    role: ProjectRole,
+  ) => Promise<ProjectGroup>;
+  removeGroupAccess: (id: ProjectGroupId, principal: Principal) => Promise<ProjectGroup>;
+
   listProjects: () => Promise<ProjectSummary[]>;
   createProject: (id: ProjectId, name: string, document?: ProjectDocument) => Promise<Project>;
   getProject: (id: ProjectId) => Promise<Project>;
-  saveDocument: (id: ProjectId, document: ProjectDocument) => Promise<ProjectSummary>;
-  renameProject: (id: ProjectId, name: string) => Promise<ProjectSummary>;
+  /** `status` を添えると、一覧に出す見通しの控えとして保存する。 */
+  saveDocument: (
+    id: ProjectId,
+    document: ProjectDocument,
+    status?: ProjectStatus,
+  ) => Promise<ProjectSummary>;
+  updateProject: (id: ProjectId, patch: ProjectPatchInput) => Promise<ProjectSummary>;
   deleteProject: (id: ProjectId) => Promise<void>;
   duplicateProject: (id: ProjectId, newId: ProjectId, name: string) => Promise<Project>;
 
-  listAccess: (id: ProjectId) => Promise<ProjectAccess[]>;
-  setAccess: (id: ProjectId, userId: UserId, role: ProjectRole) => Promise<ProjectAccess[]>;
-  removeAccess: (id: ProjectId, userId: UserId) => Promise<ProjectAccess[]>;
+  listAccess: (id: ProjectId) => Promise<AccessEntry[]>;
+  setAccess: (id: ProjectId, principal: Principal, role: ProjectRole) => Promise<AccessEntry[]>;
+  removeAccess: (id: ProjectId, principal: Principal) => Promise<AccessEntry[]>;
 }

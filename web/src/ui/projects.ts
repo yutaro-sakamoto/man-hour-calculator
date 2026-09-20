@@ -7,8 +7,8 @@
  */
 
 import type { ApiClient } from "../api/client.ts";
-import type { ProjectRole, ProjectSummary, SystemRole, User } from "../api/types.ts";
-import { PROJECT_ROLES } from "../api/types.ts";
+import type { Principal, ProjectRole, ProjectSummary, SystemRole, User } from "../api/types.ts";
+import { PROJECT_ROLES, principalKey, principalUser } from "../api/types.ts";
 import { canManage, type AppActions, type AppState } from "../app.ts";
 import { lang, t } from "../i18n.ts";
 import { LocalApiClient } from "../api/local.ts";
@@ -37,6 +37,11 @@ function userName(state: AppState, id: string): string {
   return state.users.find((user) => user.id === id)?.name ?? id;
 }
 
+/** 権限を配った相手の表示名。グループは名前を持っていないので id を出す。 */
+function principalName(state: AppState, principal: Principal): string {
+  return principal.kind === "user" ? userName(state, principal.id) : principal.id;
+}
+
 /* ===== プロジェクト一覧 ===== */
 
 function renderProjectRow(
@@ -57,7 +62,7 @@ function renderProjectRow(
               const name = value.trim();
               if (name === "" || name === project.name) return;
               actions.run(async () => {
-                await client.renameProject(project.id, name);
+                await client.updateProject(project.id, { name });
                 state.projects = await client.listProjects();
                 if (state.open?.id === project.id) state.open.name = name;
               });
@@ -70,7 +75,7 @@ function renderProjectRow(
         : h("span", { text: project.name }),
     ]),
     h("td", { text: t(`role.${project.role}`) }),
-    h("td", { text: project.ownerName }),
+    h("td", { text: project.ownerNames.join("、") || "—" }),
     h("td", { class: "num", text: String(project.taskCount) }),
     h("td", { class: "num", text: String(project.memberCount) }),
     h("td", { text: formatMoment(project.updatedAt) }),
@@ -166,8 +171,10 @@ function renderSharing(state: AppState, actions: AppActions): HTMLElement {
     return card(t("share.heading"), [h("p", { class: "empty", text: t("share.needProject") })]);
   }
   const manage = canManage(state) || state.me.systemRole === "admin";
-  const shared = new Set(open.access.map((entry) => entry.userId));
-  const candidates = state.users.filter((user) => !shared.has(user.id));
+  const shared = new Set(open.access.map((entry) => principalKey(entry.principal)));
+  const candidates = state.users.filter(
+    (user) => !shared.has(principalKey(principalUser(user.id))),
+  );
 
   const refresh = async (): Promise<void> => {
     const access = await state.client.listAccess(open.id);
@@ -192,10 +199,13 @@ function renderSharing(state: AppState, actions: AppActions): HTMLElement {
             "tbody",
             {},
             open.access.map((entry) =>
-              h("tr", { dataset: { user: entry.userId } }, [
+              h("tr", { dataset: { principal: principalKey(entry.principal) } }, [
                 h("td", {}, [
-                  userName(state, entry.userId),
-                  entry.userId === state.me.id
+                  principalName(state, entry.principal),
+                  entry.principal.kind === "group"
+                    ? h("span", { class: "muted", text: ` ${t("share.group")}` })
+                    : null,
+                  entry.principal.kind === "user" && entry.principal.id === state.me.id
                     ? h("span", { class: "muted", text: ` ${t("accounts.you")}` })
                     : null,
                 ]),
@@ -205,12 +215,12 @@ function renderSharing(state: AppState, actions: AppActions): HTMLElement {
                     ROLE_CHOICES(),
                     (role) => {
                       actions.run(async () => {
-                        await state.client.setAccess(open.id, entry.userId, role);
+                        await state.client.setAccess(open.id, entry.principal, role);
                         await refresh();
                       });
                     },
                     {
-                      dataset: { focus: `access:${entry.userId}` },
+                      dataset: { focus: `access:${principalKey(entry.principal)}` },
                       attrs: { disabled: !manage, "aria-label": t("share.role") },
                     },
                   ),
@@ -218,10 +228,10 @@ function renderSharing(state: AppState, actions: AppActions): HTMLElement {
                 h("td", { class: "actions" }, [
                   iconButton(
                     "×",
-                    t("share.remove", { name: userName(state, entry.userId) }),
+                    t("share.remove", { name: principalName(state, entry.principal) }),
                     () => {
                       actions.run(async () => {
-                        await state.client.removeAccess(open.id, entry.userId);
+                        await state.client.removeAccess(open.id, entry.principal);
                         await refresh();
                       });
                     },
@@ -260,7 +270,7 @@ function renderSharing(state: AppState, actions: AppActions): HTMLElement {
                 t("share.add"),
                 () => {
                   actions.run(async () => {
-                    await state.client.setAccess(open.id, pick, role);
+                    await state.client.setAccess(open.id, principalUser(pick), role);
                     await refresh();
                   });
                 },

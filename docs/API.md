@@ -77,6 +77,28 @@ API 層を Rust に置いて JSON でやり取りするため、WASM に serde_j
 | `admin` | すべてのプロジェクトとアカウントを管理できる |
 | `member` | 自分に共有されたプロジェクトだけを扱える |
 
+### グループ
+
+権限は**アカウントにもグループにも**配れる。配る相手を `Principal` と呼び、
+JSON では `{"kind": "user" | "group", "id": "..."}`、HTTP のパスでは
+`.../access/{principalKind}/{principalId}` として現れる。
+
+入れ物は 2 種類ある。
+
+| | `UserGroup` | `ProjectGroup` |
+|---|---|---|
+| 何をまとめるか | アカウント (部署・チーム) | プロジェクト |
+| 効き方 | メンバー全員がそのグループへの付与を受け取る | 配下のプロジェクトすべてに権限を継がせる |
+| 管理できる人 | システム管理者 | そのグループの所有者 |
+
+**実効的な役割**は、次のうち最も強いもの。
+
+1. プロジェクトへの直接の付与 (本人宛て / 所属グループ宛て)
+2. プロジェクトグループへの付与 (本人宛て / 所属グループ宛て)
+3. システム管理者はどのプロジェクトにも届く (付与が無ければ `viewer` 相当)
+
+判定は `mhc_api::permission::Actor::effective_role` の 1 か所だけにある。
+
 ### プロジェクトごとの役割
 
 強い順に `owner` > `editor` > `viewer`。
@@ -93,7 +115,13 @@ API 層を Rust に置いて JSON でやり取りするため、WASM に serde_j
 ### 崩してはいけない条件
 
 - **プロジェクトには所有者が必ず 1 人以上いる。** 最後の所有者を降格・
-  削除しようとすると `409 Conflict` で止まる。
+  削除しようとすると `409 Conflict` で止まる。ここで数えるのは
+  *実際に所有者として振る舞えるアカウント*で、グループ宛ての付与は
+  そのメンバーに展開してから数える。メンバーの居ないグループに `owner` を
+  付けても所有者は 0 人のままなので、それを踏み台に自分を外すことはできない。
+- **グループを消しても孤児は生まれない。** そのグループ経由でしか所有者が
+  居なくなるプロジェクトがあれば `409`。プロジェクトグループを消した場合、
+  配下のプロジェクトは消えず、所属だけが外れる。
 - **システム管理者が 1 人もいなくならない。** 同じく `409`。
 - **唯一の所有者であるアカウントは削除できない。** 先に所有者を移す。
   所有者のいないプロジェクトが生まれないようにするため。
@@ -112,16 +140,28 @@ API 層を Rust に置いて JSON でやり取りするため、WASM に serde_j
 | アカウントを作る | POST | `/v1/users` |
 | アカウントを更新 | PATCH | `/v1/users/{userId}` |
 | アカウントを削除 | DELETE | `/v1/users/{userId}` |
+| アカウントのグループ一覧 | GET | `/v1/user-groups` |
+| グループを作る | POST | `/v1/user-groups` |
+| グループを改名 | PATCH | `/v1/user-groups/{groupId}` |
+| グループを削除 | DELETE | `/v1/user-groups/{groupId}` |
+| メンバーを入れる | PUT | `/v1/user-groups/{groupId}/members/{userId}` |
+| メンバーを外す | DELETE | `/v1/user-groups/{groupId}/members/{userId}` |
+| プロジェクトのグループ一覧 | GET | `/v1/project-groups` |
+| グループを作る | POST | `/v1/project-groups` |
+| グループを改名 | PATCH | `/v1/project-groups/{groupId}` |
+| グループを削除 | DELETE | `/v1/project-groups/{groupId}` |
+| グループに権限を与える | PUT | `/v1/project-groups/{groupId}/access/{principalKind}/{principalId}` |
+| グループの権限を取り消す | DELETE | `/v1/project-groups/{groupId}/access/{principalKind}/{principalId}` |
 | プロジェクト一覧 | GET | `/v1/projects` |
 | プロジェクトを作る | POST | `/v1/projects` |
 | プロジェクトを取得 | GET | `/v1/projects/{projectId}` |
 | 内容を保存 | PUT | `/v1/projects/{projectId}/document` |
-| 改名 | PATCH | `/v1/projects/{projectId}` |
+| 名前・所属グループ・期限を変える | PATCH | `/v1/projects/{projectId}` |
 | 削除 | DELETE | `/v1/projects/{projectId}` |
 | 複製 | POST | `/v1/projects/{projectId}/duplicate` |
 | 権限一覧 | GET | `/v1/projects/{projectId}/access` |
-| 権限を与える | PUT | `/v1/projects/{projectId}/access/{userId}` |
-| 権限を取り消す | DELETE | `/v1/projects/{projectId}/access/{userId}` |
+| 権限を与える | PUT | `/v1/projects/{projectId}/access/{principalKind}/{principalId}` |
+| 権限を取り消す | DELETE | `/v1/projects/{projectId}/access/{principalKind}/{principalId}` |
 
 失敗はすべて `{"code": ..., "message": ...}` で返る。
 
@@ -132,6 +172,34 @@ API 層を Rust に置いて JSON でやり取りするため、WASM に serde_j
 | `notFound` | 404 | 対象が無い |
 | `conflict` | 409 | 状態が合わない (最後の所有者を外そうとした、など) |
 | `invalid` | 422 | 入力が不正 |
+| `internal` | 500 | サーバ側の失敗 (保存先が応答しない、など) |
+
+## プロジェクトの状態
+
+一覧には各プロジェクトの見通し (`health`) を出す。とくに遅れているものを
+埋もれさせないため、一覧は状態の重い順に並ぶ。
+
+判定には計算結果が要るが、**一覧のたびに全プロジェクトの中身を読んで
+計算し直すのは重い**。そこで計算はクライアントが保存時に 1 回だけ行い、
+その控え (`ProjectStatus`) を `PUT .../document` に添えて送る。
+控えには計算の元にした `updatedAt` が `basedOn` として入っているので、
+内容が後から変わっていれば「古い」と分かる。
+
+| `health` | 意味 |
+|---|---|
+| `noTasks` | タスクが 1 件も無い |
+| `unknown` | 控えが無い、または内容と対応していない (再計算が必要) |
+| `done` | すべてのタスクが完了 |
+| `onTrack` | 期限あり。8 割の確からしさで間に合う |
+| `atRisk` | 期限あり。5 割では間に合うが 8 割では危うい |
+| **`late`** | 期限あり。5 割でも間に合わない |
+| **`behindPace`** | 期限なし。工数の消化率が進捗率を 10pt 以上上回る |
+| `inProgress` | 期限なし。上記以外 |
+
+古い数字を新しい内容のものとして見せないため、`basedOn` が合わない控えは
+保存時に捨てられ、状態は `unknown` になる。画面は数字の代わりに
+「再計算が必要」と出す。判定は `mhc_api::health::health` の 1 か所だけにあり、
+サーバも画面も同じ関数を通る。
 
 ## ローカルでの動き
 
@@ -159,6 +227,8 @@ API 層を Rust に置いて JSON でやり取りするため、WASM に serde_j
 残っているのは**薄い層 1 枚**だけ。
 
 1. `Store` を実装する (PostgreSQL や SQLite)。今は `MemoryStore` だけがある。
+   一覧のために中身を読まずに済むよう、`project_metas()` は `document` を
+   含まない見出しだけを返す。
 2. HTTP のハンドラを書く。受け取ったルートとボディを `Request` に組み立て、
    `dispatch` に渡して、`Outcome` を HTTP の応答に写すだけ。
    ステータスは `ApiError::http_status()` が持っている。

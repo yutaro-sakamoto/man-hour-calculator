@@ -9,19 +9,32 @@
  * 示す実装。接続先を設定した時点でそのまま使える。
  */
 
-import type { ApiClient, NewUserInput, UserPatchInput } from "./client.ts";
+import type { ApiClient, NewUserInput, ProjectPatchInput, UserPatchInput } from "./client.ts";
 import {
   ApiError,
+  type AccessEntry,
   type ApiErrorCode,
+  type Principal,
   type Project,
-  type ProjectAccess,
   type ProjectDocument,
+  type ProjectGroup,
+  type ProjectGroupId,
   type ProjectId,
   type ProjectRole,
+  type ProjectStatus,
   type ProjectSummary,
   type User,
+  type UserGroup,
+  type UserGroupId,
   type UserId,
 } from "./types.ts";
+
+/** パスに埋める 1 片。`/` などが混ざっても壊れないようにする。 */
+const seg = (value: string): string => encodeURIComponent(value);
+
+/** `…/access/{principalKind}/{principalId}` の末尾。 */
+const principalPath = (principal: Principal): string =>
+  `${seg(principal.kind)}/${seg(principal.id)}`;
 
 interface ErrorBody {
   code?: ApiErrorCode;
@@ -93,11 +106,65 @@ export class HttpApiClient implements ApiClient {
   }
 
   updateUser(id: UserId, patch: UserPatchInput): Promise<User> {
-    return this.send("PATCH", `/v1/users/${encodeURIComponent(id)}`, patch);
+    return this.send("PATCH", `/v1/users/${seg(id)}`, patch);
   }
 
   deleteUser(id: UserId): Promise<void> {
-    return this.send("DELETE", `/v1/users/${encodeURIComponent(id)}`);
+    return this.send("DELETE", `/v1/users/${seg(id)}`);
+  }
+
+  listUserGroups(): Promise<UserGroup[]> {
+    return this.send("GET", "/v1/user-groups");
+  }
+
+  createUserGroup(id: UserGroupId, name: string): Promise<UserGroup> {
+    return this.send("POST", "/v1/user-groups", { id, name });
+  }
+
+  renameUserGroup(id: UserGroupId, name: string): Promise<UserGroup> {
+    return this.send("PATCH", `/v1/user-groups/${seg(id)}`, { name });
+  }
+
+  deleteUserGroup(id: UserGroupId): Promise<void> {
+    return this.send("DELETE", `/v1/user-groups/${seg(id)}`);
+  }
+
+  addGroupMember(id: UserGroupId, userId: UserId): Promise<UserGroup> {
+    return this.send("PUT", `/v1/user-groups/${seg(id)}/members/${seg(userId)}`);
+  }
+
+  removeGroupMember(id: UserGroupId, userId: UserId): Promise<UserGroup> {
+    return this.send("DELETE", `/v1/user-groups/${seg(id)}/members/${seg(userId)}`);
+  }
+
+  listProjectGroups(): Promise<ProjectGroup[]> {
+    return this.send("GET", "/v1/project-groups");
+  }
+
+  createProjectGroup(id: ProjectGroupId, name: string): Promise<ProjectGroup> {
+    return this.send("POST", "/v1/project-groups", { id, name });
+  }
+
+  renameProjectGroup(id: ProjectGroupId, name: string): Promise<ProjectGroup> {
+    return this.send("PATCH", `/v1/project-groups/${seg(id)}`, { name });
+  }
+
+  deleteProjectGroup(id: ProjectGroupId): Promise<void> {
+    return this.send("DELETE", `/v1/project-groups/${seg(id)}`);
+  }
+
+  setGroupAccess(
+    id: ProjectGroupId,
+    principal: Principal,
+    role: ProjectRole,
+  ): Promise<ProjectGroup> {
+    return this.send("PUT", `/v1/project-groups/${seg(id)}/access/${principalPath(principal)}`, {
+      role,
+    });
+  }
+
+  removeGroupAccess(id: ProjectGroupId, principal: Principal): Promise<ProjectGroup> {
+    return this.send("DELETE", `/v1/project-groups/${seg(id)}/access/${principalPath(principal)}`);
   }
 
   listProjects(): Promise<ProjectSummary[]> {
@@ -109,41 +176,41 @@ export class HttpApiClient implements ApiClient {
   }
 
   getProject(id: ProjectId): Promise<Project> {
-    return this.send("GET", `/v1/projects/${encodeURIComponent(id)}`);
+    return this.send("GET", `/v1/projects/${seg(id)}`);
   }
 
-  saveDocument(id: ProjectId, document: ProjectDocument): Promise<ProjectSummary> {
-    return this.send("PUT", `/v1/projects/${encodeURIComponent(id)}/document`, document);
+  saveDocument(
+    id: ProjectId,
+    document: ProjectDocument,
+    status?: ProjectStatus,
+  ): Promise<ProjectSummary> {
+    return this.send("PUT", `/v1/projects/${seg(id)}/document`, {
+      document,
+      ...(status ? { status } : {}),
+    });
   }
 
-  renameProject(id: ProjectId, name: string): Promise<ProjectSummary> {
-    return this.send("PATCH", `/v1/projects/${encodeURIComponent(id)}`, { name });
+  updateProject(id: ProjectId, patch: ProjectPatchInput): Promise<ProjectSummary> {
+    return this.send("PATCH", `/v1/projects/${seg(id)}`, patch);
   }
 
   deleteProject(id: ProjectId): Promise<void> {
-    return this.send("DELETE", `/v1/projects/${encodeURIComponent(id)}`);
+    return this.send("DELETE", `/v1/projects/${seg(id)}`);
   }
 
   duplicateProject(id: ProjectId, newId: ProjectId, name: string): Promise<Project> {
-    return this.send("POST", `/v1/projects/${encodeURIComponent(id)}/duplicate`, { newId, name });
+    return this.send("POST", `/v1/projects/${seg(id)}/duplicate`, { newId, name });
   }
 
-  listAccess(id: ProjectId): Promise<ProjectAccess[]> {
-    return this.send("GET", `/v1/projects/${encodeURIComponent(id)}/access`);
+  listAccess(id: ProjectId): Promise<AccessEntry[]> {
+    return this.send("GET", `/v1/projects/${seg(id)}/access`);
   }
 
-  setAccess(id: ProjectId, userId: UserId, role: ProjectRole): Promise<ProjectAccess[]> {
-    return this.send(
-      "PUT",
-      `/v1/projects/${encodeURIComponent(id)}/access/${encodeURIComponent(userId)}`,
-      { role },
-    );
+  setAccess(id: ProjectId, principal: Principal, role: ProjectRole): Promise<AccessEntry[]> {
+    return this.send("PUT", `/v1/projects/${seg(id)}/access/${principalPath(principal)}`, { role });
   }
 
-  removeAccess(id: ProjectId, userId: UserId): Promise<ProjectAccess[]> {
-    return this.send(
-      "DELETE",
-      `/v1/projects/${encodeURIComponent(id)}/access/${encodeURIComponent(userId)}`,
-    );
+  removeAccess(id: ProjectId, principal: Principal): Promise<AccessEntry[]> {
+    return this.send("DELETE", `/v1/projects/${seg(id)}/access/${principalPath(principal)}`);
   }
 }

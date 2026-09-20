@@ -574,9 +574,12 @@ async function openProject(project: {
   updatedAt: string;
   document: ProjectDocument;
 }): Promise<void> {
-  const role =
-    project.access.find((entry) => entry.userId === state.me.id)?.role ??
-    (state.me.systemRole === "admin" ? "viewer" : "viewer");
+  // 直接の付与から自分の役割を引く。グループ経由の分やシステム管理者の扱いは
+  // API 側が決めるので、ここで分からなければ一覧が返した役割に従う。
+  const granted = project.access.find(
+    (entry) => entry.principal.kind === "user" && entry.principal.id === state.me.id,
+  )?.role;
+  const role = granted ?? state.projects.find((item) => item.id === project.id)?.role ?? "viewer";
   state.open = {
     id: project.id,
     name: project.name,

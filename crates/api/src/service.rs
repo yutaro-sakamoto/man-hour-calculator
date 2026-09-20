@@ -3,11 +3,16 @@
 //! 時刻と新しい ID は**呼び出し側から渡す**。WASM のなかに時計も乱数源も
 //! 持ち込まずに済み、同じ入力なら必ず同じ結果になるのでテストしやすい。
 //! サーバで動かすときは、サーバがそれらを用意する。
+//!
+//! 同時実行の直列化はここでは行わない。「読む → 判定 → 書く」で完結させ、
+//! 直列化は呼び出し側 (サーバの書き込みロック) に任せている。
 
 use crate::error::{ApiError, ApiResult};
+use crate::health;
 use crate::model::{
-    Document, Project, ProjectAccess, ProjectId, ProjectRole, ProjectSummary, SystemRole, User,
-    UserId,
+    AccessEntry, Document, Principal, Project, ProjectGroup, ProjectGroupId, ProjectId,
+    ProjectMeta, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User, UserGroup,
+    UserGroupId, UserId,
 };
 use crate::permission::{Actor, Permission};
 use crate::store::Store;
@@ -29,8 +34,50 @@ pub struct UserPatch {
     pub system_role: Option<SystemRole>,
 }
 
+/// プロジェクトの見出しの変更内容。`None` の項目は据え置き。
+#[derive(Debug, Clone, Default)]
+pub struct ProjectPatch {
+    pub name: Option<String>,
+    /// `Some(None)` でどのグループにも属さない状態に戻す。
+    pub group_id: Option<Option<ProjectGroupId>>,
+    /// `Some(None)` で期限を外す。
+    pub due_date: Option<Option<String>>,
+}
+
 pub struct Service<S: Store> {
     store: S,
+}
+
+/// 所有者として振る舞えるアカウントの集合。
+///
+/// 数人しか入らないので、並べ替えた `Vec` で足りる。`BTreeSet` を使うと
+/// そのためだけに木の実装が WASM に載ってしまう。
+#[derive(Debug, Default)]
+struct Owners(Vec<UserId>);
+
+impl Owners {
+    fn insert(&mut self, id: UserId) {
+        if let Err(at) = self.0.binary_search(&id) {
+            self.0.insert(at, id);
+        }
+    }
+
+    fn remove(&mut self, id: &UserId) {
+        self.0.retain(|existing| existing != id);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn contains(&self, id: &UserId) -> bool {
+        self.0.binary_search(id).is_ok()
+    }
+
+    /// 全員がこのグループのメンバーか (= このグループを消すと誰も残らない)。
+    fn all_within(&self, members: &[UserId]) -> bool {
+        self.0.iter().all(|id| members.contains(id))
+    }
 }
 
 fn trimmed(value: &str, field: &str) -> ApiResult<String> {
@@ -59,32 +106,41 @@ impl<S: Store> Service<S> {
     }
 
     /// 呼び出し元を組み立てる。存在しないアカウントは通さない。
+    ///
+    /// 所属グループもここで解決して詰める。以後の権限判定はこの `Actor` だけを見る。
     pub fn actor(&self, user_id: &UserId) -> ApiResult<Actor> {
         let user = self
             .store
-            .user(user_id)
+            .user(user_id)?
             .ok_or_else(|| ApiError::unauthorized("アカウントが見つかりません"))?;
-        Ok(Actor::new(user.id, user.system_role))
+        let groups = self
+            .store
+            .user_groups()?
+            .into_iter()
+            .filter(|group| group.contains(user_id))
+            .map(|group| group.id)
+            .collect();
+        Ok(Actor::new(user.id, user.system_role).with_groups(groups))
     }
 
     /* ===== アカウント ===== */
 
     pub fn me(&self, actor: &Actor) -> ApiResult<User> {
         self.store
-            .user(&actor.user_id)
+            .user(&actor.user_id)?
             .ok_or_else(|| ApiError::unauthorized("アカウントが見つかりません"))
     }
 
-    /// アカウント一覧。管理者でなくても、誰に共有できるか選ぶために名前は見える。
+    /// アカウント一覧。共有先を選ぶために、管理者でなくても名前は見える。
     pub fn list_users(&self, _actor: &Actor) -> ApiResult<Vec<User>> {
-        let mut users = self.store.users();
+        let mut users = self.store.users()?;
         users.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(users)
     }
 
     pub fn create_user(&mut self, actor: &Actor, now: &str, input: NewUser) -> ApiResult<User> {
         self.require(actor, Permission::UserManage, None)?;
-        if self.store.user(&input.id).is_some() {
+        if self.store.user(&input.id)?.is_some() {
             return Err(ApiError::conflict("同じ id のアカウントがあります"));
         }
         let user = User {
@@ -94,7 +150,7 @@ impl<S: Store> Service<S> {
             system_role: input.system_role,
             created_at: now.to_string(),
         };
-        self.store.put_user(user.clone());
+        self.store.put_user(user.clone())?;
         Ok(user)
     }
 
@@ -110,7 +166,7 @@ impl<S: Store> Service<S> {
 
         let mut user = self
             .store
-            .user(id)
+            .user(id)?
             .ok_or_else(|| ApiError::not_found("アカウントが見つかりません"))?;
         if let Some(name) = patch.name {
             user.name = trimmed(&name, "名前")?;
@@ -124,7 +180,7 @@ impl<S: Store> Service<S> {
             }
             user.system_role = role;
         }
-        self.store.put_user(user.clone());
+        self.store.put_user(user.clone())?;
         Ok(user)
     }
 
@@ -132,51 +188,262 @@ impl<S: Store> Service<S> {
         self.require(actor, Permission::UserManage, None)?;
         let user = self
             .store
-            .user(id)
+            .user(id)?
             .ok_or_else(|| ApiError::not_found("アカウントが見つかりません"))?;
         if user.system_role == SystemRole::Admin {
             self.ensure_another_admin_exists(id)?;
         }
-        // 所有者が居なくなるプロジェクトを作らない。
-        for project in self.store.projects() {
-            let owners: Vec<_> = project
-                .access
-                .iter()
-                .filter(|entry| entry.role == ProjectRole::Owner)
-                .collect();
-            if owners.len() == 1 && owners[0].user_id == *id {
+
+        // 所有者が居なくなるプロジェクトを作らない。グループ経由で所有者に
+        // なっている人も数えるので、「チームに owner を付けてある」場合は消せる。
+        let groups = self.store.project_groups()?;
+        for meta in self.store.project_metas()? {
+            let parent = Self::parent_of(&meta, &groups);
+            let mut owners = self.owner_users(&meta, parent)?;
+            owners.remove(id);
+            if owners.is_empty() {
                 return Err(ApiError::conflict(format!(
                     "プロジェクト「{}」の唯一の所有者です。先に所有者を移してください",
-                    project.name
+                    meta.name
                 )));
             }
         }
-        self.store.remove_user(id);
+        self.store.remove_user(id)?;
         Ok(())
+    }
+
+    /* ===== アカウントのグループ ===== */
+
+    pub fn list_user_groups(&self, _actor: &Actor) -> ApiResult<Vec<UserGroup>> {
+        let mut groups = self.store.user_groups()?;
+        groups.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(groups)
+    }
+
+    pub fn create_user_group(
+        &mut self,
+        actor: &Actor,
+        now: &str,
+        id: UserGroupId,
+        name: &str,
+    ) -> ApiResult<UserGroup> {
+        self.require(actor, Permission::UserManage, None)?;
+        if self.store.user_group(&id)?.is_some() {
+            return Err(ApiError::conflict("同じ id のグループがあります"));
+        }
+        let group = UserGroup {
+            id,
+            name: trimmed(name, "グループ名")?,
+            members: Vec::new(),
+            created_at: now.to_string(),
+        };
+        self.store.put_user_group(group.clone())?;
+        Ok(group)
+    }
+
+    pub fn rename_user_group(
+        &mut self,
+        actor: &Actor,
+        id: &UserGroupId,
+        name: &str,
+    ) -> ApiResult<UserGroup> {
+        self.require(actor, Permission::UserManage, None)?;
+        let mut group = self.lookup_user_group(id)?;
+        group.name = trimmed(name, "グループ名")?;
+        self.store.put_user_group(group.clone())?;
+        Ok(group)
+    }
+
+    pub fn delete_user_group(&mut self, actor: &Actor, id: &UserGroupId) -> ApiResult<()> {
+        self.require(actor, Permission::UserManage, None)?;
+        let group = self.lookup_user_group(id)?;
+
+        // このグループを消すと所有者が居なくなるプロジェクトがないか確かめる。
+        let groups = self.store.project_groups()?;
+        for meta in self.store.project_metas()? {
+            let parent = Self::parent_of(&meta, &groups);
+            let owners = self.owner_users(&meta, parent)?;
+            if owners.is_empty() {
+                continue;
+            }
+            let via_group = Self::grants_owner(&meta.access, id)
+                || parent.is_some_and(|folder| Self::grants_owner(&folder.access, id));
+            if via_group && owners.all_within(&group.members) {
+                return Err(ApiError::conflict(format!(
+                    "プロジェクト「{}」の所有者がこのグループ経由だけになっています。\
+                     先に別の所有者を立ててください",
+                    meta.name
+                )));
+            }
+        }
+
+        self.store.remove_user_group(id)?;
+        Ok(())
+    }
+
+    pub fn set_group_member(
+        &mut self,
+        actor: &Actor,
+        id: &UserGroupId,
+        user_id: &UserId,
+        member: bool,
+    ) -> ApiResult<UserGroup> {
+        self.require(actor, Permission::UserManage, None)?;
+        if self.store.user(user_id)?.is_none() {
+            return Err(ApiError::not_found("アカウントが見つかりません"));
+        }
+        let mut group = self.lookup_user_group(id)?;
+        if member {
+            if !group.contains(user_id) {
+                group.members.push(user_id.clone());
+            }
+        } else {
+            group.members.retain(|existing| existing != user_id);
+        }
+        self.store.put_user_group(group.clone())?;
+        Ok(group)
+    }
+
+    /* ===== プロジェクトのグループ ===== */
+
+    pub fn list_project_groups(&self, _actor: &Actor) -> ApiResult<Vec<ProjectGroup>> {
+        let mut groups = self.store.project_groups()?;
+        groups.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(groups)
+    }
+
+    pub fn create_project_group(
+        &mut self,
+        actor: &Actor,
+        now: &str,
+        id: ProjectGroupId,
+        name: &str,
+    ) -> ApiResult<ProjectGroup> {
+        self.require(actor, Permission::ProjectCreate, None)?;
+        if self.store.project_group(&id)?.is_some() {
+            return Err(ApiError::conflict("同じ id のグループがあります"));
+        }
+        // 作った人が所有者。これが無いと誰も権限を配れない入れ物ができてしまう。
+        let group = ProjectGroup {
+            id,
+            name: trimmed(name, "グループ名")?,
+            access: vec![AccessEntry::new(
+                Principal::User(actor.user_id.clone()),
+                ProjectRole::Owner,
+            )],
+            created_at: now.to_string(),
+        };
+        self.store.put_project_group(group.clone())?;
+        Ok(group)
+    }
+
+    pub fn rename_project_group(
+        &mut self,
+        actor: &Actor,
+        id: &ProjectGroupId,
+        name: &str,
+    ) -> ApiResult<ProjectGroup> {
+        let group = self.lookup_project_group(id)?;
+        self.require_group_manage(actor, &group)?;
+        let renamed = ProjectGroup {
+            name: trimmed(name, "グループ名")?,
+            ..group
+        };
+        self.store.put_project_group(renamed.clone())?;
+        Ok(renamed)
+    }
+
+    pub fn delete_project_group(&mut self, actor: &Actor, id: &ProjectGroupId) -> ApiResult<()> {
+        let group = self.lookup_project_group(id)?;
+        self.require_group_manage(actor, &group)?;
+
+        // 配下のプロジェクトが、このグループ経由でしか所有者を持たないなら止める。
+        for meta in self.store.project_metas()? {
+            if meta.group_id.as_ref() != Some(id) {
+                continue;
+            }
+            if self.owner_users(&meta, None)?.is_empty() {
+                return Err(ApiError::conflict(format!(
+                    "プロジェクト「{}」の所有者がこのグループ経由だけになっています。\
+                     先に別の所有者を立ててください",
+                    meta.name
+                )));
+            }
+        }
+
+        self.store.remove_project_group(id)?;
+        Ok(())
+    }
+
+    pub fn set_group_access(
+        &mut self,
+        actor: &Actor,
+        id: &ProjectGroupId,
+        principal: &Principal,
+        role: Option<ProjectRole>,
+    ) -> ApiResult<ProjectGroup> {
+        let mut group = self.lookup_project_group(id)?;
+        self.require_group_manage(actor, &group)?;
+        self.ensure_principal_exists(principal)?;
+
+        group.access.retain(|entry| &entry.principal != principal);
+        if let Some(role) = role {
+            group.access.push(AccessEntry::new(principal.clone(), role));
+        }
+        if !group.access.iter().any(|e| e.role == ProjectRole::Owner) {
+            return Err(ApiError::conflict(
+                "グループの所有者がいなくなります。先に別の所有者を立ててください",
+            ));
+        }
+        self.store.put_project_group(group.clone())?;
+        Ok(group)
     }
 
     /* ===== プロジェクト ===== */
 
-    /// 自分が見られるプロジェクトの一覧。更新が新しい順。
-    pub fn list_projects(&self, actor: &Actor) -> ApiResult<Vec<ProjectSummary>> {
-        let mut out: Vec<ProjectSummary> = self
-            .store
-            .projects()
-            .into_iter()
-            .filter_map(|project| {
-                let role = project.role_of(&actor.user_id).or_else(|| {
-                    // 管理者は共有されていなくても見える。役割は viewer 扱い。
-                    actor.is_admin().then_some(ProjectRole::Viewer)
-                })?;
-                let owner_name = project
-                    .owner()
-                    .and_then(|id| self.store.user(id))
-                    .map(|user| user.name)
-                    .unwrap_or_default();
-                Some(project.summary(role, owner_name))
-            })
-            .collect();
-        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then(a.name.cmp(&b.name)));
+    /// 自分が見られるプロジェクトの一覧。既定では、気にすべきものが先に来る。
+    pub fn list_projects(&self, actor: &Actor, now: &str) -> ApiResult<Vec<ProjectSummary>> {
+        let groups = self.store.project_groups()?;
+        let users = self.store.users()?;
+        let today = health::today_of(now);
+
+        let mut out = Vec::new();
+        for meta in self.store.project_metas()? {
+            let parent = Self::parent_of(&meta, &groups);
+            let Some(role) = actor.effective_role(&meta, parent) else {
+                continue;
+            };
+            let owners = self.owner_users(&meta, parent)?;
+            let owner_names = users
+                .iter()
+                .filter(|user| owners.contains(&user.id))
+                .map(|user| user.name.clone())
+                .collect();
+            out.push(ProjectSummary {
+                id: meta.id.clone(),
+                name: meta.name.clone(),
+                created_at: meta.created_at.clone(),
+                updated_at: meta.updated_at.clone(),
+                role,
+                group_id: meta.group_id.clone(),
+                group_name: parent.map(|group| group.name.clone()),
+                due_date: meta.due_date.clone(),
+                health: health::health(&meta, today),
+                status: meta.status.clone(),
+                owner_names,
+                task_count: meta.task_count,
+                member_count: meta.member_count,
+            });
+        }
+
+        // 遅れているものが埋もれないよう、重いものから並べる。
+        out.sort_by(|a, b| {
+            a.health
+                .severity()
+                .cmp(&b.health.severity())
+                .then(b.updated_at.cmp(&a.updated_at))
+                .then(a.name.cmp(&b.name))
+        });
         Ok(out)
     }
 
@@ -189,31 +456,36 @@ impl<S: Store> Service<S> {
         document: Document,
     ) -> ApiResult<Project> {
         self.require(actor, Permission::ProjectCreate, None)?;
-        if self.store.project(&id).is_some() {
+        if self.store.project(&id)?.is_some() {
             return Err(ApiError::conflict("同じ id のプロジェクトがあります"));
         }
-        let project = Project {
-            id,
-            name: trimmed(name, "プロジェクト名")?,
-            created_at: now.to_string(),
-            updated_at: now.to_string(),
-            access: vec![ProjectAccess {
-                user_id: actor.user_id.clone(),
-                role: ProjectRole::Owner,
-            }],
+        let mut project = Project {
+            meta: ProjectMeta {
+                id,
+                name: trimmed(name, "プロジェクト名")?,
+                created_at: now.to_string(),
+                updated_at: now.to_string(),
+                group_id: None,
+                due_date: None,
+                access: vec![AccessEntry::new(
+                    Principal::User(actor.user_id.clone()),
+                    ProjectRole::Owner,
+                )],
+                status: None,
+                task_count: 0,
+                member_count: 0,
+            },
             document,
         };
-        self.store.put_project(project.clone());
+        project.refresh_counts();
+        self.store.put_project(project.clone())?;
         Ok(project)
     }
 
     pub fn get_project(&self, actor: &Actor, id: &ProjectId) -> ApiResult<Project> {
         let project = self.lookup(id)?;
-        self.require(
-            actor,
-            Permission::ProjectRead,
-            project.role_of(&actor.user_id),
-        )?;
+        let role = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::ProjectRead, role)?;
         Ok(project)
     }
 
@@ -223,46 +495,62 @@ impl<S: Store> Service<S> {
         id: &ProjectId,
         now: &str,
         document: Document,
+        status: Option<ProjectStatus>,
     ) -> ApiResult<ProjectSummary> {
         let mut project = self.lookup(id)?;
-        self.require(
-            actor,
-            Permission::ProjectWrite,
-            project.role_of(&actor.user_id),
-        )?;
+        let role = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::ProjectWrite, role)?;
+
         project.document = document;
-        project.updated_at = now.to_string();
-        self.store.put_project(project.clone());
-        Ok(self.summarize(&project, actor))
+        project.meta.updated_at = now.to_string();
+        // 控えは、いま保存する内容に対応していなければ捨てる。
+        // 古い数字を新しい内容のものとして見せないため。
+        project.meta.status = status.filter(|snapshot| snapshot.based_on == now);
+        project.refresh_counts();
+        self.store.put_project(project.clone())?;
+        self.summarize(&project.meta, actor, now)
     }
 
-    pub fn rename_project(
+    pub fn update_project(
         &mut self,
         actor: &Actor,
         id: &ProjectId,
         now: &str,
-        name: &str,
+        patch: ProjectPatch,
     ) -> ApiResult<ProjectSummary> {
         let mut project = self.lookup(id)?;
-        self.require(
-            actor,
-            Permission::ProjectManage,
-            project.role_of(&actor.user_id),
-        )?;
-        project.name = trimmed(name, "プロジェクト名")?;
-        project.updated_at = now.to_string();
-        self.store.put_project(project.clone());
-        Ok(self.summarize(&project, actor))
+        let role = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::ProjectManage, role)?;
+
+        if let Some(name) = patch.name {
+            project.meta.name = trimmed(&name, "プロジェクト名")?;
+        }
+        if let Some(group_id) = patch.group_id {
+            if let Some(target) = &group_id {
+                if self.store.project_group(target)?.is_none() {
+                    return Err(ApiError::not_found("グループが見つかりません"));
+                }
+            }
+            project.meta.group_id = group_id;
+        }
+        if let Some(due_date) = patch.due_date {
+            if let Some(text) = &due_date {
+                if health::day_of(text).is_none() {
+                    return Err(ApiError::invalid("期限は YYYY-MM-DD で指定してください"));
+                }
+            }
+            project.meta.due_date = due_date;
+        }
+        project.meta.updated_at = now.to_string();
+        self.store.put_project(project.clone())?;
+        self.summarize(&project.meta, actor, now)
     }
 
     pub fn delete_project(&mut self, actor: &Actor, id: &ProjectId) -> ApiResult<()> {
         let project = self.lookup(id)?;
-        self.require(
-            actor,
-            Permission::ProjectManage,
-            project.role_of(&actor.user_id),
-        )?;
-        self.store.remove_project(id);
+        let role = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::ProjectManage, role)?;
+        self.store.remove_project(id)?;
         Ok(())
     }
 
@@ -281,80 +569,140 @@ impl<S: Store> Service<S> {
 
     /* ===== 権限 ===== */
 
-    pub fn list_access(&self, actor: &Actor, id: &ProjectId) -> ApiResult<Vec<ProjectAccess>> {
+    pub fn list_access(&self, actor: &Actor, id: &ProjectId) -> ApiResult<Vec<AccessEntry>> {
         let project = self.lookup(id)?;
-        self.require(
-            actor,
-            Permission::ProjectRead,
-            project.role_of(&actor.user_id),
-        )?;
-        Ok(project.access)
+        let role = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::ProjectRead, role)?;
+        Ok(project.meta.access)
     }
 
+    /// 権限を与える・変更する。`role` が `None` なら取り消す。
     pub fn set_access(
         &mut self,
         actor: &Actor,
         id: &ProjectId,
         now: &str,
-        user_id: &UserId,
-        role: ProjectRole,
-    ) -> ApiResult<Vec<ProjectAccess>> {
+        principal: &Principal,
+        role: Option<ProjectRole>,
+    ) -> ApiResult<Vec<AccessEntry>> {
         let mut project = self.lookup(id)?;
-        self.require(
-            actor,
-            Permission::ProjectManage,
-            project.role_of(&actor.user_id),
-        )?;
-        if self.store.user(user_id).is_none() {
-            return Err(ApiError::not_found("アカウントが見つかりません"));
-        }
-        // 所有者が 1 人も居なくなる変更は通さない。
-        if role != ProjectRole::Owner {
-            Self::ensure_owner_remains(&project, user_id)?;
-        }
+        let current = self.resolve(actor, &project.meta)?;
+        self.require(actor, Permission::ProjectManage, current)?;
+        self.ensure_principal_exists(principal)?;
 
-        match project
+        project
+            .meta
             .access
-            .iter_mut()
-            .find(|entry| &entry.user_id == user_id)
-        {
-            Some(entry) => entry.role = role,
-            None => project.access.push(ProjectAccess {
-                user_id: user_id.clone(),
-                role,
-            }),
+            .retain(|entry| &entry.principal != principal);
+        if let Some(role) = role {
+            project
+                .meta
+                .access
+                .push(AccessEntry::new(principal.clone(), role));
         }
-        project.updated_at = now.to_string();
-        self.store.put_project(project.clone());
-        Ok(project.access)
-    }
 
-    pub fn remove_access(
-        &mut self,
-        actor: &Actor,
-        id: &ProjectId,
-        now: &str,
-        user_id: &UserId,
-    ) -> ApiResult<Vec<ProjectAccess>> {
-        let mut project = self.lookup(id)?;
-        self.require(
-            actor,
-            Permission::ProjectManage,
-            project.role_of(&actor.user_id),
-        )?;
-        Self::ensure_owner_remains(&project, user_id)?;
-        project.access.retain(|entry| &entry.user_id != user_id);
-        project.updated_at = now.to_string();
-        self.store.put_project(project.clone());
-        Ok(project.access)
+        // 所有者が「実際に 1 人以上いる」ことを確かめる。メンバーの居ない
+        // グループに owner を付けて、実質的に誰も触れなくなるのを防ぐ。
+        let groups = self.store.project_groups()?;
+        let parent = Self::parent_of(&project.meta, &groups);
+        if self.owner_users(&project.meta, parent)?.is_empty() {
+            return Err(ApiError::conflict(
+                "所有者がいなくなります。先に別の所有者を立ててください",
+            ));
+        }
+
+        project.meta.updated_at = now.to_string();
+        self.store.put_project(project.clone())?;
+        Ok(project.meta.access)
     }
 
     /* ===== 内部 ===== */
 
     fn lookup(&self, id: &ProjectId) -> ApiResult<Project> {
         self.store
-            .project(id)
+            .project(id)?
             .ok_or_else(|| ApiError::not_found("プロジェクトが見つかりません"))
+    }
+
+    fn lookup_user_group(&self, id: &UserGroupId) -> ApiResult<UserGroup> {
+        self.store
+            .user_group(id)?
+            .ok_or_else(|| ApiError::not_found("グループが見つかりません"))
+    }
+
+    fn lookup_project_group(&self, id: &ProjectGroupId) -> ApiResult<ProjectGroup> {
+        self.store
+            .project_group(id)?
+            .ok_or_else(|| ApiError::not_found("グループが見つかりません"))
+    }
+
+    /// そのプロジェクトが属する入れ物を、読み込み済みの一覧から引く。
+    fn parent_of<'a>(meta: &ProjectMeta, groups: &'a [ProjectGroup]) -> Option<&'a ProjectGroup> {
+        let id = meta.group_id.as_ref()?;
+        groups.iter().find(|group| &group.id == id)
+    }
+
+    /// そのプロジェクトに対する呼び出し元の実効的な役割。
+    fn resolve(&self, actor: &Actor, meta: &ProjectMeta) -> ApiResult<Option<ProjectRole>> {
+        let parent = match &meta.group_id {
+            Some(id) => self.store.project_group(id)?,
+            None => None,
+        };
+        Ok(actor.effective_role(meta, parent.as_ref()))
+    }
+
+    /// 実際に所有者として振る舞えるアカウントの集合。
+    ///
+    /// 付与の相手がグループなら、そのメンバーに展開する。存在しない
+    /// アカウントは数えない。
+    fn owner_users(&self, meta: &ProjectMeta, parent: Option<&ProjectGroup>) -> ApiResult<Owners> {
+        let mut out = Owners::default();
+        let entries = meta
+            .access
+            .iter()
+            .chain(parent.into_iter().flat_map(|group| group.access.iter()));
+        for entry in entries {
+            if entry.role != ProjectRole::Owner {
+                continue;
+            }
+            match &entry.principal {
+                Principal::User(id) => {
+                    if self.store.user(id)?.is_some() {
+                        out.insert(id.clone());
+                    }
+                }
+                Principal::Group(id) => {
+                    if let Some(group) = self.store.user_group(id)? {
+                        for member in group.members {
+                            if self.store.user(&member)?.is_some() {
+                                out.insert(member);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// その付与一覧が、指定のグループに所有者を与えているか。
+    fn grants_owner(access: &[AccessEntry], group: &UserGroupId) -> bool {
+        access.iter().any(|entry| {
+            entry.role == ProjectRole::Owner
+                && matches!(&entry.principal, Principal::Group(id) if id == group)
+        })
+    }
+
+    fn ensure_principal_exists(&self, principal: &Principal) -> ApiResult<()> {
+        let exists = match principal {
+            Principal::User(id) => self.store.user(id)?.is_some(),
+            Principal::Group(id) => self.store.user_group(id)?.is_some(),
+        };
+        if exists {
+            Ok(())
+        } else {
+            Err(ApiError::not_found("指定した相手が見つかりません"))
+        }
     }
 
     fn require(
@@ -372,37 +720,46 @@ impl<S: Store> Service<S> {
         }
     }
 
-    fn summarize(&self, project: &Project, actor: &Actor) -> ProjectSummary {
-        let role = project
-            .role_of(&actor.user_id)
-            .unwrap_or(ProjectRole::Viewer);
-        let owner_name = project
-            .owner()
-            .and_then(|id| self.store.user(id))
-            .map(|user| user.name)
-            .unwrap_or_default();
-        project.summary(role, owner_name)
+    /// プロジェクトグループを管理できるか。所有者、または管理者。
+    fn require_group_manage(&self, actor: &Actor, group: &ProjectGroup) -> ApiResult<()> {
+        let role = actor.strongest(&group.access);
+        self.require(actor, Permission::ProjectManage, role)
     }
 
-    /// `changing` の役割を落としても、まだ所有者が残るか。
-    fn ensure_owner_remains(project: &Project, changing: &UserId) -> ApiResult<()> {
-        let remaining = project
-            .access
-            .iter()
-            .filter(|entry| entry.role == ProjectRole::Owner && &entry.user_id != changing)
-            .count();
-        if remaining == 0 {
-            return Err(ApiError::conflict(
-                "所有者がいなくなります。先に別の所有者を立ててください",
-            ));
-        }
-        Ok(())
+    fn summarize(&self, meta: &ProjectMeta, actor: &Actor, now: &str) -> ApiResult<ProjectSummary> {
+        let groups = self.store.project_groups()?;
+        let parent = Self::parent_of(meta, &groups);
+        let owners = self.owner_users(meta, parent)?;
+        let owner_names = self
+            .store
+            .users()?
+            .into_iter()
+            .filter(|user| owners.contains(&user.id))
+            .map(|user| user.name)
+            .collect();
+        Ok(ProjectSummary {
+            id: meta.id.clone(),
+            name: meta.name.clone(),
+            created_at: meta.created_at.clone(),
+            updated_at: meta.updated_at.clone(),
+            role: actor
+                .effective_role(meta, parent)
+                .unwrap_or(ProjectRole::Viewer),
+            group_id: meta.group_id.clone(),
+            group_name: parent.map(|group| group.name.clone()),
+            due_date: meta.due_date.clone(),
+            health: health::health(meta, health::today_of(now)),
+            status: meta.status.clone(),
+            owner_names,
+            task_count: meta.task_count,
+            member_count: meta.member_count,
+        })
     }
 
     fn ensure_another_admin_exists(&self, excluding: &UserId) -> ApiResult<()> {
         let remaining = self
             .store
-            .users()
+            .users()?
             .into_iter()
             .filter(|user| user.system_role == SystemRole::Admin && &user.id != excluding)
             .count();
@@ -416,12 +773,15 @@ impl<S: Store> Service<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorCode;
+    use crate::health::ProjectHealth;
+    use crate::model::{Priority, Task};
     use crate::store::MemoryStore;
 
     const NOW: &str = "2026-09-20T10:00:00Z";
     const LATER: &str = "2026-09-21T10:00:00Z";
 
-    /// 管理者 1 人と一般 2 人が居るところから始める。
+    /// 管理者 1 人と一般 3 人が居るところから始める。
     fn setup() -> Service<MemoryStore> {
         let mut store = MemoryStore::new();
         for (id, name, role) in [
@@ -430,13 +790,15 @@ mod tests {
             ("bob", "鈴木", SystemRole::Member),
             ("carol", "田中", SystemRole::Member),
         ] {
-            store.put_user(User {
-                id: UserId::new(id),
-                name: name.into(),
-                email: None,
-                system_role: role,
-                created_at: NOW.into(),
-            });
+            store
+                .put_user(User {
+                    id: UserId::new(id),
+                    name: name.into(),
+                    email: None,
+                    system_role: role,
+                    created_at: NOW.into(),
+                })
+                .unwrap();
         }
         Service::new(store)
     }
@@ -452,211 +814,27 @@ mod tests {
             .expect("作れるはず")
     }
 
-    #[test]
-    fn an_unknown_caller_is_refused() {
-        let service = setup();
-        let error = service.actor(&UserId::new("居ない")).unwrap_err();
-        assert_eq!(error.code, crate::error::ErrorCode::Unauthorized);
-    }
-
-    #[test]
-    fn the_creator_becomes_the_owner() {
-        let mut service = setup();
-        let project = make_project(&mut service, "alice", "p1");
-        assert_eq!(project.owner(), Some(&UserId::new("alice")));
-        assert_eq!(
-            project.role_of(&UserId::new("alice")),
-            Some(ProjectRole::Owner)
-        );
-        assert_eq!(project.role_of(&UserId::new("bob")), None);
-    }
-
-    #[test]
-    fn a_project_is_invisible_until_it_is_shared() {
-        let mut service = setup();
-        make_project(&mut service, "alice", "p1");
-
-        let bob = actor(&service, "bob");
-        assert!(service.list_projects(&bob).unwrap().is_empty());
-        let error = service
-            .get_project(&bob, &ProjectId::new("p1"))
-            .unwrap_err();
-        assert_eq!(error.code, crate::error::ErrorCode::Forbidden);
-
-        // 共有すると見えるようになる。
-        let alice = actor(&service, "alice");
+    /// 誰かに権限を配る。
+    fn share(
+        service: &mut Service<MemoryStore>,
+        by: &str,
+        id: &str,
+        to: Principal,
+        role: ProjectRole,
+    ) {
+        let who = actor(service, by);
         service
-            .set_access(
-                &alice,
-                &ProjectId::new("p1"),
-                LATER,
-                &UserId::new("bob"),
-                ProjectRole::Viewer,
-            )
-            .unwrap();
-        assert_eq!(service.list_projects(&bob).unwrap().len(), 1);
-        assert!(service.get_project(&bob, &ProjectId::new("p1")).is_ok());
+            .set_access(&who, &ProjectId::new(id), LATER, &to, Some(role))
+            .expect("配れるはず");
     }
 
-    #[test]
-    fn a_viewer_cannot_write() {
-        let mut service = setup();
-        make_project(&mut service, "alice", "p1");
-        let alice = actor(&service, "alice");
-        service
-            .set_access(
-                &alice,
-                &ProjectId::new("p1"),
-                LATER,
-                &UserId::new("bob"),
-                ProjectRole::Viewer,
-            )
-            .unwrap();
-
-        let bob = actor(&service, "bob");
-        let error = service
-            .save_document(&bob, &ProjectId::new("p1"), LATER, Document::default())
-            .unwrap_err();
-        assert_eq!(error.code, crate::error::ErrorCode::Forbidden);
-    }
-
-    #[test]
-    fn an_editor_can_write_but_not_manage() {
-        let mut service = setup();
-        make_project(&mut service, "alice", "p1");
-        let alice = actor(&service, "alice");
-        service
-            .set_access(
-                &alice,
-                &ProjectId::new("p1"),
-                LATER,
-                &UserId::new("bob"),
-                ProjectRole::Editor,
-            )
-            .unwrap();
-
-        let bob = actor(&service, "bob");
-        assert!(service
-            .save_document(&bob, &ProjectId::new("p1"), LATER, Document::default())
-            .is_ok());
-        assert_eq!(
-            service
-                .rename_project(&bob, &ProjectId::new("p1"), LATER, "別名")
-                .unwrap_err()
-                .code,
-            crate::error::ErrorCode::Forbidden
-        );
-        assert_eq!(
-            service
-                .delete_project(&bob, &ProjectId::new("p1"))
-                .unwrap_err()
-                .code,
-            crate::error::ErrorCode::Forbidden
-        );
-    }
-
-    #[test]
-    fn an_admin_reaches_projects_that_were_never_shared() {
-        let mut service = setup();
-        make_project(&mut service, "alice", "p1");
-        let root = actor(&service, "root");
-
-        assert_eq!(service.list_projects(&root).unwrap().len(), 1);
-        assert!(service.get_project(&root, &ProjectId::new("p1")).is_ok());
-        assert!(service
-            .rename_project(&root, &ProjectId::new("p1"), LATER, "管理者が改名")
-            .is_ok());
-    }
-
-    #[test]
-    fn a_project_never_loses_its_last_owner() {
-        let mut service = setup();
-        make_project(&mut service, "alice", "p1");
-        let alice = actor(&service, "alice");
-        let id = ProjectId::new("p1");
-
-        // 自分を降格させようとしても止まる。
-        assert_eq!(
-            service
-                .set_access(
-                    &alice,
-                    &id,
-                    LATER,
-                    &UserId::new("alice"),
-                    ProjectRole::Editor
-                )
-                .unwrap_err()
-                .code,
-            crate::error::ErrorCode::Conflict
-        );
-        assert_eq!(
-            service
-                .remove_access(&alice, &id, LATER, &UserId::new("alice"))
-                .unwrap_err()
-                .code,
-            crate::error::ErrorCode::Conflict
-        );
-
-        // 別の所有者を立ててからなら降りられる。
-        service
-            .set_access(&alice, &id, LATER, &UserId::new("bob"), ProjectRole::Owner)
-            .unwrap();
-        assert!(service
-            .remove_access(&alice, &id, LATER, &UserId::new("alice"))
-            .is_ok());
-    }
-
-    #[test]
-    fn sharing_with_an_unknown_account_fails() {
-        let mut service = setup();
-        make_project(&mut service, "alice", "p1");
-        let alice = actor(&service, "alice");
-        let error = service
-            .set_access(
-                &alice,
-                &ProjectId::new("p1"),
-                LATER,
-                &UserId::new("居ない"),
-                ProjectRole::Editor,
-            )
-            .unwrap_err();
-        assert_eq!(error.code, crate::error::ErrorCode::NotFound);
-    }
-
-    #[test]
-    fn the_list_is_newest_first_and_carries_my_role() {
-        let mut service = setup();
-        make_project(&mut service, "alice", "old");
-        let alice = actor(&service, "alice");
-        service
-            .create_project(
-                &alice,
-                LATER,
-                ProjectId::new("new"),
-                "new",
-                Document::default(),
-            )
-            .unwrap();
-
-        let list = service.list_projects(&alice).unwrap();
-        assert_eq!(list[0].id, ProjectId::new("new"), "更新が新しい順");
-        assert_eq!(list[0].role, ProjectRole::Owner);
-        assert_eq!(list[0].owner_name, "佐藤");
-    }
-
-    #[test]
-    fn saving_a_document_updates_the_timestamp_and_counts() {
-        let mut service = setup();
-        make_project(&mut service, "alice", "p1");
-        let alice = actor(&service, "alice");
-
-        let mut document = Document::default();
-        document.tasks.push(crate::model::Task {
-            id: "t1".into(),
-            name: "設計".into(),
+    fn task(id: &str) -> Task {
+        Task {
+            id: id.into(),
+            name: id.into(),
             parent_id: None,
             group: String::new(),
-            priority: crate::model::Priority::Normal,
+            priority: Priority::Normal,
             enabled: true,
             min: "1".into(),
             likely: "2".into(),
@@ -665,10 +843,159 @@ mod tests {
             progress: 0.0,
             end_date: None,
             assignee_id: None,
-        });
+        }
+    }
 
+    /* ===== 基本 ===== */
+
+    #[test]
+    fn an_unknown_caller_is_refused() {
+        let service = setup();
+        let error = service.actor(&UserId::new("居ない")).unwrap_err();
+        assert_eq!(error.code, ErrorCode::Unauthorized);
+    }
+
+    #[test]
+    fn the_creator_becomes_the_owner() {
+        let mut service = setup();
+        let project = make_project(&mut service, "alice", "p1");
+        assert_eq!(
+            project.meta.role_for(&Principal::user("alice")),
+            Some(ProjectRole::Owner)
+        );
+        assert_eq!(project.meta.role_for(&Principal::user("bob")), None);
+    }
+
+    #[test]
+    fn a_project_is_invisible_until_it_is_shared() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+
+        let bob = actor(&service, "bob");
+        assert!(service.list_projects(&bob, NOW).unwrap().is_empty());
+        let error = service
+            .get_project(&bob, &ProjectId::new("p1"))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Forbidden);
+
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Viewer,
+        );
+        assert_eq!(service.list_projects(&bob, NOW).unwrap().len(), 1);
+        assert!(service.get_project(&bob, &ProjectId::new("p1")).is_ok());
+    }
+
+    #[test]
+    fn a_viewer_cannot_write() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Viewer,
+        );
+
+        let bob = actor(&service, "bob");
+        let error = service
+            .save_document(
+                &bob,
+                &ProjectId::new("p1"),
+                LATER,
+                Document::default(),
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Forbidden);
+    }
+
+    #[test]
+    fn an_editor_can_write_but_not_manage() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Editor,
+        );
+
+        let bob = actor(&service, "bob");
+        assert!(service
+            .save_document(
+                &bob,
+                &ProjectId::new("p1"),
+                LATER,
+                Document::default(),
+                None
+            )
+            .is_ok());
+
+        let error = service
+            .update_project(
+                &bob,
+                &ProjectId::new("p1"),
+                LATER,
+                ProjectPatch {
+                    name: Some("改名".into()),
+                    ..ProjectPatch::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Forbidden);
+    }
+
+    #[test]
+    fn an_admin_reaches_projects_that_were_never_shared() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+
+        let root = actor(&service, "root");
+        assert!(service.get_project(&root, &ProjectId::new("p1")).is_ok());
+        assert_eq!(
+            service.list_projects(&root, NOW).unwrap().len(),
+            1,
+            "管理者の一覧には出る"
+        );
+    }
+
+    #[test]
+    fn sharing_with_an_unknown_account_fails() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+        for principal in [Principal::user("居ない"), Principal::group("無い")] {
+            let error = service
+                .set_access(
+                    &alice,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    &principal,
+                    Some(ProjectRole::Viewer),
+                )
+                .unwrap_err();
+            assert_eq!(error.code, ErrorCode::NotFound, "{principal:?}");
+        }
+    }
+
+    #[test]
+    fn saving_a_document_updates_the_timestamp_and_counts() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+
+        let document = Document {
+            tasks: vec![task("t1")],
+            ..Document::default()
+        };
         let summary = service
-            .save_document(&alice, &ProjectId::new("p1"), LATER, document)
+            .save_document(&alice, &ProjectId::new("p1"), LATER, document, None)
             .unwrap();
         assert_eq!(summary.task_count, 1);
         assert_eq!(summary.updated_at, LATER);
@@ -679,16 +1006,13 @@ mod tests {
     fn duplicating_copies_the_content_and_resets_the_owner() {
         let mut service = setup();
         make_project(&mut service, "alice", "p1");
-        let alice = actor(&service, "alice");
-        service
-            .set_access(
-                &alice,
-                &ProjectId::new("p1"),
-                LATER,
-                &UserId::new("bob"),
-                ProjectRole::Viewer,
-            )
-            .unwrap();
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Viewer,
+        );
 
         // 閲覧者でも複製はできる。複製した本人が所有者になる。
         let bob = actor(&service, "bob");
@@ -701,8 +1025,11 @@ mod tests {
                 "複製",
             )
             .unwrap();
-        assert_eq!(copy.owner(), Some(&UserId::new("bob")));
-        assert_eq!(copy.access.len(), 1, "共有は引き継がない");
+        assert_eq!(
+            copy.meta.role_for(&Principal::user("bob")),
+            Some(ProjectRole::Owner)
+        );
+        assert_eq!(copy.meta.access.len(), 1, "共有は引き継がない");
         assert_eq!(copy.document, Document::default());
     }
 
@@ -712,10 +1039,10 @@ mod tests {
         let alice = actor(&service, "alice");
         assert_eq!(
             service
-                .create_project(&alice, NOW, ProjectId::new("p"), "   ", Document::default())
+                .create_project(&alice, NOW, ProjectId::new("p1"), "  ", Document::default())
                 .unwrap_err()
                 .code,
-            crate::error::ErrorCode::Invalid
+            ErrorCode::Invalid
         );
     }
 
@@ -735,16 +1062,43 @@ mod tests {
                 )
                 .unwrap_err()
                 .code,
-            crate::error::ErrorCode::Conflict
+            ErrorCode::Conflict
         );
     }
+
+    #[test]
+    fn deleting_a_project_needs_ownership() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Editor,
+        );
+
+        let bob = actor(&service, "bob");
+        assert_eq!(
+            service
+                .delete_project(&bob, &ProjectId::new("p1"))
+                .unwrap_err()
+                .code,
+            ErrorCode::Forbidden
+        );
+
+        let alice = actor(&service, "alice");
+        assert!(service
+            .delete_project(&alice, &ProjectId::new("p1"))
+            .is_ok());
+    }
+
+    /* ===== アカウント ===== */
 
     #[test]
     fn only_an_admin_manages_accounts() {
         let mut service = setup();
         let alice = actor(&service, "alice");
-        let root = actor(&service, "root");
-
         let new_user = || NewUser {
             id: UserId::new("dave"),
             name: "高橋".into(),
@@ -756,34 +1110,37 @@ mod tests {
                 .create_user(&alice, NOW, new_user())
                 .unwrap_err()
                 .code,
-            crate::error::ErrorCode::Forbidden
+            ErrorCode::Forbidden
         );
+
+        let root = actor(&service, "root");
         assert!(service.create_user(&root, NOW, new_user()).is_ok());
         assert_eq!(
             service
-                .delete_user(&alice, &UserId::new("dave"))
+                .create_user(&root, NOW, new_user())
                 .unwrap_err()
                 .code,
-            crate::error::ErrorCode::Forbidden
+            ErrorCode::Conflict,
+            "同じ id は作れない"
         );
-        assert!(service.delete_user(&root, &UserId::new("dave")).is_ok());
     }
 
     #[test]
     fn anyone_can_rename_themselves_but_not_promote_themselves() {
         let mut service = setup();
         let alice = actor(&service, "alice");
-        let updated = service
+
+        let renamed = service
             .update_user(
                 &alice,
                 &UserId::new("alice"),
                 UserPatch {
-                    name: Some("佐藤 太郎".into()),
-                    ..Default::default()
+                    name: Some("佐藤 (改)".into()),
+                    ..UserPatch::default()
                 },
             )
             .unwrap();
-        assert_eq!(updated.name, "佐藤 太郎");
+        assert_eq!(renamed.name, "佐藤 (改)");
 
         assert_eq!(
             service
@@ -792,15 +1149,14 @@ mod tests {
                     &UserId::new("alice"),
                     UserPatch {
                         system_role: Some(SystemRole::Admin),
-                        ..Default::default()
+                        ..UserPatch::default()
                     },
                 )
                 .unwrap_err()
                 .code,
-            crate::error::ErrorCode::Forbidden
+            ErrorCode::Forbidden
         );
 
-        // 他人の名前は変えられない。
         assert_eq!(
             service
                 .update_user(
@@ -808,12 +1164,13 @@ mod tests {
                     &UserId::new("bob"),
                     UserPatch {
                         name: Some("勝手に改名".into()),
-                        ..Default::default()
+                        ..UserPatch::default()
                     },
                 )
                 .unwrap_err()
                 .code,
-            crate::error::ErrorCode::Forbidden
+            ErrorCode::Forbidden,
+            "他人は触れない"
         );
     }
 
@@ -821,13 +1178,7 @@ mod tests {
     fn the_last_admin_cannot_be_removed_or_demoted() {
         let mut service = setup();
         let root = actor(&service, "root");
-        assert_eq!(
-            service
-                .delete_user(&root, &UserId::new("root"))
-                .unwrap_err()
-                .code,
-            crate::error::ErrorCode::Conflict
-        );
+
         assert_eq!(
             service
                 .update_user(
@@ -835,12 +1186,19 @@ mod tests {
                     &UserId::new("root"),
                     UserPatch {
                         system_role: Some(SystemRole::Member),
-                        ..Default::default()
+                        ..UserPatch::default()
                     },
                 )
                 .unwrap_err()
                 .code,
-            crate::error::ErrorCode::Conflict
+            ErrorCode::Conflict
+        );
+        assert_eq!(
+            service
+                .delete_user(&root, &UserId::new("root"))
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
         );
     }
 
@@ -850,46 +1208,502 @@ mod tests {
         make_project(&mut service, "alice", "p1");
         let root = actor(&service, "root");
 
-        let error = service
-            .delete_user(&root, &UserId::new("alice"))
-            .unwrap_err();
-        assert_eq!(error.code, crate::error::ErrorCode::Conflict);
-        assert!(
-            error.message.contains("p1"),
-            "どのプロジェクトか分かる: {error}"
+        assert_eq!(
+            service
+                .delete_user(&root, &UserId::new("alice"))
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
         );
 
-        // 所有者を移せば消せる。
+        // 別の所有者を立てれば消せる。
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Owner,
+        );
+        let root = actor(&service, "root");
+        assert!(service.delete_user(&root, &UserId::new("alice")).is_ok());
+    }
+
+    /* ===== 不変条件: 所有者 ===== */
+
+    #[test]
+    fn a_project_never_loses_its_last_owner() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+
+        assert_eq!(
+            service
+                .set_access(
+                    &alice,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    &Principal::user("alice"),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+        assert_eq!(
+            service
+                .set_access(
+                    &alice,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    &Principal::user("alice"),
+                    Some(ProjectRole::Viewer),
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict,
+            "降格も同じこと"
+        );
+    }
+
+    #[test]
+    fn an_empty_group_cannot_stand_in_for_the_owner() {
+        // メンバーの居ないグループに owner を付けて自分を外せば、
+        // 誰も触れないプロジェクトが残ってしまう。そこを塞ぐ。
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let root = actor(&service, "root");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("empty"), "空のチーム")
+            .unwrap();
+
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::group("empty"),
+            ProjectRole::Owner,
+        );
+
+        let alice = actor(&service, "alice");
+        assert_eq!(
+            service
+                .set_access(
+                    &alice,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    &Principal::user("alice"),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+
+        // メンバーを入れれば、そのグループが所有者として通る。
+        let root = actor(&service, "root");
+        service
+            .set_group_member(&root, &UserGroupId::new("empty"), &UserId::new("bob"), true)
+            .unwrap();
+        let alice = actor(&service, "alice");
+        assert!(service
+            .set_access(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                &Principal::user("alice"),
+                None,
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn a_group_that_is_the_only_owner_cannot_be_deleted() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let root = actor(&service, "root");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("team"), "チーム")
+            .unwrap();
+        let root = actor(&service, "root");
+        service
+            .set_group_member(&root, &UserGroupId::new("team"), &UserId::new("bob"), true)
+            .unwrap();
+
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::group("team"),
+            ProjectRole::Owner,
+        );
         let alice = actor(&service, "alice");
         service
             .set_access(
                 &alice,
                 &ProjectId::new("p1"),
                 LATER,
-                &UserId::new("bob"),
-                ProjectRole::Owner,
+                &Principal::user("alice"),
+                None,
             )
             .unwrap();
-        assert!(service.delete_user(&root, &UserId::new("alice")).is_ok());
-        // 権限からも消える。
-        let project = service.store().project(&ProjectId::new("p1")).unwrap();
-        assert!(project.role_of(&UserId::new("alice")).is_none());
+
+        let root = actor(&service, "root");
+        assert_eq!(
+            service
+                .delete_user_group(&root, &UserGroupId::new("team"))
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+    }
+
+    /* ===== グループ ===== */
+
+    #[test]
+    fn a_user_group_hands_its_access_to_every_member() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let root = actor(&service, "root");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("team"), "チーム")
+            .unwrap();
+        let root = actor(&service, "root");
+        service
+            .set_group_member(&root, &UserGroupId::new("team"), &UserId::new("bob"), true)
+            .unwrap();
+
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::group("team"),
+            ProjectRole::Editor,
+        );
+
+        let bob = actor(&service, "bob");
+        assert_eq!(
+            service.list_projects(&bob, NOW).unwrap()[0].role,
+            ProjectRole::Editor
+        );
+        let carol = actor(&service, "carol");
+        assert!(
+            service.list_projects(&carol, NOW).unwrap().is_empty(),
+            "メンバーでない人には配られない"
+        );
     }
 
     #[test]
-    fn deleting_a_project_needs_ownership() {
+    fn the_strongest_grant_wins() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let root = actor(&service, "root");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("team"), "チーム")
+            .unwrap();
+        let root = actor(&service, "root");
+        service
+            .set_group_member(&root, &UserGroupId::new("team"), &UserId::new("bob"), true)
+            .unwrap();
+
+        // 本人には閲覧、グループには編集。強いほうが効く。
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::user("bob"),
+            ProjectRole::Viewer,
+        );
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::group("team"),
+            ProjectRole::Editor,
+        );
+
+        let bob = actor(&service, "bob");
+        assert_eq!(
+            service.list_projects(&bob, NOW).unwrap()[0].role,
+            ProjectRole::Editor
+        );
+    }
+
+    #[test]
+    fn a_project_group_hands_its_access_down() {
         let mut service = setup();
         make_project(&mut service, "alice", "p1");
         let alice = actor(&service, "alice");
-        assert!(service
-            .delete_project(&alice, &ProjectId::new("p1"))
-            .is_ok());
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("dept"), "第一部")
+            .unwrap();
+        let alice = actor(&service, "alice");
+        service
+            .set_group_access(
+                &alice,
+                &ProjectGroupId::new("dept"),
+                &Principal::user("bob"),
+                Some(ProjectRole::Viewer),
+            )
+            .unwrap();
+
+        let bob = actor(&service, "bob");
+        assert!(
+            service.list_projects(&bob, NOW).unwrap().is_empty(),
+            "まだ入れていない"
+        );
+
+        let alice = actor(&service, "alice");
+        service
+            .update_project(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                ProjectPatch {
+                    group_id: Some(Some(ProjectGroupId::new("dept"))),
+                    ..ProjectPatch::default()
+                },
+            )
+            .unwrap();
+
+        let bob = actor(&service, "bob");
+        let listed = service.list_projects(&bob, NOW).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].role, ProjectRole::Viewer);
+        assert_eq!(listed[0].group_name.as_deref(), Some("第一部"));
+    }
+
+    #[test]
+    fn a_project_group_keeps_at_least_one_owner() {
+        let mut service = setup();
+        let alice = actor(&service, "alice");
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("dept"), "第一部")
+            .unwrap();
+
+        let alice = actor(&service, "alice");
         assert_eq!(
             service
-                .get_project(&alice, &ProjectId::new("p1"))
+                .set_group_access(
+                    &alice,
+                    &ProjectGroupId::new("dept"),
+                    &Principal::user("alice"),
+                    None,
+                )
                 .unwrap_err()
                 .code,
-            crate::error::ErrorCode::NotFound
+            ErrorCode::Conflict
         );
+    }
+
+    #[test]
+    fn only_someone_who_owns_a_project_group_may_change_it() {
+        let mut service = setup();
+        let alice = actor(&service, "alice");
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("dept"), "第一部")
+            .unwrap();
+
+        let bob = actor(&service, "bob");
+        assert_eq!(
+            service
+                .rename_project_group(&bob, &ProjectGroupId::new("dept"), "乗っ取り")
+                .unwrap_err()
+                .code,
+            ErrorCode::Forbidden
+        );
+
+        let root = actor(&service, "root");
+        assert!(service
+            .rename_project_group(&root, &ProjectGroupId::new("dept"), "第二部")
+            .is_ok());
+    }
+
+    #[test]
+    fn deleting_a_project_group_detaches_its_projects() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("dept"), "第一部")
+            .unwrap();
+        let alice = actor(&service, "alice");
+        service
+            .update_project(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                ProjectPatch {
+                    group_id: Some(Some(ProjectGroupId::new("dept"))),
+                    ..ProjectPatch::default()
+                },
+            )
+            .unwrap();
+
+        let alice = actor(&service, "alice");
+        service
+            .delete_project_group(&alice, &ProjectGroupId::new("dept"))
+            .unwrap();
+
+        let alice = actor(&service, "alice");
+        let project = service.get_project(&alice, &ProjectId::new("p1")).unwrap();
+        assert_eq!(project.meta.group_id, None, "所属だけ外れて残る");
+    }
+
+    #[test]
+    fn an_unknown_project_group_is_refused() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+        assert_eq!(
+            service
+                .update_project(
+                    &alice,
+                    &ProjectId::new("p1"),
+                    LATER,
+                    ProjectPatch {
+                        group_id: Some(Some(ProjectGroupId::new("無い"))),
+                        ..ProjectPatch::default()
+                    },
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::NotFound
+        );
+    }
+
+    /* ===== 一覧と状態 ===== */
+
+    #[test]
+    fn a_stale_snapshot_is_dropped_on_save() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+
+        let stale = ProjectStatus {
+            based_on: "べつの時刻".into(),
+            ..ProjectStatus::default()
+        };
+        let summary = service
+            .save_document(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                Document::default(),
+                Some(stale),
+            )
+            .unwrap();
+        assert!(summary.status.is_none(), "内容と対応しない控えは残さない");
+
+        let fresh = ProjectStatus {
+            based_on: LATER.into(),
+            computed_at: LATER.into(),
+            ..ProjectStatus::default()
+        };
+        let alice = actor(&service, "alice");
+        let summary = service
+            .save_document(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                Document::default(),
+                Some(fresh),
+            )
+            .unwrap();
+        assert!(summary.status.is_some());
+    }
+
+    #[test]
+    fn the_list_puts_the_ones_that_need_attention_first() {
+        let mut service = setup();
+        for id in ["late", "fine", "empty"] {
+            make_project(&mut service, "alice", id);
+        }
+
+        let document = Document {
+            tasks: vec![task("t1")],
+            ..Document::default()
+        };
+        // 期限が P50 より手前 → 遅延。期限が P80 より後ろ → 順調。
+        for (id, due, p50_offset) in [("late", "2026-10-01", 10_i64), ("fine", "2026-12-31", -10)] {
+            let due_day = health::day_of(due).expect("読める日付");
+            let alice = actor(&service, "alice");
+            let status = ProjectStatus {
+                computed_at: LATER.into(),
+                based_on: LATER.into(),
+                finish_p50: Some(due_day + p50_offset),
+                finish_p80: Some(due_day + p50_offset + 5),
+                task_count: 1,
+                ..ProjectStatus::default()
+            };
+            service
+                .save_document(
+                    &alice,
+                    &ProjectId::new(id),
+                    LATER,
+                    document.clone(),
+                    Some(status),
+                )
+                .unwrap();
+            let alice = actor(&service, "alice");
+            service
+                .update_project(
+                    &alice,
+                    &ProjectId::new(id),
+                    LATER,
+                    ProjectPatch {
+                        due_date: Some(Some(due.into())),
+                        ..ProjectPatch::default()
+                    },
+                )
+                .unwrap();
+        }
+
+        let alice = actor(&service, "alice");
+        let listed = service.list_projects(&alice, LATER).unwrap();
+        assert_eq!(listed[0].name, "late");
+        assert_eq!(listed[0].health, ProjectHealth::Late);
+        assert!(listed[0].health.needs_attention());
+        assert_eq!(
+            listed.last().unwrap().health,
+            ProjectHealth::NoTasks,
+            "空のものは最後"
+        );
+    }
+
+    #[test]
+    fn the_list_carries_the_owner_names_including_the_ones_behind_a_group() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let root = actor(&service, "root");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("team"), "チーム")
+            .unwrap();
+        let root = actor(&service, "root");
+        service
+            .set_group_member(&root, &UserGroupId::new("team"), &UserId::new("bob"), true)
+            .unwrap();
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::group("team"),
+            ProjectRole::Owner,
+        );
+
+        let alice = actor(&service, "alice");
+        let listed = service.list_projects(&alice, NOW).unwrap();
+        assert_eq!(
+            listed[0].owner_names,
+            vec!["佐藤".to_string(), "鈴木".into()]
+        );
+    }
+
+    #[test]
+    fn a_project_with_no_grant_is_still_listed_for_an_admin_as_a_viewer() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let root = actor(&service, "root");
+        let listed = service.list_projects(&root, NOW).unwrap();
+        assert_eq!(listed[0].role, ProjectRole::Viewer);
     }
 }

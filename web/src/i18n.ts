@@ -55,6 +55,7 @@ const ja = {
   "share.localHint":
     "ローカルではログインが無いので、ここで設定した権限はサーバに接続したときに効きます。下の「別のアカウントとして操作」で挙動を確かめられます。",
   "share.add": "共有する",
+  "share.group": "(グループ)",
   "share.user": "アカウント",
   "share.role": "権限",
   "share.remove": "{name} の共有を解除",
@@ -86,6 +87,7 @@ const ja = {
   "api.notFound": "見つかりません ({message})",
   "api.invalid": "入力が不正です ({message})",
   "api.conflict": "操作できません ({message})",
+  "api.internal": "サーバ側で問題が起きました ({message})",
 
   "members.you": "あなた",
   "tab.members": "人員",
@@ -391,6 +393,7 @@ const en: Dictionary = {
   "share.localHint":
     "There is no sign-in locally, so these roles take effect once you connect to a server. Use “Act as another account” below to see how they behave.",
   "share.add": "Share",
+  "share.group": "(group)",
   "share.user": "Account",
   "share.role": "Role",
   "share.remove": "Stop sharing with {name}",
@@ -422,6 +425,7 @@ const en: Dictionary = {
   "api.notFound": "Not found ({message})",
   "api.invalid": "Invalid input ({message})",
   "api.conflict": "Cannot do that ({message})",
+  "api.internal": "The server ran into a problem ({message})",
 
   "members.you": "You",
   "tab.members": "People",

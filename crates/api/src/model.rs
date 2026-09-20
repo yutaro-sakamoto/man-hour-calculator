@@ -6,9 +6,14 @@
 //! 名前で区別している。
 //!
 //! - [`User`] — **アカウント**。ログインして操作する主体で、権限を持つ。
-//! - `Member` (`document::Member`) — **人員**。工数を消化する稼働資源で、
-//!   曜日ごとの稼働時間帯を持つ。アカウントとは 1 対 1 とは限らない
-//!   (外注や「未割当」のような、ログインしない人員もいる)。
+//! - [`Member`] — **人員**。工数を消化する稼働資源で、曜日ごとの稼働時間帯を持つ。
+//!   アカウントとは 1 対 1 とは限らない (外注や「未割当」のような、
+//!   ログインしない人員もいる)。
+//!
+//! 「グループ」も 2 種類ある。
+//!
+//! - [`UserGroup`] — アカウントのまとまり。チームや部署。権限を配る単位。
+//! - [`ProjectGroup`] — プロジェクトのまとまり。まとめて権限を配れる入れ物。
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +27,16 @@ pub struct UserId(pub String);
 #[serde(transparent)]
 pub struct ProjectId(pub String);
 
+/// アカウントのまとまりの識別子。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct UserGroupId(pub String);
+
+/// プロジェクトのまとまりの識別子。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProjectGroupId(pub String);
+
 impl UserId {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -32,6 +47,24 @@ impl UserId {
 }
 
 impl ProjectId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl UserGroupId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl ProjectGroupId {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
@@ -81,12 +114,114 @@ pub struct User {
     pub created_at: String,
 }
 
-/// 「誰がどのプロジェクトをどの役割で扱えるか」の 1 件。
+/// 権限を与える相手。
+///
+/// アカウント 1 人でも、アカウントのまとまりでもよい。グループに与えておけば、
+/// 人の出入りのたびにプロジェクトを触らなくて済む。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "camelCase")]
+pub enum Principal {
+    User(UserId),
+    Group(UserGroupId),
+}
+
+impl Principal {
+    pub fn user(id: impl Into<String>) -> Self {
+        Self::User(UserId::new(id))
+    }
+
+    pub fn group(id: impl Into<String>) -> Self {
+        Self::Group(UserGroupId::new(id))
+    }
+
+    /// 種別を表す短い語。HTTP のパスに現れる。
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::User(_) => "user",
+            Self::Group(_) => "group",
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        match self {
+            Self::User(id) => id.as_str(),
+            Self::Group(id) => id.as_str(),
+        }
+    }
+
+    /// 種別と id から組み立てる。未知の種別は `None`。
+    pub fn parse(kind: &str, id: &str) -> Option<Self> {
+        match kind {
+            "user" => Some(Self::user(id)),
+            "group" => Some(Self::group(id)),
+            _ => None,
+        }
+    }
+}
+
+/// 「誰がどれをどの役割で扱えるか」の 1 件。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectAccess {
-    pub user_id: UserId,
+pub struct AccessEntry {
+    pub principal: Principal,
     pub role: ProjectRole,
+}
+
+impl AccessEntry {
+    pub fn new(principal: Principal, role: ProjectRole) -> Self {
+        Self { principal, role }
+    }
+}
+
+/// アカウントのまとまり。チームや部署。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserGroup {
+    pub id: UserGroupId,
+    pub name: String,
+    pub members: Vec<UserId>,
+    pub created_at: String,
+}
+
+impl UserGroup {
+    pub fn contains(&self, user: &UserId) -> bool {
+        self.members.contains(user)
+    }
+}
+
+/// プロジェクトのまとまり。ここに権限を与えると、配下すべてに効く。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectGroup {
+    pub id: ProjectGroupId,
+    pub name: String,
+    pub access: Vec<AccessEntry>,
+    pub created_at: String,
+}
+
+/// 一度計算した見通しの控え。
+///
+/// 一覧のたびに全プロジェクトの中身を読んで計算し直すのは、サーバでも
+/// DynamoDB でも重い。計算はクライアントが保存時に 1 回だけ行い、その結果を
+/// ここに添えて送る。`based_on` が `updated_at` と違えば「古い」と分かるので、
+/// 画面は黙って古い数字を見せずに「再計算が必要」と出せる。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStatus {
+    pub computed_at: String,
+    /// 計算の元にした内容の `updated_at`。
+    pub based_on: String,
+    pub effort_p50: f64,
+    pub effort_p80: f64,
+    /// 完了日 (1970-01-01 からの日数)。期間内に終わらなければ `None`。
+    pub finish_p50: Option<i64>,
+    pub finish_p80: Option<i64>,
+    /// 消化済み工数 (人日)。
+    pub spent: f64,
+    /// 進捗率 `0.0..=1.0`。
+    pub progress: f64,
+    pub task_count: usize,
+    pub done_count: usize,
 }
 
 /// 一覧に出すためのプロジェクトの見出し。
@@ -97,53 +232,69 @@ pub struct ProjectSummary {
     pub name: String,
     pub created_at: String,
     pub updated_at: String,
-    /// 一覧を求めた本人の役割。
+    /// 一覧を求めた本人の実効的な役割。
     pub role: ProjectRole,
-    /// 所有者の表示名 (見つからなければ空)。
-    pub owner_name: String,
+    pub group_id: Option<ProjectGroupId>,
+    pub group_name: Option<String>,
+    pub due_date: Option<String>,
+    pub status: Option<ProjectStatus>,
+    /// 期限と進捗から見た状態。
+    pub health: crate::health::ProjectHealth,
+    /// 所有者の表示名 (グループ経由の所有者も含む)。
+    pub owner_names: Vec<String>,
     pub task_count: usize,
     pub member_count: usize,
+}
+
+/// プロジェクトの、中身を除いた情報。
+///
+/// 一覧では中身 (`Document`) を読まずに済ませたい。分けておくと、
+/// サーバは本文の列を触らずに一覧を返せる。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectMeta {
+    pub id: ProjectId,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub group_id: Option<ProjectGroupId>,
+    #[serde(default)]
+    pub due_date: Option<String>,
+    pub access: Vec<AccessEntry>,
+    #[serde(default)]
+    pub status: Option<ProjectStatus>,
+    /// 中身の規模。一覧に出すために控えておく。
+    #[serde(default)]
+    pub task_count: usize,
+    #[serde(default)]
+    pub member_count: usize,
+}
+
+impl ProjectMeta {
+    /// 指定した相手に直接与えられている役割。
+    pub fn role_for(&self, principal: &Principal) -> Option<ProjectRole> {
+        self.access
+            .iter()
+            .find(|entry| &entry.principal == principal)
+            .map(|entry| entry.role)
+    }
 }
 
 /// プロジェクト 1 件のすべて。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
-    pub id: ProjectId,
-    pub name: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub access: Vec<ProjectAccess>,
+    #[serde(flatten)]
+    pub meta: ProjectMeta,
     pub document: Document,
 }
 
 impl Project {
-    /// その人の役割。共有されていなければ `None`。
-    pub fn role_of(&self, user: &UserId) -> Option<ProjectRole> {
-        self.access
-            .iter()
-            .find(|entry| &entry.user_id == user)
-            .map(|entry| entry.role)
-    }
-
-    pub fn owner(&self) -> Option<&UserId> {
-        self.access
-            .iter()
-            .find(|entry| entry.role == ProjectRole::Owner)
-            .map(|entry| &entry.user_id)
-    }
-
-    pub fn summary(&self, viewer_role: ProjectRole, owner_name: String) -> ProjectSummary {
-        ProjectSummary {
-            id: self.id.clone(),
-            name: self.name.clone(),
-            created_at: self.created_at.clone(),
-            updated_at: self.updated_at.clone(),
-            role: viewer_role,
-            owner_name,
-            task_count: self.document.tasks.len(),
-            member_count: self.document.calendar.members.len(),
-        }
+    /// 中身から、一覧に出す規模を数え直す。
+    pub fn refresh_counts(&mut self) {
+        self.meta.task_count = self.document.tasks.len();
+        self.meta.member_count = self.document.calendar.members.len();
     }
 }
 

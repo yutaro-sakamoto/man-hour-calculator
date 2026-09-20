@@ -30,6 +30,10 @@ tags:
     description: 自分の情報
   - name: users
     description: アカウントの管理
+  - name: user-groups
+    description: アカウントのグループ (部署・チーム)
+  - name: project-groups
+    description: プロジェクトのグループ。配下のプロジェクトに権限を継がせる
   - name: projects
     description: プロジェクト
   - name: access
@@ -140,6 +144,248 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/user-groups:
+    get:
+      tags: [user-groups]
+      summary: アカウントのグループ一覧
+      description: 共有先に選べるよう、管理者でなくても名前は見える。
+      operationId: listUserGroups
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UserGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [user-groups]
+      summary: グループを作る
+      description: システム管理者のみ。
+      operationId: createUserGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, name]
+              properties:
+                id: { type: string }
+                name: { type: string, minLength: 1 }
+      responses:
+        "201":
+          description: 作成した
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /v1/user-groups/{groupId}:
+    parameters:
+      - $ref: "#/components/parameters/groupId"
+    patch:
+      tags: [user-groups]
+      summary: グループを改名する
+      description: システム管理者のみ。
+      operationId: renameUserGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Invalid" }
+    delete:
+      tags: [user-groups]
+      summary: グループを削除する
+      description: |
+        システム管理者のみ。このグループ経由でしか所有者が居ないプロジェクトが
+        あるときは 409 で拒否する。付与されていた権限はすべて取り消される。
+      operationId: deleteUserGroup
+      responses:
+        "204": { description: 削除した }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/user-groups/{groupId}/members/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/groupId"
+      - $ref: "#/components/parameters/userId"
+    put:
+      tags: [user-groups]
+      summary: メンバーを入れる
+      description: システム管理者のみ。すでに入っていれば何も起きない。
+      operationId: addGroupMember
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [user-groups]
+      summary: メンバーを外す
+      description: システム管理者のみ。
+      operationId: removeGroupMember
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/project-groups:
+    get:
+      tags: [project-groups]
+      summary: プロジェクトのグループ一覧
+      operationId: listProjectGroups
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProjectGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [project-groups]
+      summary: グループを作る
+      description: 作った本人が所有者になる。
+      operationId: createProjectGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, name]
+              properties:
+                id: { type: string }
+                name: { type: string, minLength: 1 }
+      responses:
+        "201":
+          description: 作成した
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /v1/project-groups/{groupId}:
+    parameters:
+      - $ref: "#/components/parameters/groupId"
+    patch:
+      tags: [project-groups]
+      summary: グループを改名する
+      description: グループの所有者のみ。
+      operationId: renameProjectGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Invalid" }
+    delete:
+      tags: [project-groups]
+      summary: グループを削除する
+      description: |
+        グループの所有者のみ。配下のプロジェクトは消えず、所属だけが外れる。
+        そのせいで所有者が居なくなるプロジェクトがあるときは 409 で拒否する。
+      operationId: deleteProjectGroup
+      responses:
+        "204": { description: 削除した }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/project-groups/{groupId}/access/{principalKind}/{principalId}:
+    parameters:
+      - $ref: "#/components/parameters/groupId"
+      - $ref: "#/components/parameters/principalKind"
+      - $ref: "#/components/parameters/principalId"
+    put:
+      tags: [project-groups]
+      summary: グループに権限を与える・変更する
+      description: |
+        ここで与えた権限は、配下のすべてのプロジェクトに継がれる。
+        グループの所有者が 1 人もいなくなる変更は 409 で拒否する。
+      operationId: setGroupAccess
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: "#/components/schemas/ProjectRole" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [project-groups]
+      summary: グループの権限を取り消す
+      operationId: removeGroupAccess
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectGroup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /v1/projects:
     get:
       tags: [projects]
@@ -200,18 +446,24 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
     patch:
       tags: [projects]
-      summary: プロジェクトを改名する
-      description: 所有者のみ。
-      operationId: renameProject
+      summary: 名前・所属グループ・期限を変える
+      description: |
+        所有者のみ。省略した項目は据え置き。`clearGroup` / `clearDueDate` を
+        立てると、その項目を空に戻す (JSON の `null` と「省略」を区別しなくて
+        済むようにするため)。
+      operationId: updateProject
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [name]
               properties:
                 name: { type: string, minLength: 1 }
+                groupId: { type: string }
+                clearGroup: { type: boolean, default: false }
+                dueDate: { type: string, format: date }
+                clearDueDate: { type: boolean, default: false }
       responses:
         "200":
           description: OK
@@ -239,13 +491,24 @@ paths:
     put:
       tags: [projects]
       summary: 内容を保存する
-      description: 編集以上の権限が要る。全体を置き換える。
+      description: |
+        編集以上の権限が要る。全体を置き換える。
+
+        `status` を添えると、一覧に出す見通しの控えとして保存する。
+        計算はクライアントが手元の WASM で行い、その結果をここに載せる
+        (サーバは中身を計算しない)。`status.basedOn` が保存時刻と食い違う
+        場合は、古い数字を新しい内容のものとして見せないために捨てる。
       operationId: saveDocument
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/Document" }
+            schema:
+              type: object
+              required: [document]
+              properties:
+                document: { $ref: "#/components/schemas/Document" }
+                status: { $ref: "#/components/schemas/ProjectStatus" }
       responses:
         "200":
           description: OK
@@ -301,20 +564,25 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/ProjectAccess" }
+                items: { $ref: "#/components/schemas/AccessEntry" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /v1/projects/{projectId}/access/{userId}:
+  /v1/projects/{projectId}/access/{principalKind}/{principalId}:
     parameters:
       - $ref: "#/components/parameters/projectId"
-      - $ref: "#/components/parameters/userId"
+      - $ref: "#/components/parameters/principalKind"
+      - $ref: "#/components/parameters/principalId"
     put:
       tags: [access]
       summary: 権限を与える・変更する
       description: |
-        所有者のみ。所有者が 1 人もいなくなる変更は 409 で拒否する。
+        所有者のみ。相手はアカウントでもグループでもよい。
+
+        所有者として振る舞えるアカウントが 1 人もいなくなる変更は 409 で
+        拒否する。メンバーの居ないグループに owner を付けても所有者としては
+        数えないので、その付け替えでは自分を外せない。
       operationId: setAccess
       requestBody:
         required: true
@@ -332,7 +600,7 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/ProjectAccess" }
+                items: { $ref: "#/components/schemas/AccessEntry" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -349,7 +617,7 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/ProjectAccess" }
+                items: { $ref: "#/components/schemas/AccessEntry" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -374,6 +642,23 @@ components:
       name: projectId
       in: path
       required: true
+      schema: { type: string }
+    groupId:
+      name: groupId
+      in: path
+      required: true
+      schema: { type: string }
+    principalKind:
+      name: principalKind
+      in: path
+      required: true
+      description: 権限を配る相手の種類
+      schema: { type: string, enum: [user, group] }
+    principalId:
+      name: principalId
+      in: path
+      required: true
+      description: アカウント id またはグループ id
       schema: { type: string }
 
   responses:
@@ -402,6 +687,11 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ApiError" }
+    Internal:
+      description: サーバ側の失敗 (保存先が応答しない、など)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
 
   schemas:
     ApiError:
@@ -410,7 +700,8 @@ components:
       properties:
         code:
           type: string
-          enum: [unauthorized, forbidden, notFound, invalid, conflict]
+          enum:
+            [unauthorized, forbidden, notFound, invalid, conflict, internal]
         message: { type: string }
 
     SystemRole:
@@ -438,17 +729,129 @@ components:
         systemRole: { $ref: "#/components/schemas/SystemRole" }
         createdAt: { type: string, format: date-time }
 
-    ProjectAccess:
+    Principal:
       type: object
-      required: [userId, role]
+      description: 権限を配る相手。アカウント 1 人か、グループ 1 つ。
+      required: [kind, id]
       properties:
-        userId: { type: string }
+        kind: { type: string, enum: [user, group] }
+        id: { type: string }
+
+    AccessEntry:
+      type: object
+      required: [principal, role]
+      properties:
+        principal: { $ref: "#/components/schemas/Principal" }
         role: { $ref: "#/components/schemas/ProjectRole" }
+
+    UserGroup:
+      type: object
+      description: 部署やチーム。権限をまとめて配るための入れ物。
+      required: [id, name, members, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        members:
+          type: array
+          items: { type: string, description: アカウント id }
+        createdAt: { type: string, format: date-time }
+
+    ProjectGroup:
+      type: object
+      description: |
+        プロジェクトの入れ物。ここに与えた権限は、配下のすべての
+        プロジェクトに継がれる。
+      required: [id, name, access, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        access:
+          type: array
+          items: { $ref: "#/components/schemas/AccessEntry" }
+        createdAt: { type: string, format: date-time }
+
+    ProjectStatus:
+      type: object
+      description: |
+        一度計算した見通しの控え。クライアントが保存時に 1 回だけ計算し、
+        `PUT /v1/projects/{projectId}/document` に添えて送る。
+        `basedOn` が `updatedAt` と違えば古いので、画面は数字を見せずに
+        「再計算が必要」と出す。
+      required:
+        [
+          computedAt,
+          basedOn,
+          effortP50,
+          effortP80,
+          spent,
+          progress,
+          taskCount,
+          doneCount,
+        ]
+      properties:
+        computedAt: { type: string, format: date-time }
+        basedOn:
+          type: string
+          format: date-time
+          description: 計算の元にした内容の updatedAt
+        effortP50: { type: number, description: 総工数の中央値 (人日) }
+        effortP80: { type: number, description: 総工数の 80 パーセンタイル }
+        finishP50:
+          type: [integer, "null"]
+          description: 5 割の確からしさで終わる日 (1970-01-01 からの日数)
+        finishP80:
+          type: [integer, "null"]
+          description: 8 割の確からしさで終わる日 (1970-01-01 からの日数)
+        spent: { type: number, description: 実績として消化した工数 (人日) }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        taskCount: { type: integer, minimum: 0 }
+        doneCount: { type: integer, minimum: 0 }
+
+    ProjectHealth:
+      type: string
+      enum:
+        [
+          noTasks,
+          unknown,
+          done,
+          onTrack,
+          atRisk,
+          late,
+          behindPace,
+          inProgress,
+        ]
+      description: |
+        一覧に出す状態。サーバが `status` と `dueDate` から判定する
+        (`mhc_api::health` が唯一の実装で、画面も WASM 経由で同じ関数を使う)。
+
+        | 値 | 意味 |
+        |---|---|
+        | `noTasks` | タスクが 1 件も無い |
+        | `unknown` | 控えが無い、または内容と対応していない (再計算が必要) |
+        | `done` | すべてのタスクが完了 |
+        | `onTrack` | 期限あり。8 割の確からしさで間に合う |
+        | `atRisk` | 期限あり。5 割では間に合うが 8 割では危うい |
+        | `late` | 期限あり。5 割でも間に合わない — **遅延** |
+        | `behindPace` | 期限なし。工数の消化率が進捗率を 10pt 以上上回る — **遅延** |
+        | `inProgress` | 期限なし。上記以外 |
 
     ProjectSummary:
       type: object
+      description: |
+        一覧に出す 1 行。`document` は含まない (一覧のために中身を読まずに
+        済ませるため)。
       required:
-        [id, name, createdAt, updatedAt, role, ownerName, taskCount, memberCount]
+        [
+          id,
+          name,
+          createdAt,
+          updatedAt,
+          role,
+          health,
+          ownerNames,
+          taskCount,
+          memberCount,
+        ]
       properties:
         id: { type: string }
         name: { type: string }
@@ -456,8 +859,18 @@ components:
         updatedAt: { type: string, format: date-time }
         role:
           allOf: [{ $ref: "#/components/schemas/ProjectRole" }]
-          description: 一覧を求めた本人の役割
-        ownerName: { type: string }
+          description: 一覧を求めた本人の実効的な役割 (グループ経由を含む)
+        groupId: { type: [string, "null"] }
+        groupName: { type: [string, "null"] }
+        dueDate: { type: [string, "null"], format: date }
+        health: { $ref: "#/components/schemas/ProjectHealth" }
+        status:
+          oneOf:
+            [{ $ref: "#/components/schemas/ProjectStatus" }, { type: "null" }]
+        ownerNames:
+          type: array
+          description: 所有者の名前。グループ経由で所有者になっている人も含む
+          items: { type: string }
         taskCount: { type: integer, minimum: 0 }
         memberCount:
           type: integer
@@ -466,15 +879,25 @@ components:
 
     Project:
       type: object
-      required: [id, name, createdAt, updatedAt, access, document]
+      description: 見出し (ProjectMeta) と中身を平らに並べたもの。
+      required:
+        [id, name, createdAt, updatedAt, access, taskCount, memberCount, document]
       properties:
         id: { type: string }
         name: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        groupId: { type: [string, "null"] }
+        dueDate: { type: [string, "null"], format: date }
         access:
           type: array
-          items: { $ref: "#/components/schemas/ProjectAccess" }
+          description: このプロジェクトへの直接の付与 (グループ経由は含まない)
+          items: { $ref: "#/components/schemas/AccessEntry" }
+        status:
+          oneOf:
+            [{ $ref: "#/components/schemas/ProjectStatus" }, { type: "null" }]
+        taskCount: { type: integer, minimum: 0 }
+        memberCount: { type: integer, minimum: 0 }
         document: { $ref: "#/components/schemas/Document" }
 
     Document:
