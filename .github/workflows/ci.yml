@@ -47,14 +47,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # wasm-opt でバイナリを 3 割ほど小さくできる。無くてもビルドは通るが、
-      # CI では必ず適用してサイズの実測値を残す。
+      # apt の binaryen は古く、rustc が既定で出す sign-ext 命令を検証で弾く。
+      # バージョンを固定して公式リリースを使い、CI を再現可能にする。
       - name: Install binaryen
-        run: sudo apt-get update && sudo apt-get install -y binaryen
+        env:
+          BINARYEN_VERSION: "123"
+        run: |
+          curl -fsSL -o binaryen.tar.gz \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          tar xzf binaryen.tar.gz
+          echo "$PWD/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Check binaryen
+        run: wasm-opt --version
 
       # サイズ上限 (400 KiB) を超えたら xtask が失敗する。
+      # --require-wasm-opt は、最適化が静かに外れたまま配布物が出るのを防ぐ。
       - name: Build
-        run: cargo xtask build
+        run: cargo xtask build --require-wasm-opt
 
       - uses: actions/upload-artifact@v4
         with:

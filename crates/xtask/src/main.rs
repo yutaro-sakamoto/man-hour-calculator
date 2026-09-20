@@ -11,7 +11,7 @@
 //! `file://` で開いたページからの `fetch()` は CORS で弾かれるので、
 //! 「HTML ファイルをダブルクリックすれば動く」を満たすにはこの形しかない。
 //!
-//! 使い方: `cargo xtask build [--debug]`
+//! 使い方: `cargo xtask build [--debug] [--require-wasm-opt]`
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,12 +32,15 @@ const WASM_PLACEHOLDER: &str = "/*{{WASM_BASE64}}*/";
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = args.first().map(String::as_str).unwrap_or("build");
-    let release = !args.iter().any(|a| a == "--debug");
+    let options = Options {
+        release: !args.iter().any(|a| a == "--debug"),
+        require_wasm_opt: args.iter().any(|a| a == "--require-wasm-opt"),
+    };
 
     let result = match command {
-        "build" => build(release),
+        "build" => build(options),
         other => Err(format!(
-            "未知のコマンド `{other}`。使えるのは `build` だけ (オプション: --debug)"
+            "未知のコマンド `{other}`。使えるのは `build` だけ (オプション: --debug, --require-wasm-opt)"
         )),
     };
 
@@ -47,9 +50,17 @@ fn main() {
     }
 }
 
-fn build(release: bool) -> Result<(), String> {
+#[derive(Debug, Clone, Copy)]
+struct Options {
+    release: bool,
+    /// wasm-opt をかけられなかったらビルドを失敗させる。CI でだけ立てて、
+    /// 最適化が静かに外れたまま配布物が出てしまうのを防ぐ。
+    require_wasm_opt: bool,
+}
+
+fn build(options: Options) -> Result<(), String> {
     let root = workspace_root();
-    let profile = if release { "release" } else { "debug" };
+    let profile = if options.release { "release" } else { "debug" };
 
     println!("==> mhc-wasm を wasm32-unknown-unknown 向けにビルド ({profile})");
     let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
@@ -60,7 +71,7 @@ fn build(release: bool) -> Result<(), String> {
         "--target",
         "wasm32-unknown-unknown",
     ]);
-    if release {
+    if options.release {
         cargo.arg("--release");
     }
     let status = cargo
@@ -79,7 +90,7 @@ fn build(release: bool) -> Result<(), String> {
         .len();
     println!("    {} ({} KiB)", wasm_path.display(), raw_size / 1024);
 
-    let wasm_path = optimize(&wasm_path)?;
+    let wasm_path = optimize(&wasm_path, options.require_wasm_opt)?;
     let wasm = std::fs::read(&wasm_path)
         .map_err(|e| format!("{} が読めません: {e}", wasm_path.display()))?;
     println!("==> WASM {} KiB を base64 に変換", wasm.len() / 1024);
@@ -120,31 +131,40 @@ fn build(release: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// `wasm-opt` があればサイズ最適化をかけ、出力先のパスを返す。
-/// 入っていない環境でもビルド自体は通るようにしている。
-fn optimize(wasm: &Path) -> Result<PathBuf, String> {
+/// `wasm-opt` があればサイズ最適化をかけ、使うべき `.wasm` のパスを返す。
+///
+/// `-all` で全機能を許可しているのは、rustc が wasm32-unknown-unknown 向けに
+/// 既定で sign-ext・bulk-memory・nontrapping-float-to-int を含む出力をするのに対し、
+/// wasm-opt 側の既定の許可集合はそれより狭く、しかも binaryen のバージョンごとに
+/// 変わるため (bulk-memory が bulk-memory と bulk-memory-opt に分かれた、など)。
+/// 個別にフラグを並べると binaryen を上げ下げするたびにビルドが壊れる。
+///
+/// 最適化は任意で、wasm-opt が無い環境でもビルドは通る。ただし `require` が
+/// 立っているとき (CI) は、最適化が静かに外れたまま配布物が出ないように失敗させる。
+fn optimize(wasm: &Path, require: bool) -> Result<PathBuf, String> {
     let optimized = wasm.with_extension("opt.wasm");
     let result = Command::new("wasm-opt")
-        .args(["-Oz", "--enable-bulk-memory"])
+        .args(["-Oz", "-all"])
         .arg(wasm)
         .arg("-o")
         .arg(&optimized)
         .status();
 
-    match result {
+    let reason = match result {
         Ok(status) if status.success() => {
             let size = std::fs::metadata(&optimized).map(|m| m.len()).unwrap_or(0);
             println!("==> wasm-opt -Oz 適用後 {} KiB", size / 1024);
-            Ok(optimized)
+            return Ok(optimized);
         }
-        Ok(_) => Err("wasm-opt がエラー終了しました".into()),
-        Err(_) => {
-            println!(
-                "==> wasm-opt が見つからないので最適化を省略 (binaryen を入れると小さくなります)"
-            );
-            Ok(wasm.to_path_buf())
-        }
+        Ok(status) => format!("wasm-opt が失敗しました ({status})"),
+        Err(_) => "wasm-opt が見つかりません".to_string(),
+    };
+
+    if require {
+        return Err(format!("{reason} (--require-wasm-opt が指定されています)"));
     }
+    println!("==> {reason}。最適化を省略します (binaryen を入れると小さくなります)");
+    Ok(wasm.to_path_buf())
 }
 
 fn read(path: &Path) -> Result<String, String> {

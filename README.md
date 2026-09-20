@@ -41,7 +41,13 @@ cargo xtask build          # → dist/index.html
 
 - Rust 1.92 以降（`rust-toolchain.toml` が `wasm32-unknown-unknown` も含めて面倒を見ます）
 - 任意: [binaryen](https://github.com/WebAssembly/binaryen) の `wasm-opt`
-  （入っていれば WASM が 3 割ほど小さくなります。無くてもビルドは通ります）
+  （あれば HTML が 147 KiB → 133 KiB になります。無くてもビルドは通ります）
+
+  なお `wasm-opt` には `-all` を渡しています。rustc が wasm32 向けに既定で出す
+  sign-ext などの命令を、binaryen の既定の許可集合が受け付けないためです
+  （許可される機能の内訳は binaryen のバージョンごとに変わるので、
+  個別フラグを並べるより全許可のほうが壊れません）。CI では
+  `--require-wasm-opt` を付けて、最適化が静かに外れた配布物が出ないようにしています。
 
 外部クレートへの依存はゼロです。
 
