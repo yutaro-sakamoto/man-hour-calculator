@@ -134,17 +134,24 @@ jobs:
           token=$(grep -oP 'トークン: \K[0-9a-f]{64}' /tmp/server.log)
           test -n "$token"
 
+          # 応答はいったんファイルに落としてから調べる。
+          # curl をそのまま grep -q に繋ぐと、大きな本文のときに grep が先に
+          # 閉じて curl が「書けなかった」(23) と言って落ちる。
+          auth="Authorization: Bearer $token"
+
           # 認証が要ること
           test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/v1/projects)" = 401
           # トークンで通ること
-          curl -sf -H "Authorization: Bearer $token" localhost:8080/v1/me | grep -q '"systemRole":"admin"'
+          curl -sf -H "$auth" -o /tmp/me.json localhost:8080/v1/me
+          grep -q '"systemRole":"admin"' /tmp/me.json
           # 作って読み返せること
-          curl -sf -X POST -H "Authorization: Bearer $token" \
-            -H 'Content-Type: application/json' \
-            -d '{"id":"p1","name":"CI"}' localhost:8080/v1/projects > /dev/null
-          curl -sf -H "Authorization: Bearer $token" localhost:8080/v1/projects | grep -q '"name":"CI"'
+          curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
+            -d '{"id":"p1","name":"CI"}' -o /dev/null localhost:8080/v1/projects
+          curl -sf -H "$auth" -o /tmp/projects.json localhost:8080/v1/projects
+          grep -q '"name":"CI"' /tmp/projects.json
           # 画面が同じバイナリから返ること (案内ページではなく本物)
-          curl -sf localhost:8080/ | grep -q '工数見積もり / Effort Estimator'
+          curl -sf -o /tmp/ui.html localhost:8080/
+          grep -q '工数見積もり / Effort Estimator' /tmp/ui.html
 
   build:
     name: build single-file HTML
