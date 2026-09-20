@@ -1,289 +1,314 @@
-# 工数見積もり / Effort Estimator
+# Effort Estimator
 
-タスクの **3 点見積もり（最小・最可能・最大）** と **人員ごとの稼働カレンダー**から、
-**総工数の確率分布**と**タスクごとの完了日**を求めるツールです。
+*English · [日本語](README_JP.md)*
 
-「各タスクの最可能値を足す」という見積もりは、ほぼ必ず過小評価になります。
-遅れは足し合わさるのに、前倒しはめったに起きないからです。
-このツールは各タスクを確率分布として扱い、その和の分布を計算して
-「P80 で何人日か」「いつ終わるか」「この日までに終わっている確率は何 % か」に答えます。
+> [!WARNING]
+> **This project is still under development.**
+> The design still moves around, and files saved today may stop loading in a later
+> version. It is not something to rely on for real work yet.
 
-成果物は **HTML ファイル 1 枚**です。ダウンロードしてダブルクリックすれば動きます。
-サーバも、インストールも、ネットワークも要りません。
+A tool that turns **three-point estimates** (minimum / most likely / maximum) and a
+**per-person working calendar** into a **probability distribution of total effort** and a
+**finish date for each task**.
+
+Adding up the most-likely value of every task almost always underestimates. Delays
+accumulate; things finishing early rarely do. This tool treats each task as a probability
+distribution, computes the distribution of their sum, and answers "how many person-days at
+P80", "when will it be done", and "what is the chance it is finished by this date".
+
+The deliverable is **a single HTML file**. Download it, double-click it, and it works. No
+server, no install, no network.
 
 ```
-タスク                  最小  最可能  最大
-設計フェーズ
-  要件定義                5     8     20
-  基本設計                3     5     12
-実装フェーズ
-  API 実装                2     3      5
-  画面実装               10    15     40
-  バッチ実装              2     4      9
-テストとリリース           3     6     14
-                            ─────────────
-最可能値の合計                     41 人日
-P80 総工数                       53.5 人日   ← 実際に約束できるのはこちら
-P80 完了日                     2026-12-11   ← 休日と予定を踏まえた日付
+Task                     Min  Likely   Max
+Design
+  Requirements             5      8     20
+  Architecture             3      5     12
+Implementation
+  API                      2      3      5
+  UI                      10     15     40
+  Batch                    2      4      9
+Test and release           3      6     14
+                             ─────────────
+Sum of most-likely                41 person-days
+Total effort, P80               53.5 person-days   ← this is what you can promise
+Finish date, P80              2026-12-11           ← holidays and meetings included
 ```
 
-## できること
+## What it does
 
-- **3 点見積もり**を PERT（ベータ）または三角分布として扱い、総和の分布を求める
-- **親子関係（WBS）・優先度・グループ**でタスクを整理し、一覧を絞り込む
-- **人員**：ひとりずつ曜日ごとの稼働時間帯と休憩を設定でき、タスクに割り当てる
-- **稼働カレンダー**：日本の祝日・休日出勤・会議や休暇の予定（5 分単位、隔週などの繰り返し、複数人での共有）
-- **完了日の確率**：タスクごと／全体で「いつ終わるか」を帯グラフと表で読む
-- **実績の反映**：着手日・進捗率・完了日を入れると、そこから予測工数を引き直す
-- **コメント**：プロジェクトとタスクに Markdown で書ける。閲覧しかできない人も書ける
-- **複数プロジェクト**：いくつでも作って切り替えられ、複製もできる
-- **アカウントと権限**：プロジェクトごとに所有者／編集者／閲覧者を設定できる
-- **保存と受け渡し**：ファイル（`.mhc.json`）への保存と読み込み、CSV の入出力、
-  ブラウザへの自動保存
-- 日本語 / English 切り替え、ダークモードは OS の設定に追従
+- Treats **three-point estimates** as PERT (beta) or triangular distributions and computes
+  the distribution of their sum
+- Organises tasks by **parent/child (WBS), priority and group**, with filtering
+- **People**: per-weekday working hours and breaks for each person, assigned to tasks
+- **Working calendar**: Japanese public holidays, working on a day off, meetings and time
+  off (5-minute steps, biweekly and other repeats, shared by several people)
+- **Finish-date probabilities**: read "when will it be done" per task and overall, as a
+  band chart and as a table
+- **Actuals fold back in**: start dates, progress and completion dates redraw the forecast
+- **Comments**: Markdown on projects and tasks — people with view-only access can write them
+- **Several projects**: create as many as you like, switch between them, duplicate them
+- **Accounts and permissions**: owner / editor / viewer per project
+- **Saving and handing over**: files (`.mhc.json`), CSV import and export, automatic saving
+  into the browser
+- Japanese / English, and dark mode following the OS setting
 
-## 使う
+## Using it
 
-**<https://yutaro-sakamoto.github.io/man-hour-calculator/>** をそのまま開けます。
-ページは 1 枚の HTML で完結しているので、ブラウザから保存すれば以後はオフラインでも動きます。
+There is an introduction page at
+**<https://yutaro-sakamoto.github.io/man-hour-calculator/>**; "Try it now" opens the tool.
 
-自分でビルドする場合は次章へ。
+What opens is the **local version**. Everything runs in your browser and stays there. What
+you enter is kept in that browser, so it is gone if you clear site data or move to another
+device — use the file export to keep a copy.
 
-## ビルド
+The tool itself is one self-contained HTML file, so saving it means it keeps working
+offline. To share work across people, run the server (below).
+
+To build it yourself, see the next section.
+
+## Building
 
 ```sh
-cargo xtask build          # → dist/index.html
+cargo xtask build          # → dist/app.html (the tool) and dist/index.html (the intro page)
 ```
 
-必要なもの:
+You need:
 
-- Rust 1.92 以降（`rust-toolchain.toml` が `wasm32-unknown-unknown` も含めて面倒を見ます）
-- Node.js 22 以降（フロントエンドのビルドに使います。初回は `npm ci` も `xtask` が走らせます）
-- 任意: [binaryen](https://github.com/WebAssembly/binaryen) の `wasm-opt`
+- Rust 1.92 or newer (`rust-toolchain.toml` takes care of `wasm32-unknown-unknown` too)
+- Node.js 22 or newer (used to build the frontend; `xtask` runs `npm ci` the first time)
+- Optional: `wasm-opt` from [binaryen](https://github.com/WebAssembly/binaryen)
 
-  あると WASM が 3 割ほど小さくなります。無くてもビルドは通ります。
-  `wasm-opt` には `-all` を渡しています。rustc が wasm32 向けに既定で出す
-  sign-ext などの命令を、binaryen の既定の許可集合が受け付けないためです
-  （許可される機能の内訳はバージョンごとに変わるので、個別フラグを並べるより
-  全許可のほうが壊れません）。CI では `--require-wasm-opt` を付けて、
-  最適化が静かに外れた配布物が出ないようにしています。
+  It makes the WASM about 30% smaller. The build works without it. We pass `-all` to
+  `wasm-opt`, because binaryen's default feature set rejects instructions that rustc emits
+  by default for wasm32, such as sign-ext (which features are allowed changes between
+  versions, so allowing everything breaks less often than listing flags). CI passes
+  `--require-wasm-opt` so that an unoptimised build never ships quietly.
 
-Rust 側の依存クレートはゼロです。Node 側の依存はビルド時だけのもの（TypeScript・
-esbuild・ESLint・Prettier）で、配布物には一切含まれません。
+There are **no Rust dependencies**. The Node dependencies are build-time only (TypeScript,
+esbuild, ESLint, Prettier) and none of them end up in what is shipped.
 
-## 検証
+## Checking
 
 ```sh
-cargo test --workspace                                  # Rust: 単体・性質・2 エンジン相互検証
+cargo test --workspace                                  # Rust: unit, property, two-engine cross-check
 cargo clippy --workspace --all-targets -- -D warnings
-npm --prefix web run check                              # 書式 / Lint / 型 / 単体テスト
-cd e2e && npm ci && npx playwright test                 # file:// で開いて E2E
+npm --prefix web run check                              # format / lint / types / unit tests
+cd e2e && npm ci && npx playwright test                 # end-to-end over file://
 ```
 
-E2E は `dist/index.html` を **`file://` で開いて**検査します。
-「1 枚の HTML でオフラインで動く」という前提そのものを毎回確かめるためで、
-外部へのリクエストが 1 件でも飛んだらテストは落ちます。
+The end-to-end tests open `dist/app.html` **over `file://`**. That checks the premise
+itself — one HTML file, working offline — on every run: if a single external request goes
+out, the test fails.
 
-## しくみ
+## How it works
 
 ```
-              ┌──────────── dist/index.html（1 ファイル） ────────────┐
- cargo xtask  │  <style> …CSS… </style>                              │
-    build ──▶ │  <script> const WASM_BASE64 = "AGFzbQ…";  …JS…        │
-              │  WebAssembly.instantiate(atob(WASM_BASE64))           │
-              └──────────────────────────────────────────────────────┘
-                          ▲                        ▲
-              crates/wasm ─ 薄い FFI 層      web/ ─ TypeScript を
-              （unsafe はここだけ）                esbuild で 1 本に
+              ┌───────────── dist/app.html (one file) ─────────────┐
+ cargo xtask  │  <style> …CSS… </style>                            │
+    build ──▶ │  <script> const WASM_BASE64 = "AGFzbQ…";  …JS…      │
+              │  WebAssembly.instantiate(atob(WASM_BASE64))         │
+              └────────────────────────────────────────────────────┘
+                          ▲                      ▲
+              crates/wasm — a thin FFI      web/ — TypeScript
+              layer (the only unsafe)       bundled by esbuild
                           ▲
-              crates/core ─ 計算ロジック（#![forbid(unsafe_code)]）
+              crates/core — the computation (#![forbid(unsafe_code)])
 ```
 
-`fetch()` を一切使わないのは、`file://` で開いたページからの `fetch()` が
-CORS で弾かれるためです。WASM は base64 文字列として HTML に埋め込んでいます。
+We never call `fetch()`, because a page opened over `file://` has its `fetch()` blocked by
+CORS. The WASM is embedded in the HTML as a base64 string.
 
-### クライアントと API
+### The client and the API
 
-画面は **API という 1 つの口しか知りません**。その後ろは
+The UI knows **one interface, and only that**. Behind it sits either
 
-- `LocalApiClient` … 同じ HTML に載っている WASM
-- `HttpApiClient` … 社内サーバやクラウド上のサーバ
+- `LocalApiClient` — the WASM inside the same HTML file
+- `HttpApiClient` — an internal or cloud server
 
-で差し替わりますが、どちらも `crates/api` の同じ実装に行き着きます。
-権限の判定と不変条件（「所有者は必ず 1 人以上」など）がそこ 1 か所にしかないので、
-「画面では隠していたのにサーバでは通ってしまう」という食い違いが起きません。
+and both end up in the same implementation in `crates/api`. Permission checks and the
+invariants ("there is always at least one owner") live in exactly one place, so the UI and
+the server can never disagree about what is allowed.
 
-**計算はサーバに置きません。** 見積もりの計算はクライアントに同梱された WASM が
-その場で回すので、サーバはデータの置き場所と権限を見るだけで済みます。
-詳しくは `docs/API.md`。
+**Computation does not live on the server.** The estimate is computed by the WASM bundled
+with the client, so a server only has to hold data and check permissions. See `docs/API.md`.
 
-### プロジェクト一覧
+### The project list
 
-複数のプロジェクトを持つと、いちばん困るのは「どれがまずいのか分からない」こと
-です。そこで一覧では**状態を 1 列目に置き、手当てが要るものを先頭に**出します。
+With several projects, the hard part is knowing which one is in trouble. So the list puts
+**the status in the first column and the ones needing attention first**.
 
-| 状態 | 意味 |
+| Status | Meaning |
 |---|---|
-| **遅延** | 期限あり。5 割でも間に合わない |
-| **ペース遅れ** | 期限なし。工数の消化率が進捗率を 10pt 以上上回る |
-| 危うい | 期限あり。5 割では間に合うが 8 割では危うい |
-| 再計算が必要 | 内容が変わったあと計算し直していない（数字は伏せます） |
-| 順調 / 進行中 / 完了 / タスクなし | そのほか |
+| **Late** | Has a due date. Will not make it even at P50 |
+| **Behind pace** | No due date. Effort consumed exceeds reported progress by 10pt or more |
+| At risk | Has a due date. Makes it at P50 but not at P80 |
+| Needs recompute | Content changed and has not been recomputed (numbers are hidden) |
+| On track / In progress / Done / No tasks | Everything else |
 
-状態は**色だけで示しません**。記号と言葉を必ず添えるので、色が見分けられなくても、
-白黒で印刷しても同じことが伝わります。
+Status is **never shown by colour alone**. An icon and a word always come with it, so it
+reads the same if you cannot tell the colours apart, or print it in black and white.
 
-判定は Rust 側（`crates/api/src/health.rs`）の 1 か所にしかなく、画面はその結果を
-並べるだけです。一覧に出るのは自分が見られるものだけで、これも API が決めます。
+The judgement lives in exactly one place on the Rust side (`crates/api/src/health.rs`); the
+UI only lays out the result. Only projects you may see are listed, and the API decides that
+too.
 
-計算はクライアントが保存時に 1 回だけ行い、その控えを保存に添えて送ります。
-一覧のたびに全プロジェクトの中身を計算し直すのは重いためです。内容が変わったのに
-計算し直していないものは、**古い数字を見せずに「再計算が必要」** と出します。
+The numbers are computed by the client once, when saving, and sent along with the save.
+Recomputing every project's content on every listing would be expensive. If the content
+changed and has not been recomputed, we **hide the old numbers and say "needs recompute"**
+instead.
 
-### サーバ（複数人で使うとき）
+### The server (for a team)
 
-1 人で使うなら要りません。複数人で使うときは、**バイナリ 1 つを起動するだけ**です。
+You do not need it on your own. For a team, it is **one binary to start**.
 
 ```sh
-cargo xtask build                          # 先に画面を作っておく
+cargo xtask build                          # build the UI first
 cargo build --profile server -p mhc-server
-./target/server/mhc-server                 # → 管理者とトークンが 1 度だけ表示される
+./target/server/mhc-server                 # → prints an admin account and a token, once
 ```
 
-SQLite も画面（HTML）もバイナリのなかに入っているので、データベースを用意する
-必要も、Web サーバを別に立てる必要もありません。保存先は SQLite と PostgreSQL、
-認証はトークン / 信頼するヘッダ / なし の 3 通り。建て方は `docs/SERVER.md`。
+SQLite and the UI are inside the binary, so there is no database to set up and no web
+server to run beside it. Storage is SQLite or PostgreSQL; authentication is a token, a
+trusted header, or none. See `docs/SERVER.md`.
 
-| ディレクトリ | 中身 |
+| Directory | Contents |
 |---|---|
-| `crates/api` | API の型・権限・振る舞い。クライアントとサーバが共有する |
-| `crates/server` | サーバ。単体のバイナリで動き、SQLite と PostgreSQL に保存する |
-| `crates/core` | 分布・乱数・2 つのエンジン・暦・祝日・人員・カレンダー・実績反映・統計・ABI |
-| `crates/wasm` | 計算と API を WebAssembly から呼ぶための FFI 層 |
-| `crates/xtask` | `web` をバンドルし、`dist/index.html` を組み立てるビルドツール |
-| `web` | TypeScript のフロントエンド（UI ライブラリは不使用） |
-| `e2e` | Playwright による `file://` テスト |
-| `docs/ABI.md` | JS ↔ WASM の計算バッファのレイアウト仕様 |
-| `docs/API.md` | クライアント–サーバの分け方と権限モデル |
-| `docs/openapi.yaml` | API の HTTP 仕様 |
-| `docs/SERVER.md` | サーバの建て方・認証・保存先・運用 |
-| `docs/AWS.md` | API Gateway + Lambda + DynamoDB に置くときの構成と手順 |
+| `crates/api` | API types, permissions and behaviour, shared by client and server |
+| `crates/server` | The server. One binary, storing into SQLite or PostgreSQL |
+| `crates/core` | Distributions, RNG, the two engines, dates, holidays, people, calendars, actuals, statistics, ABI |
+| `crates/wasm` | The FFI layer that exposes computation and the API to WebAssembly |
+| `crates/xtask` | The build tool that bundles `web` and assembles `dist/` |
+| `web` | The TypeScript frontend, and the introduction page for GitHub Pages |
+| `e2e` | Playwright tests over `file://` |
+| `docs/ABI.md` | Layout of the computation buffers between JS and WASM |
+| `docs/API.md` | How client and server are split, and the permission model |
+| `docs/openapi.yaml` | The HTTP shape of the API |
+| `docs/SERVER.md` | Running the server: authentication, storage, operations |
+| `docs/AWS.md` | Putting it on API Gateway + Lambda + DynamoDB |
 
-### 人員と工数から日付へ
+### From people and effort to dates
 
-カレンダーは **人ひとりずつ**、暦日ごとに「その日に投入できる工数（人日）」を
-持ち、その累積を保ちます。
-
-```
-稼働分数 = その曜日の稼働時間帯の長さ
-           − 休憩分数
-           − 予定が稼働時間帯を覆う分数（重なりは 1 回だけ数える）
-工数     = 稼働分数 ÷ 60 ÷ 1人日あたりの時間
-週末・祝日 → 0（休日出勤に指定されていれば通常どおり）
-```
-
-稼働時間帯を「何時から何時まで」で持つのは、5 分単位の会議を正しく引くためです。
-9:00〜18:00 の人にとって 8:00〜9:00 の予定は稼働を 1 分も削りません。
-
-一方でコアは「**同じ担当者の中で**タスク i までの累積工数」の分布を返します。
-同じ人のタスクは上から順に、別の人のタスクは並行して進む前提なので、
-この 2 つを突き合わせれば
+The calendar holds, **for each person separately**, how much effort (in person-days) they
+can put in on each calendar day, and keeps the running total.
 
 ```
-P(タスク i が d 日までに終わっている)
-    = P(担当者内の累積工数_i ≦ その担当者の累積稼働量(d))
+working minutes = length of that weekday's working hours
+                − break minutes
+                − minutes where a meeting covers the working hours
+                  (overlaps counted once)
+effort          = working minutes ÷ 60 ÷ hours per person-day
+weekends and holidays → 0 (unless marked as working that day)
 ```
 
-が読み取れます。追加のシミュレーションは要りません。
+Working hours are held as "from this time to that time" so that a 5-minute meeting can be
+subtracted correctly. For someone working 9:00–18:00, a meeting from 8:00 to 9:00 takes
+nothing away.
 
-複数人にまたがるまとまり（親タスクや全体）が終わっているのは、
-**関わる全員がそれぞれの担当ぶんを終えている**ときなので、人ごとの確率の積になります。
-タスクは独立としているため、別々の人が持つ担当ぶんの合計も独立で、
-積が厳密な答えになります（最大値を取るためのシミュレーションは不要です）。
-
-親タスクが終わるのは配下の葉がすべて終わるときで、
-深さ優先の並びを保っておけば「人ごとに配下の最後のタスク」を拾うだけで済みます。
-
-### 実績の反映
-
-進捗率 `p`、消化済み工数 `spent` のタスクについて、当初の 3 点見積もり
-`(a, m, b)` から **残り** と **総工数** を分けて求めます。
+Meanwhile the core returns the distribution of "cumulative effort up to task i **within the
+same assignee**". Tasks belonging to one person run in order; different people run in
+parallel. Put those two together and you can read
 
 ```
-残り = (1 − p)·(a, m, b)
-総   = spent + 残り
+P(task i is finished by day d)
+    = P(cumulative effort within the assignee ≤ that person's cumulative capacity by d)
 ```
 
-**日程が消化するのは「残り」のほう**です。総工数のまま日程に流すと、
-すでに終えた仕事をもう一度これからの稼働で賄うことになり、8 割終わって
-いるタスクでも完了日が動きません。総工数の分布は、残りの分布を消化ぶん
-だけ平行移動したもの（定数のずれなので形は変わりません）。
+with no extra simulation.
 
-境界での振る舞いが素直になるように選んでいます。`p = 0` なら残りは当初の
-まま、`p = 1` なら残りは 0 で総工数は `spent` の 1 点に潰れ、予定どおりの
-ペース（`spent = p·m`）なら総工数は動きません。遅れているほど総工数が
-上がり、進むほど残りの幅が狭まります。「実績のペースが続く」と決め打ち
-する EVM より保守的で、進捗が浅いうちに当初見積もりを大きく振り回しません。
+A group spanning several people (a parent task, or the whole project) is finished when
+**everyone involved has finished their own part**, so it is the product of the per-person
+probabilities. Tasks are treated as independent, so the sums held by different people are
+independent too, and the product is exact — no simulation of a maximum is needed.
 
-消化済み工数は、担当者のカレンダー上で着手日から基準日までに投入できた
-量として測ります。着手日が無い、あるいは着手日が計算期間の外にあって
-測れないときは**見積もりどおりに進んだ**とみなし、`spent = p × E[当初]`
-（期待値）を置きます。期待値を使うのは総工数の期待値を動かさないためで、
+A parent task is finished when all of its leaves are, and keeping the depth-first order
+means we only have to pick out "the last task under it, per person".
+
+### Folding in actuals
+
+For a task with progress `p` and effort already spent `spent`, we split the original
+three-point estimate `(a, m, b)` into **what is left** and **the total**.
 
 ```
-E[総] = p·E[当初] + (1 − p)·E[当初] = E[当初]
+remaining = (1 − p)·(a, m, b)
+total     = spent + remaining
 ```
 
-消化量について何も分かっていないのだから、期待値が動く理由もありません。
-一方で分布の幅は `1 − p` 倍に狭まるので、P80 のような裾の値は下がります
-（終わったぶんについては、もう外れようがないため）。
+**The schedule consumes the remaining part.** Feeding the total into the schedule would
+mean paying for finished work again out of future capacity, and a task that is 80% done
+would not move its finish date at all. The distribution of the total is the distribution of
+the remaining shifted by the spent effort (a constant offset, so the shape is unchanged).
 
-### 分布
+The formula was chosen so the boundaries behave plainly. At `p = 0` the remaining is the
+original estimate; at `p = 1` the remaining is 0 and the total collapses onto `spent`; at
+exactly the planned pace (`spent = p·m`) the total does not move. The further behind, the
+higher the total; the further along, the narrower the remaining. It is more conservative
+than EVM, which assumes the observed pace continues, and it does not swing the original
+estimate around while progress is still shallow.
 
-- **PERT（ベータ）** — 実務で標準的。平均は `(a + λm + b) / (λ + 2)`（既定 `λ = 4` で
-  おなじみの `(a + 4m + b) / 6`）。閉形式の逆関数がないので、ベータ PDF を数値積分して
-  CDF グリッドを作り、そこから逆 CDF テーブルを前計算します。累積和から作るため、
-  テーブルの単調性と両端（ちょうど `a` と `b`）が構成上保証されます。
-- **三角分布** — CDF もその逆関数も閉形式。両端が厚いぶん PERT よりばらつきが大きく出ます。
+Spent effort is measured on the assignee's calendar, from the start date to the reference
+date. When there is no start date, or the start date falls outside the computed range, we
+cannot measure it; then we assume the work went **as estimated** and use
+`spent = p × E[original]` (the expected value). Using the expected value keeps the expected
+total from moving:
 
-### 2 つのエンジン
+```
+E[total] = p·E[original] + (1 − p)·E[original] = E[original]
+```
 
-| | モンテカルロ | 数値畳み込み |
+Nothing is known about the consumption, so there is no reason for the expectation to move.
+The width does shrink to `1 − p` of the original, so tail values such as P80 come down —
+the part that is finished cannot surprise us any more.
+
+### Distributions
+
+- **PERT (beta)** — the standard choice in practice. The mean is `(a + λm + b) / (λ + 2)`
+  (with the default `λ = 4`, the familiar `(a + 4m + b) / 6`). There is no closed-form
+  inverse, so we integrate the beta PDF numerically into a CDF grid and precompute an
+  inverse-CDF table from it. Building it from a cumulative sum guarantees, by construction,
+  that the table is monotone and that its ends are exactly `a` and `b`.
+- **Triangular** — both the CDF and its inverse are closed-form. Heavier ends mean more
+  spread than PERT.
+
+### Two engines
+
+| | Monte Carlo | Numeric convolution |
 |---|---|---|
-| やること | 各タスクから乱数サンプリングして合計、を繰り返す | 各タスクの分布を共通グリッド上で逐次畳み込む |
-| 乱数 | xoshiro256++（シード固定で完全に再現可能） | 使わない |
-| 誤差 | サンプリング誤差が残る | 離散化誤差のみ。決定論的 |
-| 累積和 | 試行ごとに担当者別の添字を数える | 担当者ごとに畳み込み直し、途中経過を書き出す |
+| What it does | Sample each task, sum, repeat | Convolve each task's distribution on a shared grid |
+| Randomness | xoshiro256++ (fully reproducible from a fixed seed) | None |
+| Error | Sampling error remains | Discretisation only; deterministic |
+| Cumulative sums | Counts per-assignee indices per trial | Re-convolves per assignee, writing out the intermediate steps |
 
-**2 つを別々に実装しているのは、互いのオラクルにするためです。**
-片方だけにあるバグはもう片方を通らないので、
-「両エンジンの P50 / P80 / P90 と各タスクの累積和がレンジの 1% 以内で一致する」
-というテストが、数値コアの正しさを実質的に担保します。
+**They are implemented separately so that each is the other's oracle.** A bug in one does
+not exist in the other, so the test "both engines agree on P50 / P80 / P90 and on each
+task's cumulative sum, within 1% of the range" effectively backs the numerical core.
 
-## 品質のつくり方
+## How quality is built in
 
-- `crates/core` は `#![forbid(unsafe_code)]`。`unsafe` は `crates/wasm` の FFI 層だけ
-- `TaskEstimate` は smart constructor（parse, don't validate）。値が存在する時点で
-  `0 ≦ min ≦ likely ≦ max` かつ有限であることが型で保証される
-- `compute` は panic しない。入力の不正はすべてステータスコードで返す
-- TypeScript は `strict` に加えて `noUncheckedIndexedAccess` と
-  `exactOptionalPropertyTypes` まで有効。ESLint は型情報を使う
-  `strictTypeChecked` で回す
-- 外から読み込んだ JSON / CSV は 1 項目ずつ型を確かめ、駄目なものは既定値に落とす
-- 担当者のいないタスクは黙って誰かに押し付けず、「未割当」という仮の人員に
-  まとめて画面にもそう出す
-- 日本の祝日は近似式で求めた春分・秋分を含め、公表値と一致することをテストで固定
+- `crates/core` is `#![forbid(unsafe_code)]`. The only `unsafe` is in the FFI layer in
+  `crates/wasm`
+- `TaskEstimate` is a smart constructor (parse, don't validate). If a value exists, the type
+  guarantees `0 ≤ min ≤ likely ≤ max` and that all of them are finite
+- `compute` never panics. Invalid input comes back as a status code
+- TypeScript runs with `strict` plus `noUncheckedIndexedAccess` and
+  `exactOptionalPropertyTypes`. ESLint runs the type-aware `strictTypeChecked` set
+- JSON and CSV read from outside are checked field by field, and anything bad falls back to
+  a default
+- A task with nobody assigned is not quietly pushed onto someone; it is collected under an
+  "unassigned" placeholder person, and shown as such
+- Japanese public holidays, including equinoxes from an approximation formula, are pinned
+  against the published dates by a test
 
-## これから
+## What is next
 
-- AWS（API Gateway + Lambda + DynamoDB）への配置。構成と手順は `docs/AWS.md` に
-  書いてあり、`Store` の実装とハンドラの外側だけが残っています
-- タスク間相関（単一ファクター・ガウシアンコピュラ）。ABI には場所を確保済み
-- [Kani](https://model-checking.github.io/kani/) による有界モデル検査と、
-  不変条件 ⇔ 検証手段の追跡表（`docs/VERIFICATION.md`）
-- `cargo miri` で FFI 層の未定義動作検査
-- タグ push で `dist/index.html` を Release に添付
+- Deploying to AWS (API Gateway + Lambda + DynamoDB). The design and the steps are written
+  up in `docs/AWS.md`; what is left is the `Store` implementation and the outer handler
+- Correlation between tasks (a single-factor Gaussian copula). The ABI has room reserved
+- Bounded model checking with [Kani](https://model-checking.github.io/kani/), and a table
+  tracing each invariant to how it is checked (`docs/VERIFICATION.md`)
+- `cargo miri` to check the FFI layer for undefined behaviour
+- Attaching `dist/app.html` to a Release on tag push
 
-## ライセンス
+## License
 
 MIT

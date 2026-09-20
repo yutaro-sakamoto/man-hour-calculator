@@ -1,7 +1,7 @@
 # サーバを建てる
 
 複数人で使うときだけ必要。**1 人で使うなら建てなくてよい** —
-`dist/index.html` をブラウザで開けば、同じものがオフラインで動く。
+`dist/app.html` をブラウザで開けば、同じものがオフラインで動く。
 
 ## 何が要るか
 
@@ -28,7 +28,7 @@ cargo build --profile server -p mhc-server
 ブラウザで `http://127.0.0.1:8080` を開けば画面が出る。
 
 > 画面を埋め込むには、サーバを組み立てる**前に** `cargo xtask build` を
-> 走らせて `dist/index.html` を作っておく。無いまま組み立てると、
+> 走らせて `dist/app.html` を作っておく。無いまま組み立てると、
 > API は動くが画面の代わりに案内ページが出る。
 
 ## 起動のしかた
@@ -39,7 +39,7 @@ mhc-server --listen 0.0.0.0:8080                  # 他の端末からも繋ぐ
 mhc-server --db postgres://user:pw@host/mhc       # PostgreSQL に保存する
 mhc-server --auth header --auth-header X-Forwarded-User   # SSO の後ろに置く
 mhc-server --auth none                            # 手元で試すときだけ
-mhc-server --ui ./dist/index.html                 # 埋め込みではなくファイルを配る
+mhc-server --ui ./dist/app.html                   # 埋め込みではなくファイルを配る
 mhc-server --allow-origin https://example.github.io       # 別の場所の画面から呼ぶ
 ```
 

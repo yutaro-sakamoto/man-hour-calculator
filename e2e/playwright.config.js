@@ -1,4 +1,4 @@
-// dist/index.html を file:// から直接開いて検証する。
+// dist/app.html (道具そのもの) を file:// から直接開いて検証する。
 // http サーバを立てないのは、「HTML をダブルクリックすれば動く」という
 // このアプリの前提そのものを毎回テストで確かめるため。
 const { defineConfig } = require("@playwright/test");

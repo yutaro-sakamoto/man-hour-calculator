@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Man-hour Calculator</title>
+    <meta
+      name="description"
+      content="Turn three-point estimates into a probability distribution of total effort and a finish date. Rust compiled to WebAssembly, in a single HTML file."
+    />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --page: #f9f9f7;
+        --surface: #fcfcfb;
+        --surface-sunken: #f2f1ed;
+        --ink: #0b0b0b;
+        --ink-secondary: #52514e;
+        --ink-muted: #898781;
+        --border: rgba(11, 11, 11, 0.1);
+        --grid: #e1e0d9;
+        --series: #2a78d6;
+        --warning: #fab219;
+        --radius: 10px;
+        --font: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --page: #0d0d0d;
+          --surface: #1a1a19;
+          --surface-sunken: #232322;
+          --ink: #ffffff;
+          --ink-secondary: #c3c2b7;
+          --ink-muted: #898781;
+          --border: rgba(255, 255, 255, 0.1);
+          --grid: #2c2c2a;
+          --series: #3987e5;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--ink);
+        font-family: var(--font);
+        font-size: 16px;
+        line-height: 1.7;
+      }
+      .wrap {
+        max-width: 880px;
+        margin: 0 auto;
+        padding: 0 16px 64px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 20px 0 8px;
+        flex-wrap: wrap;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0;
+        letter-spacing: -0.01em;
+      }
+      /* 言語で入れ替わるので、片方だけが並びに効くようにする。 */
+      body[data-lang="en"] h1[lang="ja"],
+      body[data-lang="ja"] h1[lang="en"] {
+        display: none;
+      }
+      .spacer {
+        flex: 1 1 auto;
+      }
+      .lang-toggle {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+      .lang-toggle button {
+        border: 0;
+        background: none;
+        color: var(--ink-secondary);
+        font: inherit;
+        font-size: 13px;
+        padding: 4px 14px;
+        cursor: pointer;
+      }
+      .lang-toggle button[aria-pressed="true"] {
+        background: var(--series);
+        color: #fff;
+      }
+
+      /* 開発中であることの断り。目立つが、読み飛ばせない邪魔はしない。 */
+      .notice {
+        border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--border));
+        background: color-mix(in srgb, var(--warning) 14%, transparent);
+        border-radius: var(--radius);
+        padding: 10px 14px;
+        margin: 12px 0 0;
+        font-size: 14px;
+      }
+      .notice strong {
+        margin-right: 6px;
+      }
+
+      .lead {
+        font-size: 19px;
+        line-height: 1.6;
+        margin: 22px 0 6px;
+      }
+      .sub {
+        color: var(--ink-secondary);
+        margin: 0 0 22px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .button {
+        display: inline-block;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--ink);
+        font: inherit;
+        font-weight: 600;
+        padding: 10px 20px;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .button.primary {
+        background: var(--series);
+        border-color: transparent;
+        color: #fff;
+      }
+      .button:hover {
+        filter: brightness(0.97);
+      }
+      .caveat {
+        font-size: 13px;
+        color: var(--ink-secondary);
+        margin: 10px 0 0;
+      }
+
+      h2 {
+        font-size: 14px;
+        font-weight: 650;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        color: var(--ink-secondary);
+        margin: 40px 0 12px;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 12px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 14px 16px 16px;
+      }
+      .card h3 {
+        font-size: 15px;
+        margin: 0 0 6px;
+      }
+      .card p {
+        margin: 0;
+        font-size: 14px;
+        color: var(--ink-secondary);
+      }
+
+      pre {
+        background: var(--surface-sunken);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px 16px;
+        overflow-x: auto;
+        font-size: 13px;
+      }
+      code {
+        font-family: ui-monospace, "SFMono-Regular", "Consolas", monospace;
+      }
+      a {
+        color: var(--series);
+      }
+      footer {
+        margin-top: 44px;
+        padding-top: 16px;
+        border-top: 1px solid var(--grid);
+        font-size: 13px;
+        color: var(--ink-muted);
+      }
+
+      /* 言語の切り替え。既定は英語で、JS が無くてもそのまま読める。 */
+      body[data-lang="en"] [lang="ja"],
+      body[data-lang="ja"] [lang="en"] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body data-lang="en">
+    <div class="wrap">
+      <header>
+        <h1 lang="en">Effort Estimator</h1>
+        <h1 lang="ja">工数見積もり</h1>
+        <span class="spacer"></span>
+        <div class="lang-toggle" role="group" aria-label="Language">
+          <button type="button" data-set-lang="en" aria-pressed="true">English</button>
+          <button type="button" data-set-lang="ja" aria-pressed="false">日本語</button>
+        </div>
+      </header>
+
+      <p class="notice" lang="en">
+        <strong>Work in progress.</strong> This project is still under development. Things move
+        around, saved files may stop loading, and nothing here is ready to rely on.
+      </p>
+      <p class="notice" lang="ja">
+        <strong>開発中です。</strong>
+        このプロジェクトはまだ作っている途中です。作りが変わることも、保存したファイルが読めなくなることもあります。
+        そのまま業務で頼れるものではありません。
+      </p>
+
+      <p class="lead" lang="en">
+        Turns three-point estimates into a probability distribution of total effort — and a date the
+        work is likely to finish.
+      </p>
+      <p class="lead" lang="ja">
+        3 点見積もりから、総工数の確率分布と、仕事が終わりそうな日を求めます。
+      </p>
+      <p class="sub" lang="en">
+        The computation core is Rust compiled to WebAssembly. The whole tool is one HTML file that
+        works offline.
+      </p>
+      <p class="sub" lang="ja">
+        計算コアは Rust を WebAssembly にしたもの。ツール全体が 1 枚の HTML
+        で、オフラインでも動きます。
+      </p>
+
+      <div class="actions">
+        <a class="button primary" href="app.html" lang="en">Try it now</a>
+        <a class="button primary" href="app.html" lang="ja">すぐに試す</a>
+        <a class="button" href="app.html" download="man-hour-calculator.html" lang="en"
+          >Download the file</a
+        >
+        <a class="button" href="app.html" download="man-hour-calculator.html" lang="ja"
+          >ファイルを保存する</a
+        >
+        <a class="button" href="https://github.com/yutaro-sakamoto/man-hour-calculator" lang="en"
+          >Source</a
+        >
+        <a class="button" href="https://github.com/yutaro-sakamoto/man-hour-calculator" lang="ja"
+          >ソース</a
+        >
+      </div>
+
+      <p class="caveat" lang="en">
+        This opens the <strong>local version</strong>. Everything runs in your browser and stays
+        there — no account, no server, no network requests. What you enter is kept in this browser's
+        storage, so it is gone if you clear site data or switch devices. Use the file export to keep
+        a copy. To share work across people, run the server (below).
+      </p>
+      <p class="caveat" lang="ja">
+        開くのは<strong>ローカル版</strong>です。すべてブラウザのなかで動き、外には出ません
+        (アカウントもサーバも通信もありません)。入力した内容はこのブラウザに保存されるので、
+        サイトデータを消したり別の端末に移ったりすると無くなります。残したいときはファイルに書き出してください。
+        複数人で共有するにはサーバを建てます (下)。
+      </p>
+
+      <h2 lang="en">What it does</h2>
+      <h2 lang="ja">できること</h2>
+      <div class="cards">
+        <div class="card">
+          <h3 lang="en">Distribution, not a single number</h3>
+          <h3 lang="ja">1 つの数字ではなく分布</h3>
+          <p lang="en">
+            Enter minimum / most likely / maximum per task. Two independent engines — Monte Carlo
+            and numeric convolution — compute the total and check each other.
+          </p>
+          <p lang="ja">
+            タスクごとに最小・最可能・最大を入れます。モンテカルロと数値畳み込みという 2
+            つのエンジンが総工数を求め、互いの答え合わせをします。
+          </p>
+        </div>
+        <div class="card">
+          <h3 lang="en">Effort turned into dates</h3>
+          <h3 lang="ja">工数を日付に</h3>
+          <p lang="en">
+            People have their own working hours, holidays and meetings. The calendar turns effort
+            into "who finishes what, on which day, with what probability".
+          </p>
+          <p lang="ja">
+            人ごとに稼働時間・休日・予定があります。カレンダーが工数を「誰の何が、何月何日に、
+            どれくらいの確からしさで終わるか」に変えます。
+          </p>
+        </div>
+        <div class="card">
+          <h3 lang="en">Actuals fold back in</h3>
+          <h3 lang="ja">実績を織り込む</h3>
+          <p lang="en">
+            Start dates, progress and completion dates update the forecast. Progress shortens what
+            is left; falling behind shows up as more total effort.
+          </p>
+          <p lang="ja">
+            着手日・進捗率・完了日が見通しを更新します。進んだぶん残りは減り、遅れているぶん総工数は増えます。
+          </p>
+        </div>
+        <div class="card">
+          <h3 lang="en">Projects, people and comments</h3>
+          <h3 lang="ja">プロジェクト・人・コメント</h3>
+          <p lang="en">
+            Several projects at once, with groups and per-user permissions. Comments in Markdown on
+            projects and tasks — people with view-only access can write them too.
+          </p>
+          <p lang="ja">
+            複数のプロジェクトを、グループとユーザごとの権限つきで扱えます。プロジェクトとタスクには
+            Markdown でコメントを書けます (閲覧のみの人も書けます)。
+          </p>
+        </div>
+      </div>
+
+      <h2 lang="en">For a team</h2>
+      <h2 lang="ja">複数人で使う</h2>
+      <p lang="en">
+        One binary. SQLite and the web UI are inside it, so there is no database to set up and no
+        web server to run beside it.
+      </p>
+      <p lang="ja">
+        バイナリ 1 つです。SQLite も画面も中に入っているので、データベースを用意する必要も、 Web
+        サーバを別に立てる必要もありません。
+      </p>
+      <pre><code>cargo xtask build
+cargo build --profile server -p mhc-server
+./target/server/mhc-server</code></pre>
+      <p lang="en">
+        PostgreSQL works too. See
+        <a href="https://github.com/yutaro-sakamoto/man-hour-calculator/blob/main/docs/SERVER.md"
+          >SERVER.md</a
+        >.
+      </p>
+      <p lang="ja">
+        PostgreSQL にも対応しています。
+        <a href="https://github.com/yutaro-sakamoto/man-hour-calculator/blob/main/docs/SERVER.md"
+          >SERVER.md</a
+        >
+        を参照してください。
+      </p>
+
+      <footer>
+        <span lang="en"
+          >MIT licensed ·
+          <a href="https://github.com/yutaro-sakamoto/man-hour-calculator">GitHub</a> ·
+          <a href="https://github.com/yutaro-sakamoto/man-hour-calculator/blob/main/README.md"
+            >README</a
+          ></span
+        >
+        <span lang="ja"
+          >MIT ライセンス ·
+          <a href="https://github.com/yutaro-sakamoto/man-hour-calculator">GitHub</a> ·
+          <a href="https://github.com/yutaro-sakamoto/man-hour-calculator/blob/main/README_JP.md"
+            >README (日本語)</a
+          ></span
+        >
+      </footer>
+    </div>
+
+    <script>
+      (function () {
+        var KEY = "mhc.landing.lang";
+        var body = document.body;
+        var buttons = document.querySelectorAll("[data-set-lang]");
+
+        function apply(lang) {
+          body.dataset.lang = lang;
+          // 読み上げソフトや辞書が正しい言語で扱えるように書き戻す。
+          document.documentElement.lang = lang;
+          for (var i = 0; i < buttons.length; i++) {
+            var button = buttons[i];
+            button.setAttribute("aria-pressed", button.dataset.setLang === lang ? "true" : "false");
+          }
+        }
+
+        for (var i = 0; i < buttons.length; i++) {
+          buttons[i].addEventListener("click", function (event) {
+            var lang = event.currentTarget.dataset.setLang;
+            apply(lang);
+            try {
+              localStorage.setItem(KEY, lang);
+            } catch (e) {
+              /* 保存できない設定でも切り替えは効く */
+            }
+          });
+        }
+
+        // 既定は英語。前に選んでいればそれを使う。
+        try {
+          var saved = localStorage.getItem(KEY);
+          if (saved === "ja" || saved === "en") apply(saved);
+        } catch (e) {
+          /* 読めなくても既定のままで動く */
+        }
+      })();
+    </script>
+  </body>
+</html>

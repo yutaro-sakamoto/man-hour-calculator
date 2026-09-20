@@ -2,7 +2,7 @@
   "name": "mhc-e2e",
   "private": true,
   "version": "0.1.0",
-  "description": "dist/index.html を file:// から開いて検証する E2E テスト",
+  "description": "dist/app.html を file:// から開いて検証する E2E テスト",
   "scripts": {
     "test": "playwright test"
   },

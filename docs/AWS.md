@@ -150,7 +150,8 @@ impl DynamoStore {
 
 ## 静的ファイル
 
-`dist/index.html` を S3 に置き、CloudFront から配る。ファイルは 1 つだけ。
+`dist/index.html` (紹介ページ) と `dist/app.html` (道具) を S3 に置き、
+CloudFront から配る。
 
 - `index.html` は `Cache-Control: no-cache` (中身の更新をすぐ届けるため)
 - `/v1/*` は API Gateway に向ける (オリジンを分ける)
@@ -197,4 +198,4 @@ API の外に置いておきたいため。
    `ROUTES` をそのまま使う
 4. テーブルと GSI を作る (CDK か Terraform)
 5. `crates/server/tests/api.rs` と同じ筋書きを DynamoDB Local に対して回す
-6. S3 + CloudFront に `dist/index.html` を置く
+6. S3 + CloudFront に `dist/` を置く
