@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    /* 相対インポートに .ts を付けて書く。Node の ESM 解決と同じ形なので、
+       node --test で素の TypeScript をそのまま実行できる。 */
+    "allowImportingTsExtensions": true,
+
+    /* 型の厳しさはできるだけ上げる。バンドルするだけで実行時の
+       型チェックが無いぶん、静的に取れるものはすべて取っておきたい。 */
+    "strict": true,
+    /* 配列・TypedArray の添字アクセスを `T | undefined` にする。WASM から
+       読んだバッファは長さが想定どおりとは限らないので、ここを曖昧にしない。 */
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": true,
+    "useUnknownInCatchVariables": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"]
+}

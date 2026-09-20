@@ -13,10 +13,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  NODE_VERSION: "22"
 
 jobs:
-  check:
-    name: fmt / clippy / test
+  rust:
+    name: rust — fmt / clippy / test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -36,8 +37,35 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-  wasm:
+  web:
+    name: web — format / lint / types / test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Prettier / ESLint (型情報つき) / tsc --noEmit / 単体テストを順に回す。
+      - name: Check
+        run: npm run check
+
+      # 依存の既知の脆弱性を落とす。開発依存だけなので moderate 以上を対象にする。
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+
+  build:
     name: build single-file HTML
+    needs: [rust, web]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,6 +74,12 @@ jobs:
         run: rustup show
 
       - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       # apt の binaryen は古く、rustc が既定で出す sign-ext 命令を検証で弾く。
       # バージョンを固定して公式リリースを使い、CI を再現可能にする。
@@ -61,8 +95,9 @@ jobs:
       - name: Check binaryen
         run: wasm-opt --version
 
-      # サイズ上限 (400 KiB) を超えたら xtask が失敗する。
-      # --require-wasm-opt は、最適化が静かに外れたまま配布物が出るのを防ぐ。
+      # xtask が web の依存取得とバンドルまで面倒を見る。
+      # サイズ上限 (400 KiB) を超えたら失敗する。--require-wasm-opt は、
+      # 最適化が静かに外れたまま配布物が出るのを防ぐ。
       - name: Build
         run: cargo xtask build --require-wasm-opt
 
@@ -74,7 +109,7 @@ jobs:
 
   e2e:
     name: end-to-end (file://)
-    needs: wasm
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -86,7 +121,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: e2e/package-lock.json
 

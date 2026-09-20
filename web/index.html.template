@@ -4,167 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="3点見積もりから総工数の確率分布を求める、単一HTMLのオフライン見積もりツール">
+<meta name="description" content="3点見積もりから総工数の確率分布と完了日を求める、単一HTMLのオフライン見積もりツール">
 <title>工数見積もり / Effort Estimator</title>
 <style>
 /*{{CSS}}*/
 </style>
 </head>
 <body>
-<div class="wrap">
-
-  <header>
-    <h1 data-i18n="app.title"></h1>
-    <p data-i18n="app.tagline"></p>
-    <div class="lang-toggle" role="group" aria-label="Language / 言語">
-      <button type="button" data-lang="ja" data-i18n="lang.ja"></button>
-      <button type="button" data-lang="en" data-i18n="lang.en"></button>
-    </div>
-  </header>
-
-  <!-- ===== タスク入力 ===== -->
-  <section>
-    <h2 data-i18n="tasks.heading"></h2>
-    <table id="task-table">
-      <thead>
-        <tr>
-          <th data-i18n="tasks.use"></th>
-          <th data-i18n="tasks.name"></th>
-          <th class="num" data-i18n="tasks.min"></th>
-          <th class="num" data-i18n="tasks.likely"></th>
-          <th class="num" data-i18n="tasks.max"></th>
-          <th><span class="visually-hidden" data-i18n="tasks.remove"></span></th>
-        </tr>
-      </thead>
-      <tbody id="task-body"></tbody>
-    </table>
-    <p class="empty" id="tasks-empty" data-i18n="tasks.empty" hidden></p>
-    <div class="row-actions">
-      <button type="button" id="add-row" class="primary" data-i18n="tasks.add"></button>
-      <button type="button" id="load-sample" data-i18n="tasks.sample"></button>
-      <button type="button" id="clear-all" data-i18n="tasks.clear"></button>
-    </div>
-    <p class="status" id="task-totals"></p>
-  </section>
-
-  <!-- ===== 設定 (以下のグラフをまとめてスコープする 1 本の行) ===== -->
-  <section>
-    <h2 data-i18n="settings.heading"></h2>
-    <div class="controls">
-      <label class="control">
-        <span data-i18n="settings.dist"></span>
-        <select id="dist">
-          <option value="0" data-i18n="settings.dist.pert"></option>
-          <option value="1" data-i18n="settings.dist.tri"></option>
-        </select>
-      </label>
-      <label class="control">
-        <span data-i18n="settings.lambda"></span>
-        <input type="number" id="lambda" value="4" min="0" max="100" step="0.5">
-      </label>
-      <label class="control">
-        <span data-i18n="settings.engine"></span>
-        <select id="engine">
-          <option value="0" data-i18n="settings.engine.mc"></option>
-          <option value="1" data-i18n="settings.engine.conv"></option>
-        </select>
-      </label>
-      <label class="control">
-        <span data-i18n="settings.iterations"></span>
-        <input type="number" id="iterations" value="100000" min="1" max="2000000" step="10000">
-      </label>
-      <label class="control">
-        <span data-i18n="settings.seed"></span>
-        <input type="number" id="seed" value="20250920" min="0" step="1">
-      </label>
-      <label class="control">
-        <span data-i18n="settings.bins"></span>
-        <input type="number" id="bins" value="48" min="4" max="512" step="4">
-      </label>
-      <label class="control">
-        <span data-i18n="settings.grid"></span>
-        <input type="number" id="grid" value="2048" min="16" max="16384" step="256">
-      </label>
-    </div>
-    <p class="status" id="engine-hint"></p>
-  </section>
-
-  <!-- ===== 結果 ===== -->
-  <section>
-    <h2 data-i18n="results.heading"></h2>
-    <p class="status" id="status"></p>
-
-    <div id="results" hidden>
-      <dl class="tiles" id="tiles"></dl>
-      <p class="chart-note" id="buffer-hint"></p>
-
-      <figure class="chart-box" style="margin:22px 0 0">
-        <canvas id="chart" tabindex="0" role="img" data-i18n-aria="chart.altHist"></canvas>
-        <div class="tooltip" id="chart-tooltip" role="status" aria-live="polite"></div>
-      </figure>
-      <p class="chart-note" style="margin-top:10px">
-        <span data-i18n="chart.histNote"></span> · <span data-i18n="chart.cdfNote"></span>
-      </p>
-
-      <details class="data-view">
-        <summary data-i18n="dataview.summary"></summary>
-        <div class="scroll">
-          <table>
-            <thead>
-              <tr>
-                <th class="num" data-i18n="dataview.range"></th>
-                <th class="num" data-i18n="dataview.prob"></th>
-                <th class="num" data-i18n="dataview.cum"></th>
-              </tr>
-            </thead>
-            <tbody id="data-body"></tbody>
-          </table>
-        </div>
-      </details>
-
-      <div class="probe">
-        <label class="control" for="probe-range">
-          <span data-i18n="probe.label"></span>
-        </label>
-        <div class="probe-row">
-          <input type="range" id="probe-range" min="0" max="1000" step="1" value="500">
-          <output id="probe-output" for="probe-range"></output>
-        </div>
-      </div>
-
-      <div class="pct-table">
-        <h3 class="chart-title" data-i18n="pct.heading"></h3>
-        <table>
-          <thead>
-            <tr>
-              <th data-i18n="pct.level"></th>
-              <th class="num" data-i18n="pct.value"></th>
-              <th data-i18n="pct.meaning"></th>
-            </tr>
-          </thead>
-          <tbody id="pct-body"></tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <footer>
-    <p data-i18n="footer.offline"></p>
-    <p data-i18n="footer.engine"></p>
-  </footer>
-
-</div>
+<noscript>
+  <p style="padding:24px;font-family:system-ui,sans-serif">
+    このページは JavaScript で動きます。有効にしてから開き直してください。<br>
+    This page needs JavaScript. Please enable it and reload.
+  </p>
+</noscript>
 
 <script>
 // ===== Rust コアを WebAssembly にビルドしたもの (base64 で同梱) =====
 // fetch() を使わないので file:// から開いてもそのまま動く。
 const WASM_BASE64 = "/*{{WASM_BASE64}}*/";
-</script>
-<script>
-/*{{I18N}}*/
-</script>
-<script>
-/*{{CHART_JS}}*/
 </script>
 <script>
 /*{{APP_JS}}*/

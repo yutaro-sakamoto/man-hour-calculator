@@ -1,0 +1,208 @@
+/**
+ * DOM を組み立てるための最小限のヘルパ。
+ *
+ * 画面は TypeScript から組み立てる。HTML テンプレートに `data-i18n` を
+ * 散らす方式だと、言語切り替えのたびに属性を舐め直すことになり、
+ * 動的に増える行との扱いも二重になるため。
+ */
+
+type Child = Node | string | number | null | false | undefined;
+
+interface Options {
+  class?: string;
+  text?: string;
+  html?: string;
+  title?: string;
+  id?: string;
+  attrs?: Record<string, string | number | boolean | null>;
+  dataset?: Record<string, string>;
+  style?: Partial<CSSStyleDeclaration>;
+  on?: Partial<{
+    [K in keyof HTMLElementEventMap]: (event: HTMLElementEventMap[K]) => void;
+  }>;
+}
+
+/** 要素を作る。 */
+export function h<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  options: Options = {},
+  children: Child[] = [],
+): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tag);
+  if (options.class !== undefined) element.className = options.class;
+  if (options.id !== undefined) element.id = options.id;
+  if (options.title !== undefined) element.title = options.title;
+  if (options.text !== undefined) element.textContent = options.text;
+  if (options.html !== undefined) element.innerHTML = options.html;
+
+  for (const [name, value] of Object.entries(options.attrs ?? {})) {
+    if (value === null || value === false) continue;
+    element.setAttribute(name, value === true ? "" : String(value));
+  }
+  for (const [name, value] of Object.entries(options.dataset ?? {})) {
+    element.dataset[name] = value;
+  }
+  Object.assign(element.style, options.style ?? {});
+  for (const [name, handler] of Object.entries(options.on ?? {})) {
+    element.addEventListener(name, handler as EventListener);
+  }
+  append(element, children);
+  return element;
+}
+
+export function append(parent: Node, children: Child[]): void {
+  for (const child of children) {
+    if (child === null || child === undefined || child === false) continue;
+    parent.appendChild(typeof child === "object" ? child : document.createTextNode(String(child)));
+  }
+}
+
+export function clear(element: Element): void {
+  element.replaceChildren();
+}
+
+/** 見出しつきのカード。 */
+export function card(title: string | null, children: Child[], extraClass = ""): HTMLElement {
+  return h("section", { class: `card ${extraClass}`.trim() }, [
+    title === null ? null : h("h2", { text: title }),
+    ...children,
+  ]);
+}
+
+/** ラベルつきの入力欄。 */
+export function field(label: string, control: HTMLElement, hint?: string): HTMLElement {
+  return h("label", { class: "field" }, [
+    h("span", { class: "field-label", text: label }),
+    control,
+    hint === undefined ? null : h("span", { class: "field-hint", text: hint }),
+  ]);
+}
+
+export function textInput(value: string, onInput: (value: string) => void, options: Options = {}) {
+  return h("input", {
+    ...options,
+    attrs: { type: "text", value, ...options.attrs },
+    on: {
+      input: (event) => {
+        onInput((event.target as HTMLInputElement).value);
+      },
+    },
+  });
+}
+
+export function numberInput(
+  value: number | string,
+  onChange: (value: string) => void,
+  options: Options = {},
+) {
+  return h("input", {
+    ...options,
+    class: `num ${options.class ?? ""}`.trim(),
+    attrs: { type: "number", value: String(value), ...options.attrs },
+    on: {
+      input: (event) => {
+        onChange((event.target as HTMLInputElement).value);
+      },
+    },
+  });
+}
+
+export function dateInput(
+  value: string | null,
+  onChange: (value: string | null) => void,
+  options: Options = {},
+) {
+  return h("input", {
+    ...options,
+    attrs: { type: "date", value: value ?? "", ...options.attrs },
+    on: {
+      change: (event) => {
+        const next = (event.target as HTMLInputElement).value;
+        onChange(next === "" ? null : next);
+      },
+    },
+  });
+}
+
+export function checkbox(
+  checked: boolean,
+  onChange: (checked: boolean) => void,
+  options: Options = {},
+) {
+  return h("input", {
+    ...options,
+    attrs: { type: "checkbox", ...options.attrs, checked },
+    on: {
+      change: (event) => {
+        onChange((event.target as HTMLInputElement).checked);
+      },
+    },
+  });
+}
+
+export function select<T extends string>(
+  value: T,
+  choices: readonly { value: T; label: string }[],
+  onChange: (value: T) => void,
+  options: Options = {},
+): HTMLSelectElement {
+  const element = h(
+    "select",
+    {
+      ...options,
+      on: {
+        change: (event) => {
+          onChange((event.target as HTMLSelectElement).value as T);
+        },
+      },
+    },
+    choices.map((choice) =>
+      h("option", {
+        text: choice.label,
+        attrs: { value: choice.value, selected: choice.value === value },
+      }),
+    ),
+  );
+  element.value = value;
+  return element;
+}
+
+export function button(
+  label: string,
+  onClick: () => void,
+  options: Options = {},
+): HTMLButtonElement {
+  return h("button", {
+    ...options,
+    text: label,
+    attrs: { type: "button", ...options.attrs },
+    on: {
+      click: () => {
+        onClick();
+      },
+    },
+  });
+}
+
+/** アイコンだけのボタン。読み上げ用に必ずラベルを付ける。 */
+export function iconButton(
+  glyph: string,
+  label: string,
+  onClick: () => void,
+  disabled = false,
+): HTMLButtonElement {
+  return button(glyph, onClick, {
+    class: "icon",
+    title: label,
+    attrs: { "aria-label": label, disabled },
+  });
+}
+
+/** 表のヘッダ行を作る。 */
+export function headerRow(cells: { label: string; class?: string }[]): HTMLTableRowElement {
+  return h(
+    "tr",
+    {},
+    cells.map((cell) => h("th", { text: cell.label, class: cell.class ?? "" })),
+  );
+}

@@ -2,10 +2,11 @@
 //!
 //! やることは 4 つだけ:
 //!
-//! 1. `mhc-wasm` を `wasm32-unknown-unknown` 向けにビルドする
-//! 2. `wasm-opt` があればサイズ最適化をかける
-//! 3. `.wasm` を base64 に変換する
-//! 4. `web/` のテンプレートに CSS・JS・base64 を流し込んで 1 枚の HTML にする
+//! 1. `web/` の TypeScript を esbuild で 1 本の JS と 1 枚の CSS にまとめる
+//! 2. `mhc-wasm` を `wasm32-unknown-unknown` 向けにビルドする
+//! 3. `wasm-opt` があればサイズ最適化をかける
+//! 4. `.wasm` を base64 に変換する
+//! 5. `web/` のテンプレートに CSS・JS・base64 を流し込んで 1 枚の HTML にする
 //!
 //! WASM を base64 で埋め込むのは、`fetch()` を使わずに済ませるため。
 //! `file://` で開いたページからの `fetch()` は CORS で弾かれるので、
@@ -19,12 +20,10 @@ use std::process::Command;
 /// 生成する HTML の上限サイズ。オフライン配布物として現実的な大きさに保つための歯止め。
 const SIZE_BUDGET_BYTES: usize = 400 * 1024;
 
-/// テンプレート中の差し込み位置と、対応する `web/` 配下のファイル。
-const PARTS: [(&str, &str); 4] = [
-    ("/*{{CSS}}*/", "style.css"),
-    ("/*{{I18N}}*/", "i18n.js"),
-    ("/*{{CHART_JS}}*/", "chart.js"),
-    ("/*{{APP_JS}}*/", "app.js"),
+/// テンプレート中の差し込み位置と、対応する `web/` 配下のビルド成果物。
+const PARTS: [(&str, &str); 2] = [
+    ("/*{{CSS}}*/", "dist/bundle.css"),
+    ("/*{{APP_JS}}*/", "dist/bundle.js"),
 ];
 
 const WASM_PLACEHOLDER: &str = "/*{{WASM_BASE64}}*/";
@@ -61,6 +60,8 @@ struct Options {
 fn build(options: Options) -> Result<(), String> {
     let root = workspace_root();
     let profile = if options.release { "release" } else { "debug" };
+
+    build_web(&root)?;
 
     println!("==> mhc-wasm を wasm32-unknown-unknown 向けにビルド ({profile})");
     let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
@@ -101,7 +102,7 @@ fn build(options: Options) -> Result<(), String> {
         if !html.contains(placeholder) {
             return Err(format!("テンプレートに {placeholder} が見つかりません"));
         }
-        html = html.replace(placeholder, &content);
+        html = html.replace(placeholder, &escape_for_inline_script(&content));
     }
     if !html.contains(WASM_PLACEHOLDER) {
         return Err(format!(
@@ -129,6 +130,43 @@ fn build(options: Options) -> Result<(), String> {
         (SIZE_BUDGET_BYTES - size) / 1024
     );
     Ok(())
+}
+
+/// `web/` の TypeScript をバンドルする。
+///
+/// 依存が入っていなければ `npm ci` から走らせる。ビルドに Node が要るのは
+/// フロントを TypeScript で書いているためで、配布物そのものには影響しない
+/// (出力は普通の JS と CSS)。
+fn build_web(root: &Path) -> Result<(), String> {
+    let web = root.join("web");
+    if !web.join("node_modules").exists() {
+        println!("==> web の依存を取得 (npm ci)");
+        run_npm(&web, &["ci"])?;
+    }
+    println!("==> web の TypeScript をバンドル (esbuild)");
+    run_npm(&web, &["run", "build"])
+}
+
+fn run_npm(dir: &Path, args: &[&str]) -> Result<(), String> {
+    let status = Command::new(npm_command())
+        .current_dir(dir)
+        .args(args)
+        .status()
+        .map_err(|e| format!("npm の起動に失敗しました ({e})。Node.js が必要です"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("npm {} が失敗しました", args.join(" ")))
+    }
+}
+
+/// Windows では `npm.cmd` を呼ぶ必要がある。
+fn npm_command() -> &'static str {
+    if cfg!(windows) {
+        "npm.cmd"
+    } else {
+        "npm"
+    }
 }
 
 /// `wasm-opt` があればサイズ最適化をかけ、使うべき `.wasm` のパスを返す。
@@ -165,6 +203,15 @@ fn optimize(wasm: &Path, require: bool) -> Result<PathBuf, String> {
     }
     println!("==> {reason}。最適化を省略します (binaryen を入れると小さくなります)");
     Ok(wasm.to_path_buf())
+}
+
+/// インライン `<script>` に流し込む前の逃がし処理。
+///
+/// 中身に `</script` が現れるとそこでタグが閉じてしまう。JavaScript では
+/// 文字列か正規表現リテラルの中にしか現れえず、`<\/script` と書いても同じ
+/// 文字列になるため、機械的に置き換えてよい (CSS には現れない)。
+fn escape_for_inline_script(content: &str) -> String {
+    content.replace("</script", "<\\/script")
 }
 
 fn read(path: &Path) -> Result<String, String> {

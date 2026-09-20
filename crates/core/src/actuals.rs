@@ -125,15 +125,6 @@ pub fn forecast(
 
     let spent = calendar.capacity_between(start, today);
 
-    // 着手日が未来など、まだ 1 秒も進んでいない場合。
-    if spent <= 0.0 && progress <= 0.0 {
-        return Forecast {
-            estimate: original,
-            spent: 0.0,
-            state: TaskState::NotStarted,
-        };
-    }
-
     // --- 進捗 100%: 完了日が未入力でも完了として扱う
     if progress >= 1.0 {
         let value = if spent > 0.0 {
@@ -145,6 +136,17 @@ pub fn forecast(
             estimate: point_mass(value, original),
             spent: value,
             state: TaskState::Done,
+        };
+    }
+
+    // 消化工数が 0 のときは、進捗率が入っていても実績から学べるものが無い。
+    // 着手日が基準日より後、といった入力で「タダで 25% 進んだ」= 総工数が
+    // 減った、と解釈してしまわないための歯止め。
+    if spent <= 0.0 {
+        return Forecast {
+            estimate: original,
+            spent: 0.0,
+            state: TaskState::NotStarted,
         };
     }
 
@@ -201,6 +203,22 @@ mod tests {
     fn a_task_with_no_actuals_keeps_its_estimate() {
         let original = est(5.0, 8.0, 20.0);
         let f = forecast(original, &Actual::default(), &calendar(), day(0));
+        assert_eq!(f.estimate, original);
+        assert_eq!(f.spent, 0.0);
+        assert_eq!(f.state, TaskState::NotStarted);
+    }
+
+    #[test]
+    fn progress_without_any_spent_effort_does_not_shrink_the_estimate() {
+        // 着手日が基準日より後なら消化工数は 0。そこに進捗率だけ入っていても、
+        // 「タダで進んだ」と解釈して見積もりを縮めてはいけない。
+        let original = est(5.0, 8.0, 20.0);
+        let actual = Actual {
+            start_day: Some(day(10)),
+            progress: 0.25,
+            end_day: None,
+        };
+        let f = forecast(original, &actual, &calendar(), day(0));
         assert_eq!(f.estimate, original);
         assert_eq!(f.spent, 0.0);
         assert_eq!(f.state, TaskState::NotStarted);

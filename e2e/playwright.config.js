@@ -13,7 +13,8 @@ module.exports = defineConfig({
   use: {
     browserName: "chromium",
     // 既定言語を固定する。実行環境の locale で初期表示が揺れないように。
-    locale: "en-US",
+    // サンプルデータのタスク名もこの言語で作られる。
+    locale: "ja-JP",
     viewport: { width: 1280, height: 900 },
     trace: process.env.CI ? "retain-on-failure" : "off",
   },
