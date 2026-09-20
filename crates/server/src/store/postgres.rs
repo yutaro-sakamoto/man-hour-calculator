@@ -11,8 +11,23 @@ use postgres::{Client, NoTls};
 use super::{Row, Sql, Value};
 
 pub struct PostgresConn {
-    client: Client,
+    /// 閉じるときに取り出すので `Option`。中身は必ず入っている。
+    client: Option<Client>,
     label: String,
+}
+
+/// 閉じるのも実行器の中ではできない。
+///
+/// `postgres::Client` は落とされるときにも自前の実行器を回して接続を
+/// 閉じる。サーバを止めるときにこれが非同期の文脈で走ると
+/// 「実行器の中で実行器は起こせない」と落ちるので、別のスレッドに
+/// 渡して、そこで落としてもらう。
+impl Drop for PostgresConn {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            std::thread::spawn(move || drop(client));
+        }
+    }
 }
 
 impl PostgresConn {
@@ -26,7 +41,7 @@ impl PostgresConn {
         let client = Client::connect(url, NoTls)
             .map_err(|e| ApiError::internal(format!("PostgreSQL に繋げません: {e}")))?;
         Ok(Self {
-            client,
+            client: Some(client),
             // 接続文字列にはパスワードが入っている。表に出すのはホストまで。
             label: redact(url),
         })
@@ -95,11 +110,20 @@ fn read(row: &postgres::Row, index: usize) -> ApiResult<Value> {
     Ok(value)
 }
 
+impl PostgresConn {
+    /// 接続を借りる。閉じたあとは触れない (実際には起きない)。
+    fn client(&mut self) -> ApiResult<&mut Client> {
+        self.client
+            .as_mut()
+            .ok_or_else(|| ApiError::internal("PostgreSQL の接続が閉じています"))
+    }
+}
+
 impl Sql for PostgresConn {
     fn execute(&mut self, sql: &str, params: &[Value]) -> ApiResult<()> {
         let bound = bind(params);
         let refs: Vec<&(dyn ToSql + Sync)> = bound.iter().map(AsRef::as_ref).collect();
-        self.client
+        self.client()?
             .execute(rewrite(sql).as_str(), refs.as_slice())
             .map(|_| ())
             .map_err(|e| ApiError::internal(format!("SQL に失敗しました: {e} ({sql})")))
@@ -109,7 +133,7 @@ impl Sql for PostgresConn {
         let bound = bind(params);
         let refs: Vec<&(dyn ToSql + Sync)> = bound.iter().map(AsRef::as_ref).collect();
         let rows = self
-            .client
+            .client()?
             .query(rewrite(sql).as_str(), refs.as_slice())
             .map_err(|e| ApiError::internal(format!("SQL に失敗しました: {e} ({sql})")))?;
 
