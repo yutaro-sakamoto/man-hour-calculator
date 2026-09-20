@@ -108,7 +108,7 @@ pub extern "C" fn abi_version() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mhc_core::abi::{self, Engine, RequestParams, Status, RESP_HEADER};
+    use mhc_core::abi::{Engine, Request, Status, TaskInput, RESP_HEADER};
 
     /// JS 側がやる手順をそのままネイティブで再現する。
     /// `cargo miri test` でこの経路の未定義動作を検査できる。
@@ -133,25 +133,32 @@ mod tests {
 
     #[test]
     fn a_full_round_trip_produces_a_valid_response() {
-        let req = abi::build_request(
-            RequestParams {
-                engine: Engine::Convolution,
-                iterations: 1_000,
-                n_bins: 40,
-                grid_points: 1024,
-                ..RequestParams::default()
-            },
-            &[(5.0, 8.0, 20.0), (2.0, 3.0, 5.0)],
-        );
-        let resp = round_trip(&req);
+        let request = Request {
+            engine: Engine::Convolution,
+            iterations: 1_000,
+            n_bins: 40,
+            grid_points: 1_024,
+            tasks: vec![
+                TaskInput::estimate_only(5.0, 8.0, 20.0),
+                TaskInput::estimate_only(2.0, 3.0, 5.0),
+            ],
+            ..Request::default()
+        };
+        let resp = round_trip(&request.encode());
         assert_eq!(resp[0], Status::Ok as u8 as f64);
+
         let n_bins = resp[2] as usize;
         let n_pct = resp[3] as usize;
         let n_tasks = resp[4] as usize;
-        assert_eq!(
-            resp.len(),
-            RESP_HEADER + n_bins + (n_bins + 1) + n_pct * 2 + n_tasks
-        );
+        let prefix_width = if resp[13] > 0.0 {
+            resp[13] as usize + 1
+        } else {
+            0
+        };
+        let n_days = resp[15] as usize;
+        let expected =
+            mhc_core::abi::response_offsets(n_bins, n_pct, n_tasks, prefix_width, n_days)[12];
+        assert_eq!(resp.len(), expected, "宣言長とバッファ長が一致しない");
     }
 
     #[test]

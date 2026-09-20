@@ -9,25 +9,64 @@
 
 use crate::dist::Sampler;
 use crate::empirical::EmpiricalDist;
+use crate::prefix::{EngineOutput, PrefixCdfs, PrefixSpec};
 use crate::rng::Rng;
 
 /// 総工数のモンテカルロ・シミュレーションを実行する。
 ///
 /// `iterations` が 0 の場合やタスクが空の場合は点質量を返す。
 pub fn simulate(samplers: &[Sampler], iterations: usize, seed: u64) -> EmpiricalDist {
+    run(samplers, iterations, seed, PrefixSpec::none()).total
+}
+
+/// 総工数に加えて、各タスクまでの累積工数の分布も求める。
+///
+/// 累積和は試行ごとにグリッドの添字を数えるだけなので、サンプルを
+/// タスク数ぶん保持する必要がなく、メモリはタスク数 × ビン数で収まる。
+pub fn run(samplers: &[Sampler], iterations: usize, seed: u64, spec: PrefixSpec) -> EngineOutput {
+    let mut prefix = PrefixCdfs::new(samplers.len(), spec);
+
     if iterations == 0 {
-        let total: f64 = samplers.iter().map(|s| s.estimate().likely()).sum();
-        return EmpiricalDist::point_mass(total);
+        let mut running = 0.0;
+        for (i, s) in samplers.iter().enumerate() {
+            running += s.estimate().likely();
+            let at = spec.bin_of(running);
+            prefix.set(i, &row_from_step(at, spec.bins));
+        }
+        return EngineOutput {
+            total: EmpiricalDist::point_mass(running),
+            prefix,
+        };
     }
+
+    let width = prefix.width();
+    let mut counts = vec![0u32; samplers.len() * width];
 
     let mut rng = Rng::new(seed);
     let mut totals = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let mut total = 0.0;
-        for s in samplers {
+        for (i, s) in samplers.iter().enumerate() {
             total += s.quantile(rng.next_u01());
+            if width > 0 {
+                counts[i * width + spec.bin_of(total)] += 1;
+            }
         }
         totals.push(total);
+    }
+
+    // 度数を累積して CDF にする。
+    if width > 0 {
+        let scale = 1.0 / iterations as f64;
+        let mut row = vec![0.0; width];
+        for i in 0..samplers.len() {
+            let mut running = 0u32;
+            for (slot, &count) in row.iter_mut().zip(&counts[i * width..(i + 1) * width]) {
+                running += count;
+                *slot = running as f64 * scale;
+            }
+            prefix.set(i, &row);
+        }
     }
 
     // 平均と標準偏差は 2 パスで求める (1 パスの二乗和は桁落ちしやすい)。
@@ -36,7 +75,17 @@ pub fn simulate(samplers: &[Sampler], iterations: usize, seed: u64) -> Empirical
     let variance = totals.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / n;
 
     totals.sort_unstable_by(f64::total_cmp);
-    EmpiricalDist::from_sorted_samples(totals, mean, variance.max(0.0).sqrt())
+    EngineOutput {
+        total: EmpiricalDist::from_sorted_samples(totals, mean, variance.max(0.0).sqrt()),
+        prefix,
+    }
+}
+
+/// 添字 `at` 以降が 1.0 になる階段状の CDF。確定値のタスク用。
+fn row_from_step(at: usize, bins: usize) -> Vec<f64> {
+    (0..=bins)
+        .map(|k| if k >= at { 1.0 } else { 0.0 })
+        .collect()
 }
 
 #[cfg(test)]

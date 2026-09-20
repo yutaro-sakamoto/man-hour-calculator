@@ -14,11 +14,15 @@
 #![forbid(unsafe_code)]
 
 pub mod abi;
+pub mod actuals;
+pub mod calendar;
 pub mod convolve;
+pub mod date;
 pub mod dist;
 pub mod empirical;
 pub mod estimate;
 pub mod montecarlo;
+pub mod prefix;
 pub mod rng;
 pub mod stats;
 
