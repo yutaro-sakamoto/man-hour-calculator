@@ -42,6 +42,13 @@ pub struct Cli {
     #[arg(long)]
     pub ui: Option<PathBuf>,
 
+    /// 別の場所に置いた画面から API を呼ぶことを許す (繰り返し指定できる)。
+    ///
+    /// 省略すると、**どこからも許さない**。サーバが自分で配る画面を
+    /// 開くぶんには同一オリジンなので、これは要らない。
+    #[arg(long = "allow-origin", value_name = "ORIGIN")]
+    pub allow_origins: Vec<String>,
+
     /// 最初に作る管理者の id。
     #[arg(long, default_value = "admin")]
     pub admin_id: String,
@@ -148,5 +155,21 @@ mod tests {
         assert_eq!(cli.auth, AuthKind::Token);
         assert_eq!(cli.listen.port(), 8080);
         assert!(cli.listen.ip().is_loopback(), "既定では外に出さない");
+        assert!(cli.allow_origins.is_empty(), "既定ではどこからも許さない");
+    }
+
+    #[test]
+    fn several_origins_can_be_allowed() {
+        let cli = Cli::parse_from([
+            "mhc-server",
+            "--allow-origin",
+            "https://a.example",
+            "--allow-origin",
+            "https://b.example",
+        ]);
+        assert_eq!(
+            cli.allow_origins,
+            ["https://a.example", "https://b.example"]
+        );
     }
 }

@@ -98,7 +98,7 @@ fn build(options: Options) -> Result<(), String> {
         .len();
     println!("    {} ({} KiB)", wasm_path.display(), raw_size / 1024);
 
-    let wasm_path = optimize(&wasm_path, options.require_wasm_opt)?;
+    let (wasm_path, optimized) = optimize(&wasm_path, options.require_wasm_opt)?;
     let wasm = std::fs::read(&wasm_path)
         .map_err(|e| format!("{} が読めません: {e}", wasm_path.display()))?;
     println!("==> WASM {} KiB を base64 に変換", wasm.len() / 1024);
@@ -125,6 +125,14 @@ fn build(options: Options) -> Result<(), String> {
 
     let size = html.len();
     println!("==> {} ({} KiB)", out.display(), size / 1024);
+
+    // 上限は**配るファイル**についての約束なので、最適化をかけたときだけ見る。
+    // 最適化を省いた手元のビルドで引っかかっても直しようがないし、
+    // 直せないものを止めても意味がない。CI は常に最適化をかけている。
+    if !optimized {
+        println!("    最適化を省いたので、サイズ上限は見ていません");
+        return Ok(());
+    }
     if size > SIZE_BUDGET_BYTES {
         return Err(format!(
             "サイズ上限を超えました: {} KiB > {} KiB",
@@ -186,7 +194,10 @@ fn npm_command() -> &'static str {
 ///
 /// 最適化は任意で、wasm-opt が無い環境でもビルドは通る。ただし `require` が
 /// 立っているとき (CI) は、最適化が静かに外れたまま配布物が出ないように失敗させる。
-fn optimize(wasm: &Path, require: bool) -> Result<PathBuf, String> {
+///
+/// 返すのは、使うべき `.wasm` と、**最適化をかけられたか**。後者はサイズ上限を
+/// 見るかどうかの判断に使う。
+fn optimize(wasm: &Path, require: bool) -> Result<(PathBuf, bool), String> {
     let optimized = wasm.with_extension("opt.wasm");
     let result = Command::new("wasm-opt")
         .args(["-Oz", "-all"])
@@ -199,7 +210,7 @@ fn optimize(wasm: &Path, require: bool) -> Result<PathBuf, String> {
         Ok(status) if status.success() => {
             let size = std::fs::metadata(&optimized).map(|m| m.len()).unwrap_or(0);
             println!("==> wasm-opt -Oz 適用後 {} KiB", size / 1024);
-            return Ok(optimized);
+            return Ok((optimized, true));
         }
         Ok(status) => format!("wasm-opt が失敗しました ({status})"),
         Err(_) => "wasm-opt が見つかりません".to_string(),
@@ -209,7 +220,7 @@ fn optimize(wasm: &Path, require: bool) -> Result<PathBuf, String> {
         return Err(format!("{reason} (--require-wasm-opt が指定されています)"));
     }
     println!("==> {reason}。最適化を省略します (binaryen を入れると小さくなります)");
-    Ok(wasm.to_path_buf())
+    Ok((wasm.to_path_buf(), false))
 }
 
 /// インライン `<script>` に流し込む前の逃がし処理。

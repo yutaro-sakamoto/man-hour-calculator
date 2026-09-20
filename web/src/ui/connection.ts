@@ -14,7 +14,11 @@ import { button, field, foldout, h, textInput } from "./dom.ts";
 
 export function renderConnection(state: AppState, actions: AppActions): HTMLElement {
   const saved = loadConnection();
-  let url = saved?.baseUrl ?? "";
+  // サーバが配っている画面なら、その出どころを既定にする。いま自分が開いて
+  // いる場所を打ち直させるのは無駄だし、同一オリジンなら確実に通る。
+  const servedFrom =
+    location.protocol === "http:" || location.protocol === "https:" ? location.origin : "";
+  let url = saved?.baseUrl ?? servedFrom;
   let token = saved?.token ?? "";
 
   const urlInput = textInput(
