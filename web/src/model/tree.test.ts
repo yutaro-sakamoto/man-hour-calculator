@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { createTask } from "./project.ts";
+import { at } from "../testing.ts";
 import {
   buildRows,
   collectGroups,
@@ -32,13 +33,6 @@ function build(spec: readonly [string, string | null, string?][]): Task[] {
 }
 
 const names = (tasks: readonly Task[]): string[] => tasks.map((task) => task.name);
-
-/** 添字で取り出す。無ければその場で落として、どこが欠けたか分かるようにする。 */
-function at<T>(items: readonly T[], index: number): T {
-  const value = items[index];
-  assert.ok(value, `添字 ${String(index)} の要素が無い`);
-  return value;
-}
 
 /** 設計 > (要件, 基本) / 実装 > (API, 画面) / テスト */
 const SAMPLE: [string, string | null, string?][] = [
