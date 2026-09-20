@@ -4,3 +4,8 @@ node_modules
 /web/dist
 /e2e/test-results
 /e2e/playwright-report
+
+# サーバを手元で動かしたときの保存先
+/mhc.db
+/mhc.db-shm
+/mhc.db-wal

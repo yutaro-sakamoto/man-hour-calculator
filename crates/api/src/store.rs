@@ -61,6 +61,62 @@ pub struct MemoryStore {
 }
 
 /// 現在の保存形式のバージョン。
+/// 借りた `Store` もそのまま `Store` として使える。
+///
+/// サーバは `RwLock` のなかに 1 つだけストアを持ち、リクエストごとに
+/// それを借りて [`crate::service::Service`] に渡す。`Service` は所有する
+/// 形になっているので、この実装が無いと毎回ストアを作り直すことになる。
+impl<T: Store + ?Sized> Store for &mut T {
+    fn users(&self) -> ApiResult<Vec<User>> {
+        (**self).users()
+    }
+    fn user(&self, id: &UserId) -> ApiResult<Option<User>> {
+        (**self).user(id)
+    }
+    fn put_user(&mut self, user: User) -> ApiResult<()> {
+        (**self).put_user(user)
+    }
+    fn remove_user(&mut self, id: &UserId) -> ApiResult<bool> {
+        (**self).remove_user(id)
+    }
+    fn user_groups(&self) -> ApiResult<Vec<UserGroup>> {
+        (**self).user_groups()
+    }
+    fn user_group(&self, id: &UserGroupId) -> ApiResult<Option<UserGroup>> {
+        (**self).user_group(id)
+    }
+    fn put_user_group(&mut self, group: UserGroup) -> ApiResult<()> {
+        (**self).put_user_group(group)
+    }
+    fn remove_user_group(&mut self, id: &UserGroupId) -> ApiResult<bool> {
+        (**self).remove_user_group(id)
+    }
+    fn project_groups(&self) -> ApiResult<Vec<ProjectGroup>> {
+        (**self).project_groups()
+    }
+    fn project_group(&self, id: &ProjectGroupId) -> ApiResult<Option<ProjectGroup>> {
+        (**self).project_group(id)
+    }
+    fn put_project_group(&mut self, group: ProjectGroup) -> ApiResult<()> {
+        (**self).put_project_group(group)
+    }
+    fn remove_project_group(&mut self, id: &ProjectGroupId) -> ApiResult<bool> {
+        (**self).remove_project_group(id)
+    }
+    fn project_metas(&self) -> ApiResult<Vec<ProjectMeta>> {
+        (**self).project_metas()
+    }
+    fn project(&self, id: &ProjectId) -> ApiResult<Option<Project>> {
+        (**self).project(id)
+    }
+    fn put_project(&mut self, project: Project) -> ApiResult<()> {
+        (**self).put_project(project)
+    }
+    fn remove_project(&mut self, id: &ProjectId) -> ApiResult<bool> {
+        (**self).remove_project(id)
+    }
+}
+
 pub const STORE_VERSION: u32 = 2;
 
 impl MemoryStore {

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/api", "crates/core", "crates/wasm", "crates/xtask"]
+members = ["crates/api", "crates/core", "crates/server", "crates/wasm", "crates/xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,4 +15,13 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
+strip = true
+
+# サーバは WASM とは事情が違う。数十 KiB を削るより、1 つのリクエストの
+# panic でプロセス全体が落ちないこと (unwind) と、ビルドの速さを取る。
+[profile.server]
+inherits = "release"
+panic = "unwind"
+opt-level = 2
+lto = "thin"
 strip = true

@@ -66,6 +66,93 @@ jobs:
       - name: Audit dependencies
         run: npm audit --audit-level=moderate
 
+  # PostgreSQL 版のストアは、本物の PostgreSQL が無いと検査できない。
+  # SQLite だけで通してしまうと、方言の食い違いに気づけないまま配ることになる。
+  postgres:
+    name: server — PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # この変数があるときだけ PostgreSQL 向けのテストが走る
+      # (手元では黙って飛ばす)。
+      - name: Test against PostgreSQL
+        env:
+          MHC_TEST_POSTGRES_URL: postgres://postgres:ci@localhost:5432/postgres
+        run: cargo test -p mhc-server
+
+  # 配るのはバイナリ 1 つ、という前提そのものを検査する。
+  # 画面も埋め込んだ状態で建てたいので、build の成果物を取ってから組み立てる。
+  server:
+    name: server — single binary
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+
+      - name: Build
+        run: cargo build --profile server -p mhc-server
+
+      # 起動 → 管理者とトークンが出る → API が答える → 画面が返る、を通しで見る。
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          ./target/server/mhc-server --db sqlite:/tmp/ci.db --listen 127.0.0.1:8080 \
+            > /tmp/server.log 2>&1 &
+          for _ in $(seq 30); do
+            curl -sf localhost:8080/healthz > /dev/null && break
+            sleep 1
+          done
+          cat /tmp/server.log
+          token=$(grep -oP 'トークン: \K[0-9a-f]{64}' /tmp/server.log)
+          test -n "$token"
+
+          # 応答はいったんファイルに落としてから調べる。
+          # curl をそのまま grep -q に繋ぐと、大きな本文のときに grep が先に
+          # 閉じて curl が「書けなかった」(23) と言って落ちる。
+          auth="Authorization: Bearer $token"
+
+          # 認証が要ること
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/v1/projects)" = 401
+          # トークンで通ること
+          curl -sf -H "$auth" -o /tmp/me.json localhost:8080/v1/me
+          grep -q '"systemRole":"admin"' /tmp/me.json
+          # 作って読み返せること
+          curl -sf -X POST -H "$auth" -H 'Content-Type: application/json' \
+            -d '{"id":"p1","name":"CI"}' -o /dev/null localhost:8080/v1/projects
+          curl -sf -H "$auth" -o /tmp/projects.json localhost:8080/v1/projects
+          grep -q '"name":"CI"' /tmp/projects.json
+          # 画面が同じバイナリから返ること (案内ページではなく本物)
+          curl -sf -o /tmp/ui.html localhost:8080/
+          grep -q '工数見積もり / Effort Estimator' /tmp/ui.html
+
   build:
     name: build single-file HTML
     needs: [rust, web]
@@ -99,8 +186,8 @@ jobs:
         run: wasm-opt --version
 
       # xtask が web の依存取得とバンドルまで面倒を見る。
-      # サイズ上限 (400 KiB) を超えたら失敗する。--require-wasm-opt は、
-      # 最適化が静かに外れたまま配布物が出るのを防ぐ。
+      # サイズ上限 (xtask の SIZE_BUDGET_BYTES) を超えたら失敗する。
+      # --require-wasm-opt は、最適化が静かに外れたまま配布物が出るのを防ぐ。
       - name: Build
         run: cargo xtask build --require-wasm-opt
 
