@@ -1,12 +1,24 @@
-//! `dist/index.html` を組み立てるビルドツール。
+//! 配るものを組み立てるビルドツール。
 //!
-//! やることは 4 つだけ:
+//! 出来上がるのは 2 つ。
+//!
+//! | ファイル | 中身 |
+//! |---|---|
+//! | `dist/app.html` | 道具そのもの。**これ 1 枚で動く** |
+//! | `dist/index.html` | 紹介ページ。GitHub Pages の入口 |
+//!
+//! 紹介ページを入口に置いているのは、いきなり道具が開くと「これは何なのか」
+//! 「どこまで信用してよいのか」が分からないため。道具は `app.html` に置き、
+//! 紹介ページのボタンから開く。
+//!
+//! やることは:
 //!
 //! 1. `web/` の TypeScript を esbuild で 1 本の JS と 1 枚の CSS にまとめる
 //! 2. `mhc-wasm` を `wasm32-unknown-unknown` 向けにビルドする
 //! 3. `wasm-opt` があればサイズ最適化をかける
 //! 4. `.wasm` を base64 に変換する
 //! 5. `web/` のテンプレートに CSS・JS・base64 を流し込んで 1 枚の HTML にする
+//! 6. 紹介ページをそのまま `dist/` に置く
 //!
 //! WASM を base64 で埋め込むのは、`fetch()` を使わずに済ませるため。
 //! `file://` で開いたページからの `fetch()` は CORS で弾かれるので、
@@ -120,7 +132,18 @@ fn build(options: Options) -> Result<(), String> {
 
     let dist = root.join("dist");
     std::fs::create_dir_all(&dist).map_err(|e| format!("dist/ を作れません: {e}"))?;
-    let out = dist.join("index.html");
+
+    // 紹介ページはそのまま置く。書き換えるものが無いので、組み立てはしない。
+    let landing = read(&root.join("web/landing.html"))?;
+    std::fs::write(dist.join("index.html"), &landing)
+        .map_err(|e| format!("紹介ページを書けません: {e}"))?;
+    println!(
+        "==> {} ({} KiB)",
+        dist.join("index.html").display(),
+        landing.len() / 1024
+    );
+
+    let out = dist.join("app.html");
     std::fs::write(&out, &html).map_err(|e| format!("{} を書けません: {e}", out.display()))?;
 
     let size = html.len();

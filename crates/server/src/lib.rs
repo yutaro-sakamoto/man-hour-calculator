@@ -27,7 +27,7 @@ pub mod config;
 pub mod http;
 pub mod store;
 
-/// 埋め込んである画面 (`dist/index.html`)。
+/// 埋め込んである画面 (`dist/app.html`)。
 ///
 /// `build.rs` がビルド時に取り込む。作っていなければ、作り方を書いた
 /// 案内ページが入る。**配るのはこのバイナリ 1 つで済む。**

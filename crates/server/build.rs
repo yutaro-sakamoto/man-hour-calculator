@@ -1,4 +1,4 @@
-//! `dist/index.html` をバイナリに取り込む。
+//! `dist/app.html` (道具そのもの) をバイナリに取り込む。
 //!
 //! 画面を別に配らなくて済むようにするため。まだ作っていなければ、
 //! 作り方を書いた案内ページを入れる (ビルドは止めない。サーバだけ先に
@@ -12,7 +12,7 @@ fn main() {
         .and_then(|p| p.parent())
         .expect("crates/server の 2 つ上がリポジトリの根")
         .to_path_buf();
-    let dist = root.join("dist/index.html");
+    let dist = root.join("dist/app.html");
     println!("cargo:rerun-if-changed={}", dist.display());
 
     let html = std::fs::read_to_string(&dist).unwrap_or_else(|_| PLACEHOLDER.to_string());

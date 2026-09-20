@@ -5,7 +5,7 @@ const { pathToFileURL } = require("url");
 const { test, expect } = require("@playwright/test");
 
 const PAGE_URL = pathToFileURL(
-  path.resolve(__dirname, "../../dist/index.html"),
+  path.resolve(__dirname, "../../dist/app.html"),
 ).href;
 
 /**
