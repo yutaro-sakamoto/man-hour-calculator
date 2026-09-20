@@ -12,6 +12,25 @@ export type DistId = 0 | 1;
 /** `YYYY-MM-DD` 形式の暦日。 */
 export type IsoDate = string;
 
+/** `HH:MM` 形式の時刻。 */
+export type TimeOfDay = string;
+
+/** 曜日ごとの稼働時間帯。`start === end` なら非稼働。 */
+export interface WorkWindow {
+  start: TimeOfDay;
+  end: TimeOfDay;
+}
+
+/** 稼働する人。 */
+export interface Member {
+  id: string;
+  name: string;
+  /** 日曜から土曜までの 7 件。 */
+  workdays: WorkWindow[];
+  /** 稼働日 1 日あたりの休憩分数。 */
+  breakMinutes: number;
+}
+
 export interface Task {
   id: string;
   name: string;
@@ -31,30 +50,40 @@ export interface Task {
   /** 進捗率 (0〜100)。 */
   progress: number;
   endDate: IsoDate | null;
+  /** 担当する人員の id。`null` なら未割当。 */
+  assigneeId: string | null;
 }
 
-/** 稼働に影響する予定。 */
+/** 繰り返しの間隔 (週)。`0` なら繰り返さない。 */
+export type RepeatWeeks = number;
+
+/** 稼働に影響する予定。複数人で共有されることがある。 */
 export interface CalendarEventItem {
   id: string;
   name: string;
   startDate: IsoDate;
   endDate: IsoDate;
-  /** 1 人あたり失われる時間。`null` は終日休み。 */
-  hours: number | null;
+  /** 開始・終了時刻。`null` なら終日。 */
+  startTime: TimeOfDay | null;
+  endTime: TimeOfDay | null;
+  /** 0 = 繰り返さない、1 = 毎週、2 = 隔週、4 = 4 週ごと。 */
+  repeatWeeks: RepeatWeeks;
+  /** 繰り返しの終了日。`null` なら期間いっぱい。 */
+  until: IsoDate | null;
+  /** 参加する人員の id。空なら全員が対象。 */
+  memberIds: string[];
 }
 
 export interface CalendarSettings {
   startDate: IsoDate;
-  /** 日曜〜土曜の稼働フラグ。 */
-  workdays: [boolean, boolean, boolean, boolean, boolean, boolean, boolean];
-  hoursPerDay: number;
+  /** 1 人日を何時間とみなすか。 */
   hoursPerPersonDay: number;
-  teamSize: number;
   useJapaneseHolidays: boolean;
   /** 何日先まで見るか。 */
   horizonDays: number;
+  members: Member[];
   events: CalendarEventItem[];
-  /** 週末・祝日でも稼働する日。 */
+  /** 週末・祝日でも全員が稼働する日。 */
   forcedWorkdays: IsoDate[];
   /** 進捗の基準日。 */
   today: IsoDate;
@@ -87,6 +116,8 @@ export interface TaskFilter {
   group: string;
   priority: Priority | "";
   state: TaskState | "";
+  /** 担当者の id。`"\u0000"` は未割当を表す。 */
+  assignee: string;
 }
 
 /** 表に出す列のまとまり。 */

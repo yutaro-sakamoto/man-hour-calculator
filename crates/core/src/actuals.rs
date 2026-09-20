@@ -171,21 +171,26 @@ mod tests {
     use super::*;
     use crate::calendar::{Calendar, CalendarConfig};
     use crate::date::days_from_civil;
+    use crate::member::MemberSchedule;
 
     const MONDAY: (i32, u32, u32) = (2026, 9, 21);
 
-    /// 月〜金・1 人日/日のまっさらなカレンダー。
+    /// 月〜金 9:00〜17:00 (= 1 人日/日) のまっさらなカレンダー。
     fn calendar() -> Calendar {
+        let mut start = [0; 7];
+        let mut end = [0; 7];
+        for weekday in 1..=5 {
+            start[weekday] = 9 * 60;
+            end[weekday] = 17 * 60;
+        }
         Calendar::build(
             &CalendarConfig {
                 start_day: days_from_civil(MONDAY.0, MONDAY.1, MONDAY.2),
                 horizon_days: 120,
-                weekday_mask: 0b0011_1110,
-                hours_per_day: 8.0,
                 hours_per_person_day: 8.0,
-                team_size: 1.0,
-                use_japanese_holidays: false,
             },
+            &MemberSchedule::new(start, end),
+            &[],
             &[],
             &[],
         )

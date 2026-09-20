@@ -25,6 +25,7 @@ const ja = {
   "file.autosaveOff": "自動保存できません (ブラウザの保存領域が使えません)",
 
   "tab.tasks": "タスク",
+  "tab.members": "人員",
   "tab.calendar": "カレンダー",
   "tab.distribution": "工数の分布",
   "tab.schedule": "スケジュール",
@@ -101,21 +102,16 @@ const ja = {
   "cal.start": "開始日",
   "cal.today": "基準日 (今日)",
   "cal.horizon": "計算する日数",
-  "cal.workdays": "稼働曜日",
-  "cal.hoursPerDay": "1 日の作業時間",
   "cal.hoursPerPersonDay": "1 人日の時間",
-  "cal.teamSize": "人数",
   "cal.useHolidays": "日本の祝日を休みにする",
-  "cal.capacityPerDay": "1 稼働日あたり {value} 人日",
+  "cal.capacityPerDay": "全員あわせて 1 日あたり {value} 人日",
   "cal.totalCapacity": "期間全体で {value} 人日",
   "cal.events": "予定",
   "cal.addEvent": "予定を追加",
   "cal.eventName": "内容",
   "cal.eventFrom": "開始",
   "cal.eventTo": "終了",
-  "cal.eventHours": "消費時間",
   "cal.allDay": "終日",
-  "cal.hoursUnit": "時間/日",
   "cal.removeEvent": "この予定を削除",
   "cal.noEvents": "予定はまだありません。会議や休暇を入れると、その分だけ日程が後ろにずれます。",
   "cal.monthView": "月表示",
@@ -221,6 +217,8 @@ const ja = {
   "error.5": "エンジンの指定が不正です。",
   "error.6": "相関つきの計算はまだ実装されていません。",
   "error.7": "カレンダーの設定が不正です。稼働時間や期間を確認してください。",
+  "error.8":
+    "人員の指定が不正です。1 人以上 30 人以下で、期間 × 人数が大きすぎないようにしてください。",
   "error.invalidRows": "{count} 件のタスクで見積もりが読めません。",
   "error.unknown": "未知のエラー (コード {code}) が発生しました。",
   "error.boot": "WASM の読み込みに失敗しました: {message}",
@@ -228,6 +226,47 @@ const ja = {
   "footer.offline":
     "このページは 1 枚の HTML で完結しており、外部への通信はありません。オフラインでもそのまま動きます。",
   "footer.engine": "計算コアは Rust を WebAssembly にビルドしたものです。",
+
+  "members.heading": "人員",
+  "members.add": "人員を追加",
+  "members.remove": "{name} を削除",
+  "members.name": "名前",
+  "members.schedule": "稼働時間",
+  "members.break": "休憩 (分)",
+  "members.weekly": "週 {value}",
+  "members.unassigned": "未割当",
+  "members.numbered": "人員 {index}",
+  "members.empty": "人員がいません。追加するとタスクを割り当てられます。",
+  "members.hint":
+    "曜日ごとに稼働時間帯を決めます。開始と終了が同じ曜日は休みです。休憩はその日から一律で差し引きます。",
+  "members.noCapacity": "稼働時間が 0 の人員がいます。その人のタスクは終わりません。",
+  "members.unassignedHint":
+    "担当者のいないタスクは「未割当」としてまとめ、既定の稼働時間で計算します。",
+  "members.tasks": "担当 {count} 件",
+  "members.copyFrom": "先頭の人員に揃える",
+
+  "col.assignee": "担当",
+  "filter.assignee": "担当者",
+
+  "cal.eventTime": "時刻",
+  "cal.repeat": "繰り返し",
+  "cal.repeat.none": "なし",
+  "cal.repeat.weekly": "毎週",
+  "cal.repeat.biweekly": "隔週",
+  "cal.repeat.fourWeekly": "4 週ごと",
+  "cal.until": "繰り返しの終了",
+  "cal.participants": "参加者",
+  "cal.allMembers": "全員",
+  "cal.memberView": "表示する人員",
+  "cal.eventHint":
+    "時刻は 5 分単位で指定できます。稼働時間帯と重なった分だけが工数から引かれます。",
+
+  "sched.memberCol": "人員",
+  "sched.byMember": "人員ごとの完了予測",
+  "sched.memberNote": "その人の担当ぶんがすべて終わる時期",
+
+  "tasks.assignHint":
+    "同じ担当者のタスクは上から順に、別の担当者のタスクは並行して進む前提で計算します。",
 
   "unit.days": "人日",
   "unit.hours": "時間",
@@ -258,6 +297,7 @@ const en: Dictionary = {
   "file.autosaveOff": "Cannot autosave (browser storage is unavailable)",
 
   "tab.tasks": "Tasks",
+  "tab.members": "People",
   "tab.calendar": "Calendar",
   "tab.distribution": "Effort",
   "tab.schedule": "Schedule",
@@ -335,21 +375,16 @@ const en: Dictionary = {
   "cal.start": "Start date",
   "cal.today": "Reference date (today)",
   "cal.horizon": "Days to project",
-  "cal.workdays": "Working days",
-  "cal.hoursPerDay": "Hours per day",
   "cal.hoursPerPersonDay": "Hours per person-day",
-  "cal.teamSize": "Team size",
   "cal.useHolidays": "Treat Japanese public holidays as days off",
-  "cal.capacityPerDay": "{value} person-days per working day",
+  "cal.capacityPerDay": "{value} person-days per day across everyone",
   "cal.totalCapacity": "{value} person-days over the whole range",
   "cal.events": "Events",
   "cal.addEvent": "Add event",
   "cal.eventName": "Description",
   "cal.eventFrom": "From",
   "cal.eventTo": "To",
-  "cal.eventHours": "Hours lost",
   "cal.allDay": "All day",
-  "cal.hoursUnit": "h/day",
   "cal.removeEvent": "Remove this event",
   "cal.noEvents":
     "No events yet. Meetings and time off push the schedule out by exactly that much.",
@@ -459,6 +494,8 @@ const en: Dictionary = {
   "error.5": "Unknown engine.",
   "error.6": "Correlated tasks are not implemented yet.",
   "error.7": "The calendar settings are invalid. Check the working hours and the range.",
+  "error.8":
+    "Invalid people setup — between 1 and 30, and the range times the headcount must not be too large.",
   "error.invalidRows": "{count} task(s) have estimates that cannot be read.",
   "error.unknown": "Unexpected error (code {code}).",
   "error.boot": "Failed to load the WASM module: {message}",
@@ -466,6 +503,47 @@ const en: Dictionary = {
   "footer.offline":
     "This page is a single self-contained HTML file. It makes no network requests and works offline.",
   "footer.engine": "The computation core is Rust compiled to WebAssembly.",
+
+  "members.heading": "People",
+  "members.add": "Add person",
+  "members.remove": "Remove {name}",
+  "members.name": "Name",
+  "members.schedule": "Working hours",
+  "members.break": "Break (min)",
+  "members.weekly": "{value} per week",
+  "members.unassigned": "Unassigned",
+  "members.numbered": "Person {index}",
+  "members.empty": "No people yet. Add one to start assigning tasks.",
+  "members.hint":
+    "Set working hours per weekday. A day whose start equals its end is a day off. The break is subtracted from every working day.",
+  "members.noCapacity": "Someone has no working hours at all — their tasks will never finish.",
+  "members.unassignedHint":
+    "Tasks without an assignee are pooled under “Unassigned” and use the default working hours.",
+  "members.tasks": "{count} task(s)",
+  "members.copyFrom": "Copy the first person’s hours",
+
+  "col.assignee": "Assignee",
+  "filter.assignee": "Assignee",
+
+  "cal.eventTime": "Time",
+  "cal.repeat": "Repeat",
+  "cal.repeat.none": "None",
+  "cal.repeat.weekly": "Weekly",
+  "cal.repeat.biweekly": "Every 2 weeks",
+  "cal.repeat.fourWeekly": "Every 4 weeks",
+  "cal.until": "Repeat until",
+  "cal.participants": "Attendees",
+  "cal.allMembers": "Everyone",
+  "cal.memberView": "Show",
+  "cal.eventHint":
+    "Times are in 5-minute steps. Only the part that overlaps working hours is taken out of the capacity.",
+
+  "sched.memberCol": "Person",
+  "sched.byMember": "Forecast per person",
+  "sched.memberNote": "When each person finishes everything assigned to them",
+
+  "tasks.assignHint":
+    "Tasks of the same person run top to bottom; different people work in parallel.",
 
   "unit.days": "person-days",
   "unit.hours": "hours",

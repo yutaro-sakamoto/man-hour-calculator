@@ -1,13 +1,15 @@
 /** プロジェクト (保存・読み込みの単位) の生成と検証。 */
 
-import { todayIso } from "../format.ts";
+import { nextWeekday, todayIso } from "../format.ts";
 import type {
   CalendarEventItem,
   CalendarSettings,
   ComputeSettings,
+  Member,
   Priority,
   Project,
   Task,
+  WorkWindow,
 } from "../types.ts";
 import { PRIORITIES } from "../types.ts";
 
@@ -38,6 +40,22 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     startDate: null,
     progress: 0,
     endDate: null,
+    assigneeId: null,
+    ...overrides,
+  };
+}
+
+/** 稼働しない曜日を表す時間帯。 */
+const OFF: WorkWindow = { start: "00:00", end: "00:00" };
+
+/** 月〜金 9:00〜18:00、休憩 60 分 (= 1 日 8 時間)。 */
+export function createMember(name: string, overrides: Partial<Member> = {}): Member {
+  const weekday: WorkWindow = { start: "09:00", end: "18:00" };
+  return {
+    id: newId(),
+    name,
+    workdays: [OFF, weekday, weekday, weekday, weekday, weekday, OFF],
+    breakMinutes: 60,
     ...overrides,
   };
 }
@@ -46,12 +64,10 @@ export function defaultCalendar(): CalendarSettings {
   const today = todayIso();
   return {
     startDate: today,
-    workdays: [false, true, true, true, true, true, false],
-    hoursPerDay: 8,
     hoursPerPersonDay: 8,
-    teamSize: 1,
     useJapaneseHolidays: true,
     horizonDays: 365,
+    members: [],
     events: [],
     forcedWorkdays: [],
     today,
@@ -87,6 +103,40 @@ export function sampleProject(lang: "ja" | "en"): Project {
   const label = (ja: string, en: string): string => (lang === "ja" ? ja : en);
   const project = emptyProject(label("サンプル案件", "Sample project"));
 
+  const alice = createMember(label("佐藤", "Alice"));
+  const bob = createMember(label("鈴木", "Bob"), {
+    // 時短勤務の例。9:00〜15:00 から休憩 45 分。
+    workdays: [OFF, ...Array.from({ length: 5 }, () => ({ start: "09:00", end: "15:00" })), OFF],
+    breakMinutes: 45,
+  });
+  project.calendar.members = [alice, bob];
+  // 予定は稼働日に置く。開始日が日曜だと毎週の定例が 1 度も当たらない。
+  const firstMonday = nextWeekday(project.calendar.startDate, 1);
+  project.calendar.events = [
+    {
+      id: newId(),
+      name: label("全体定例", "Team sync"),
+      startDate: firstMonday,
+      endDate: firstMonday,
+      startTime: "10:00",
+      endTime: "10:45",
+      repeatWeeks: 1,
+      until: null,
+      memberIds: [alice.id, bob.id],
+    },
+    {
+      id: newId(),
+      name: label("隔週の振り返り", "Biweekly retro"),
+      startDate: nextWeekday(project.calendar.startDate, 5),
+      endDate: nextWeekday(project.calendar.startDate, 5),
+      startTime: "16:00",
+      endTime: "17:00",
+      repeatWeeks: 2,
+      until: null,
+      memberIds: [alice.id, bob.id],
+    },
+  ];
+
   const design = createTask({
     name: label("設計フェーズ", "Design phase"),
     group: label("設計", "Design"),
@@ -107,6 +157,7 @@ export function sampleProject(lang: "ja" | "en"): Project {
       min: "5",
       likely: "8",
       max: "20",
+      assigneeId: alice.id,
     }),
     createTask({
       name: label("基本設計", "Architecture"),
@@ -115,6 +166,7 @@ export function sampleProject(lang: "ja" | "en"): Project {
       min: "3",
       likely: "5",
       max: "12",
+      assigneeId: bob.id,
     }),
     build,
     createTask({
@@ -125,6 +177,7 @@ export function sampleProject(lang: "ja" | "en"): Project {
       min: "2",
       likely: "3",
       max: "5",
+      assigneeId: alice.id,
     }),
     createTask({
       name: label("画面実装", "UI implementation"),
@@ -133,6 +186,7 @@ export function sampleProject(lang: "ja" | "en"): Project {
       min: "10",
       likely: "15",
       max: "40",
+      assigneeId: bob.id,
     }),
     createTask({
       name: label("バッチ実装", "Batch jobs"),
@@ -142,6 +196,7 @@ export function sampleProject(lang: "ja" | "en"): Project {
       min: "2",
       likely: "4",
       max: "9",
+      assigneeId: alice.id,
     }),
     createTask({
       name: label("テストとリリース", "Test and release"),
@@ -149,6 +204,7 @@ export function sampleProject(lang: "ja" | "en"): Project {
       min: "3",
       likely: "6",
       max: "14",
+      assigneeId: alice.id,
     }),
   ];
   return project;
@@ -190,7 +246,35 @@ function asNumericString(value: unknown, fallback: string): string {
   return fallback;
 }
 
-function normalizeTask(raw: unknown, knownIds: Set<string>): Task {
+function asTimeOfDay(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 24 || minutes > 59) return null;
+  return `${String(hours).padStart(2, "0")}:${match[2]}`;
+}
+
+function normalizeMember(raw: unknown): Member {
+  const record = asRecord(raw);
+  const base = createMember(asString(record.name));
+  const windows = record.workdays;
+  return {
+    id: asString(record.id) || base.id,
+    name: base.name,
+    workdays: base.workdays.map((fallback, index) => {
+      const entry = Array.isArray(windows) ? asRecord(windows[index]) : {};
+      return {
+        start: asTimeOfDay(entry.start) ?? fallback.start,
+        end: asTimeOfDay(entry.end) ?? fallback.end,
+      };
+    }),
+    breakMinutes: Math.min(1440, Math.max(0, asNumber(record.breakMinutes, base.breakMinutes))),
+  };
+}
+
+function normalizeTask(raw: unknown, knownIds: Set<string>, memberIds: Set<string>): Task {
   const record = asRecord(raw);
   const id = asString(record.id) || newId();
   const parentId = asString(record.parentId);
@@ -208,44 +292,54 @@ function normalizeTask(raw: unknown, knownIds: Set<string>): Task {
     startDate: asIsoDate(record.startDate),
     progress: Math.min(100, Math.max(0, asNumber(record.progress, 0))),
     endDate: asIsoDate(record.endDate),
+    assigneeId: memberIds.has(asString(record.assigneeId)) ? asString(record.assigneeId) : null,
   };
 }
 
-function normalizeEvent(raw: unknown): CalendarEventItem | null {
+function normalizeEvent(raw: unknown, memberIds: Set<string>): CalendarEventItem | null {
   const record = asRecord(raw);
   const startDate = asIsoDate(record.startDate);
   if (startDate === null) return null;
-  const hours = record.hours;
+  const members = record.memberIds;
+  const startTime = asTimeOfDay(record.startTime);
+  const endTime = asTimeOfDay(record.endTime);
   return {
     id: asString(record.id) || newId(),
     name: asString(record.name),
     startDate,
     endDate: asIsoDate(record.endDate) ?? startDate,
-    hours: typeof hours === "number" && Number.isFinite(hours) && hours >= 0 ? hours : null,
+    // 片方しか無い時刻指定は終日として扱う (稼働時間をまるごと潰す)。
+    startTime: endTime === null ? null : startTime,
+    endTime: startTime === null ? null : endTime,
+    repeatWeeks: Math.min(52, Math.max(0, Math.round(asNumber(record.repeatWeeks, 0)))),
+    until: asIsoDate(record.until),
+    memberIds: Array.isArray(members)
+      ? members.map((id) => asString(id)).filter((id) => memberIds.has(id))
+      : [],
   };
 }
 
 function normalizeCalendar(raw: unknown): CalendarSettings {
   const record = asRecord(raw);
   const base = defaultCalendar();
-  const workdays = record.workdays;
+  const rawMembers = Array.isArray(record.members) ? record.members : [];
+  const members = rawMembers.map(normalizeMember);
+  const memberIds = new Set(members.map((member) => member.id));
   const events = record.events;
   const forced = record.forcedWorkdays;
   return {
     startDate: asIsoDate(record.startDate) ?? base.startDate,
-    workdays: Array.isArray(workdays)
-      ? (base.workdays.map((on, i) => asBoolean(workdays[i], on)) as CalendarSettings["workdays"])
-      : base.workdays,
-    hoursPerDay: Math.max(0, asNumber(record.hoursPerDay, base.hoursPerDay)),
     hoursPerPersonDay: Math.max(0.1, asNumber(record.hoursPerPersonDay, base.hoursPerPersonDay)),
-    teamSize: Math.max(0, asNumber(record.teamSize, base.teamSize)),
     useJapaneseHolidays: asBoolean(record.useJapaneseHolidays, base.useJapaneseHolidays),
     horizonDays: Math.min(1830, Math.max(1, asNumber(record.horizonDays, base.horizonDays))),
+    members,
     events: Array.isArray(events)
-      ? events.map(normalizeEvent).filter((e): e is CalendarEventItem => e !== null)
+      ? events
+          .map((event) => normalizeEvent(event, memberIds))
+          .filter((event): event is CalendarEventItem => event !== null)
       : [],
     forcedWorkdays: Array.isArray(forced)
-      ? forced.map(asIsoDate).filter((d): d is string => d !== null)
+      ? forced.map((day) => asIsoDate(day)).filter((day): day is string => day !== null)
       : [],
     today: asIsoDate(record.today) ?? base.today,
   };
@@ -287,13 +381,15 @@ export function normalizeProject(raw: unknown): Project | null {
   const knownIds = new Set<string>(
     rawTasks.map((task) => asString(asRecord(task).id)).filter((id) => id !== ""),
   );
+  const calendar = normalizeCalendar(record.calendar);
+  const memberIds = new Set(calendar.members.map((member) => member.id));
   return {
     schema: SCHEMA,
     version: SCHEMA_VERSION,
     savedAt: asString(record.savedAt, new Date().toISOString()),
     name: asString(record.name, "project"),
-    tasks: rawTasks.map((task) => normalizeTask(task, knownIds)),
-    calendar: normalizeCalendar(record.calendar),
+    tasks: rawTasks.map((task) => normalizeTask(task, knownIds, memberIds)),
+    calendar,
     settings: normalizeSettings(record.settings),
   };
 }

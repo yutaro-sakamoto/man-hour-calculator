@@ -1,39 +1,47 @@
 //! JavaScript と WASM の間でやり取りするバッファの読み書き。
 //!
 //! リクエストもレスポンスも **要素がすべて `f64` の平坦な配列**で表す。
-//! 整数もフラグも日付も `f64` に載せる。こうしておくと JS 側は
+//! 整数もフラグも日付も時刻も `f64` に載せる。こうしておくと JS 側は
 //! `new Float64Array(memory.buffer, ptr, len)` ひとつで読み書きでき、
 //! 型混在によるオフセットずれやアラインメント違反が構造的に起きない。
 //!
-//! 日付は「1970-01-01 からの日数」で表し、未入力は `NaN` で示す。
+//! 日付は「1970-01-01 からの日数」、時刻は「0 時からの分」で表し、
+//! 未入力は `NaN` で示す。
 //!
 //! レイアウトの詳細は `docs/ABI.md` を参照。
 
 use crate::actuals::{self, Actual, TaskState};
-use crate::calendar::{Calendar, CalendarConfig, CalendarEvent, MAX_HORIZON_DAYS};
+use crate::calendar::{japanese_holidays_for, Calendar, CalendarConfig, CalendarEvent};
 use crate::convolve;
 use crate::dist::{DistKind, Sampler, DEFAULT_LAMBDA};
 use crate::estimate::TaskEstimate;
+use crate::member::MemberSchedule;
 use crate::montecarlo;
-use crate::prefix::PrefixSpec;
+use crate::prefix::{Assignment, PrefixSpec};
 use crate::stats::{self, PCT_LEVELS};
 
 /// リクエストが正しいバッファであることを確認するための印。
 pub const MAGIC: f64 = 20_250_920.0;
 /// ABI のバージョン。レイアウトを変えたら上げる。
-pub const VERSION: f64 = 2.0;
+pub const VERSION: f64 = 3.0;
 
 /// リクエストのヘッダ長 (f64 の個数)。
 pub const REQ_HEADER: usize = 32;
 /// レスポンスのヘッダ長 (f64 の個数)。
 pub const RESP_HEADER: usize = 24;
 /// タスク 1 件がリクエストで占める要素数。
-pub const REQ_TASK_STRIDE: usize = 6;
+pub const REQ_TASK_STRIDE: usize = 7;
+/// 人員 1 人がリクエストで占める要素数 (曜日ごとの開始 7 + 終了 7 + 休憩 1)。
+pub const REQ_MEMBER_STRIDE: usize = 15;
 /// 予定 1 件がリクエストで占める要素数。
-pub const REQ_EVENT_STRIDE: usize = 3;
+pub const REQ_EVENT_STRIDE: usize = 6;
+/// 予定と人員の割当 1 件が占める要素数。
+pub const REQ_EVENT_MEMBER_STRIDE: usize = 2;
 
 pub const MAX_TASKS: usize = 500;
-pub const MAX_EVENTS: usize = 2_000;
+pub const MAX_MEMBERS: usize = 30;
+pub const MAX_EVENTS: usize = 1_000;
+pub const MAX_EVENT_MEMBERS: usize = 10_000;
 pub const MAX_FORCED_WORKDAYS: usize = 2_000;
 pub const MAX_ITERATIONS: usize = 2_000_000;
 pub const MIN_BINS: usize = 4;
@@ -44,10 +52,13 @@ pub const MAX_PREFIX_BINS: usize = 1_024;
 /// カレンダーを返す最大日数 (約 5 年)。レスポンスが際限なく膨らむのを防ぐ。
 pub const MAX_HORIZON: usize = 1_830;
 /// モンテカルロの総サンプリング回数 (試行回数 × タスク数) の上限。
-/// ブラウザの UI スレッドを何十秒も止めないための歯止め。
 pub const MAX_WORK: usize = 50_000_000;
 /// 累積和 CDF に使う要素数の上限。
 pub const MAX_PREFIX_CELLS: usize = 200_000;
+/// 人員 × 日数の上限。人員ごとに 3 本の配列を返すので、ここが応答サイズを決める。
+/// 30 人 × 1 年でも 10,950 なので、実用上ぶつかるのは
+/// 「大人数 × 数年先まで」という現実味の薄い組み合わせだけ。
+pub const MAX_MEMBER_DAYS: usize = 40_000;
 
 /// レスポンスの `status` に入る値。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +79,8 @@ pub enum Status {
     CorrelationUnsupported = 6,
     /// カレンダーの設定が不正。
     BadCalendar = 7,
+    /// 人員の指定が不正 (0 人、上限超え、人員 × 日数が大きすぎる)。
+    BadMembers = 8,
 }
 
 /// 計算エンジンの種類。
@@ -94,7 +107,7 @@ impl Engine {
     }
 }
 
-/// 1 タスクぶんの入力 (見積もりと実績)。
+/// 1 タスクぶんの入力 (見積もり・実績・担当者)。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TaskInput {
     pub min: f64,
@@ -104,6 +117,8 @@ pub struct TaskInput {
     /// 進捗率 `0.0..=1.0`。
     pub progress: f64,
     pub end_day: Option<i64>,
+    /// 担当する人員の添字。
+    pub assignee: usize,
 }
 
 impl TaskInput {
@@ -116,8 +131,22 @@ impl TaskInput {
             start_day: None,
             progress: 0.0,
             end_day: None,
+            assignee: 0,
         }
     }
+
+    /// 担当者を指定する。
+    pub fn assigned_to(mut self, member: usize) -> Self {
+        self.assignee = member;
+        self
+    }
+}
+
+/// 予定に参加する人員。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventMember {
+    pub event: usize,
+    pub member: usize,
 }
 
 /// 復号したリクエスト。
@@ -133,9 +162,12 @@ pub struct Request {
     pub correlation: f64,
     pub prefix_bins: usize,
     pub calendar: CalendarConfig,
+    pub use_japanese_holidays: bool,
     pub today_day: i64,
     pub tasks: Vec<TaskInput>,
+    pub members: Vec<MemberSchedule>,
     pub events: Vec<CalendarEvent>,
+    pub event_members: Vec<EventMember>,
     pub forced_workdays: Vec<i64>,
 }
 
@@ -154,21 +186,24 @@ impl Default for Request {
             calendar: CalendarConfig {
                 start_day: 20_716, // 2026-09-20
                 horizon_days: 365,
-                weekday_mask: 0b0011_1110,
-                hours_per_day: 8.0,
                 hours_per_person_day: 8.0,
-                team_size: 1.0,
-                use_japanese_holidays: true,
             },
+            use_japanese_holidays: true,
             today_day: 20_716,
             tasks: Vec::new(),
+            members: vec![MemberSchedule::default()],
             events: Vec::new(),
+            event_members: Vec::new(),
             forced_workdays: Vec::new(),
         }
     }
 }
 
-/// 未入力を表す `NaN` と日数の相互変換。
+/// 未入力を表す `NaN` と数値の相互変換。
+fn optional_to_f64<T: Into<f64>>(value: Option<T>) -> f64 {
+    value.map(Into::into).unwrap_or(f64::NAN)
+}
+
 fn day_to_f64(day: Option<i64>) -> f64 {
     day.map(|d| d as f64).unwrap_or(f64::NAN)
 }
@@ -176,6 +211,14 @@ fn day_to_f64(day: Option<i64>) -> f64 {
 fn f64_to_day(value: f64) -> Option<i64> {
     if value.is_finite() {
         Some(value as i64)
+    } else {
+        None
+    }
+}
+
+fn f64_to_minute(value: f64) -> Option<i32> {
+    if value.is_finite() {
+        Some(value as i32)
     } else {
         None
     }
@@ -212,28 +255,43 @@ impl Request {
         out[13] = self.forced_workdays.len() as f64;
         out[14] = self.calendar.start_day as f64;
         out[15] = self.calendar.horizon_days as f64;
-        out[16] = self.calendar.weekday_mask as f64;
-        out[17] = self.calendar.hours_per_day;
-        out[18] = self.calendar.hours_per_person_day;
-        out[19] = self.calendar.team_size;
-        out[20] = f64::from(self.calendar.use_japanese_holidays);
-        out[21] = self.today_day as f64;
+        out[16] = self.members.len() as f64;
+        out[17] = self.calendar.hours_per_person_day;
+        out[18] = self.event_members.len() as f64;
+        out[19] = f64::from(self.use_japanese_holidays);
+        out[20] = self.today_day as f64;
 
-        for t in &self.tasks {
+        for task in &self.tasks {
             out.extend_from_slice(&[
-                t.min,
-                t.likely,
-                t.max,
-                day_to_f64(t.start_day),
-                t.progress,
-                day_to_f64(t.end_day),
+                task.min,
+                task.likely,
+                task.max,
+                day_to_f64(task.start_day),
+                task.progress,
+                day_to_f64(task.end_day),
+                task.assignee as f64,
             ]);
         }
-        for e in &self.events {
-            out.extend_from_slice(&[e.start_day as f64, e.end_day as f64, e.hours]);
+        for member in &self.members {
+            out.extend(member.starts().iter().map(|&m| m as f64));
+            out.extend(member.ends().iter().map(|&m| m as f64));
+            out.push(f64::from(member.break_minutes()));
         }
-        for &d in &self.forced_workdays {
-            out.push(d as f64);
+        for event in &self.events {
+            out.extend_from_slice(&[
+                event.start_day as f64,
+                event.end_day as f64,
+                optional_to_f64(event.start_minute),
+                optional_to_f64(event.end_minute),
+                f64::from(event.repeat_weeks),
+                day_to_f64(event.until_day),
+            ]);
+        }
+        for link in &self.event_members {
+            out.extend_from_slice(&[link.event as f64, link.member as f64]);
+        }
+        for &day in &self.forced_workdays {
+            out.push(day as f64);
         }
         out
     }
@@ -255,16 +313,28 @@ impl Request {
         let n_tasks = as_index(buf[5]).ok_or((Status::BadTaskCount, buf[5]))?;
         let n_events = as_index(buf[12]).ok_or((Status::BadCalendar, buf[12]))?;
         let n_forced = as_index(buf[13]).ok_or((Status::BadCalendar, buf[13]))?;
+        let n_members = as_index(buf[16]).ok_or((Status::BadMembers, buf[16]))?;
+        let n_event_members = as_index(buf[18]).ok_or((Status::BadCalendar, buf[18]))?;
 
         if n_tasks == 0 || n_tasks > MAX_TASKS {
             return Err((Status::BadTaskCount, n_tasks as f64));
         }
-        if n_events > MAX_EVENTS || n_forced > MAX_FORCED_WORKDAYS {
+        if n_members == 0 || n_members > MAX_MEMBERS {
+            return Err((Status::BadMembers, n_members as f64));
+        }
+        if n_events > MAX_EVENTS
+            || n_forced > MAX_FORCED_WORKDAYS
+            || n_event_members > MAX_EVENT_MEMBERS
+        {
             return Err((Status::BadCalendar, 0.0));
         }
-        let expected =
-            REQ_HEADER + n_tasks * REQ_TASK_STRIDE + n_events * REQ_EVENT_STRIDE + n_forced;
-        if buf.len() < expected {
+
+        let tasks_at = REQ_HEADER;
+        let members_at = tasks_at + n_tasks * REQ_TASK_STRIDE;
+        let events_at = members_at + n_members * REQ_MEMBER_STRIDE;
+        let links_at = events_at + n_events * REQ_EVENT_STRIDE;
+        let forced_at = links_at + n_event_members * REQ_EVENT_MEMBER_STRIDE;
+        if buf.len() < forced_at + n_forced {
             return Err((Status::BadTaskCount, n_tasks as f64));
         }
 
@@ -289,30 +359,27 @@ impl Request {
         }
 
         let horizon = as_index(buf[15]).ok_or((Status::BadCalendar, buf[15]))?;
-        if horizon > MAX_HORIZON.min(MAX_HORIZON_DAYS) {
+        if horizon > MAX_HORIZON {
             return Err((Status::BadCalendar, horizon as f64));
         }
-        let start_day = f64_to_day(buf[14]).ok_or((Status::BadCalendar, buf[14]))?;
-        if !buf[17].is_finite() || !buf[18].is_finite() || !buf[19].is_finite() {
-            return Err((Status::BadCalendar, 0.0));
+        if n_members.saturating_mul(horizon) > MAX_MEMBER_DAYS {
+            return Err((Status::BadMembers, (n_members * horizon) as f64));
         }
-        if buf[18] <= 0.0 || buf[17] < 0.0 || buf[19] < 0.0 {
-            return Err((Status::BadCalendar, 0.0));
+        let start_day = f64_to_day(buf[14]).ok_or((Status::BadCalendar, buf[14]))?;
+        if !buf[17].is_finite() || buf[17] <= 0.0 {
+            return Err((Status::BadCalendar, buf[17]));
         }
 
         let calendar = CalendarConfig {
             start_day,
             horizon_days: horizon,
-            weekday_mask: (buf[16] as i64).clamp(0, 127) as u8,
-            hours_per_day: buf[17],
-            hours_per_person_day: buf[18],
-            team_size: buf[19],
-            use_japanese_holidays: buf[20] != 0.0,
+            hours_per_person_day: buf[17],
         };
 
         let mut tasks = Vec::with_capacity(n_tasks);
         for i in 0..n_tasks {
-            let at = REQ_HEADER + i * REQ_TASK_STRIDE;
+            let at = tasks_at + i * REQ_TASK_STRIDE;
+            let assignee = as_index(buf[at + 6]).unwrap_or(0);
             tasks.push(TaskInput {
                 min: buf[at],
                 likely: buf[at + 1],
@@ -324,10 +391,28 @@ impl Request {
                     0.0
                 },
                 end_day: f64_to_day(buf[at + 5]),
+                // 存在しない人員を指していたら先頭に倒す。
+                assignee: if assignee < n_members { assignee } else { 0 },
             });
         }
 
-        let events_at = REQ_HEADER + n_tasks * REQ_TASK_STRIDE;
+        let mut members = Vec::with_capacity(n_members);
+        for i in 0..n_members {
+            let at = members_at + i * REQ_MEMBER_STRIDE;
+            let mut start = [0i32; 7];
+            let mut end = [0i32; 7];
+            for weekday in 0..7 {
+                start[weekday] = buf[at + weekday] as i32;
+                end[weekday] = buf[at + 7 + weekday] as i32;
+            }
+            let break_minutes = if buf[at + 14].is_finite() {
+                buf[at + 14] as i32
+            } else {
+                0
+            };
+            members.push(MemberSchedule::with_break(start, end, break_minutes));
+        }
+
         let mut events = Vec::with_capacity(n_events);
         for i in 0..n_events {
             let at = events_at + i * REQ_EVENT_STRIDE;
@@ -337,15 +422,24 @@ impl Request {
             events.push(CalendarEvent {
                 start_day: from,
                 end_day: to.max(from),
-                hours: if buf[at + 2].is_finite() {
-                    buf[at + 2]
-                } else {
-                    -1.0
-                },
+                start_minute: f64_to_minute(buf[at + 2]),
+                end_minute: f64_to_minute(buf[at + 3]),
+                repeat_weeks: as_index(buf[at + 4]).unwrap_or(0).min(52) as u32,
+                until_day: f64_to_day(buf[at + 5]),
             });
         }
 
-        let forced_at = events_at + n_events * REQ_EVENT_STRIDE;
+        let mut event_members = Vec::with_capacity(n_event_members);
+        for i in 0..n_event_members {
+            let at = links_at + i * REQ_EVENT_MEMBER_STRIDE;
+            let (Some(event), Some(member)) = (as_index(buf[at]), as_index(buf[at + 1])) else {
+                continue;
+            };
+            if event < n_events && member < n_members {
+                event_members.push(EventMember { event, member });
+            }
+        }
+
         let forced_workdays = (0..n_forced)
             .filter_map(|i| f64_to_day(buf[forced_at + i]))
             .collect();
@@ -365,11 +459,28 @@ impl Request {
             correlation: buf[10],
             prefix_bins,
             calendar,
-            today_day: f64_to_day(buf[21]).unwrap_or(start_day),
+            use_japanese_holidays: buf[19] != 0.0,
+            today_day: f64_to_day(buf[20]).unwrap_or(start_day),
             tasks,
+            members,
             events,
+            event_members,
             forced_workdays,
         })
+    }
+
+    /// 人員ごとの予定を集める。予定は複数人で共有されうるので、
+    /// 1 件が複数の人員のリストに入ることがある。
+    fn events_per_member(&self) -> Vec<Vec<CalendarEvent>> {
+        let mut per_member = vec![Vec::new(); self.members.len()];
+        for link in &self.event_members {
+            if let (Some(event), Some(list)) =
+                (self.events.get(link.event), per_member.get_mut(link.member))
+            {
+                list.push(*event);
+            }
+        }
+        per_member
     }
 }
 
@@ -401,15 +512,36 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
 
     // --- 当初の見積もりを検証する
     let mut originals = Vec::with_capacity(request.tasks.len());
-    for (i, t) in request.tasks.iter().enumerate() {
-        match TaskEstimate::new(t.min, t.likely, t.max) {
+    for (i, task) in request.tasks.iter().enumerate() {
+        match TaskEstimate::new(task.min, task.likely, task.max) {
             Ok(e) => originals.push(e),
             Err(_) => return error_response(Status::InvalidEstimate, i as f64),
         }
     }
 
-    // --- カレンダーを組み立て、実績を織り込む
-    let calendar = Calendar::build(&request.calendar, &request.events, &request.forced_workdays);
+    // --- 人員ごとにカレンダーを組み立てる
+    let holidays = if request.use_japanese_holidays {
+        japanese_holidays_for(request.calendar.start_day, request.calendar.horizon_days)
+    } else {
+        Vec::new()
+    };
+    let per_member_events = request.events_per_member();
+    let calendars: Vec<Calendar> = request
+        .members
+        .iter()
+        .zip(&per_member_events)
+        .map(|(schedule, events)| {
+            Calendar::build(
+                &request.calendar,
+                schedule,
+                events,
+                &request.forced_workdays,
+                &holidays,
+            )
+        })
+        .collect();
+
+    // --- 実績を織り込む。消化工数は担当者のカレンダーで測る。
     let forecasts: Vec<_> = originals
         .iter()
         .zip(&request.tasks)
@@ -419,7 +551,10 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
                 progress: input.progress,
                 end_day: input.end_day,
             };
-            actuals::forecast(original, &actual, &calendar, request.today_day)
+            let calendar = calendars
+                .get(input.assignee)
+                .unwrap_or_else(|| &calendars[0]);
+            actuals::forecast(original, &actual, calendar, request.today_day)
         })
         .collect();
 
@@ -433,14 +568,32 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
         .map(|f| Sampler::new(f.estimate, request.kind, request.lambda))
         .collect();
 
+    // --- 担当者ごとの累積和グリッドの上限
+    let assignees: Vec<usize> = request.tasks.iter().map(|t| t.assignee).collect();
+    let mut member_grid_hi = vec![0.0; request.members.len()];
+    for (index, forecast) in forecasts.iter().enumerate() {
+        if let Some(slot) = member_grid_hi.get_mut(assignees[index]) {
+            *slot += forecast.estimate.max();
+        }
+    }
+    let assignment = Assignment {
+        members: &assignees,
+        grid_hi: &member_grid_hi,
+    };
+
     // --- 分布を求める
     let spec = PrefixSpec {
         bins: request.prefix_bins,
-        grid_hi: total_max,
     };
     let output = match request.engine {
-        Engine::MonteCarlo => montecarlo::run(&samplers, request.iterations, request.seed, spec),
-        Engine::Convolution => convolve::run(&samplers, request.grid_points, spec),
+        Engine::MonteCarlo => montecarlo::run(
+            &samplers,
+            request.iterations,
+            request.seed,
+            spec,
+            &assignment,
+        ),
+        Engine::Convolution => convolve::run(&samplers, request.grid_points, spec, &assignment),
     };
     let summary = stats::summarize(&output.total, request.n_bins);
 
@@ -450,20 +603,20 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
 
     // --- レスポンスを組み立てる
     let n_tasks = request.tasks.len();
+    let n_members = request.members.len();
     let n_pct = PCT_LEVELS.len();
-    let n_days = calendar.len();
+    let n_days = calendars.first().map(Calendar::len).unwrap_or(0);
     let prefix_width = output.prefix.width();
-
-    let mut out = Vec::with_capacity(
-        RESP_HEADER
-            + request.n_bins * 2
-            + 1
-            + n_pct * 2
-            + n_tasks * 6
-            + n_tasks * prefix_width
-            + n_days * 3,
+    let offsets = response_offsets(
+        request.n_bins,
+        n_pct,
+        n_tasks,
+        prefix_width,
+        n_members,
+        n_days,
     );
-    out.resize(RESP_HEADER, 0.0);
+
+    let mut out = vec![0.0; RESP_HEADER];
     out[0] = Status::Ok as u8 as f64;
     out[1] = VERSION;
     out[2] = request.n_bins as f64;
@@ -481,13 +634,13 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     } else {
         0.0
     };
-    out[14] = spec.grid_hi;
-    out[15] = n_days as f64;
-    out[16] = calendar.start_day() as f64;
-    out[17] = total_spent;
-    out[18] = request.calendar.base_capacity();
-    out[19] = calendar.total_capacity();
+    out[14] = n_days as f64;
+    out[15] = request.calendar.start_day as f64;
+    out[16] = total_spent;
+    out[17] = n_members as f64;
+    out[18] = calendars.iter().map(Calendar::total_capacity).sum();
 
+    out.reserve(offsets[LAST_OFFSET] - RESP_HEADER);
     out.extend_from_slice(&summary.probs);
     out.extend_from_slice(&summary.cdf);
     out.extend_from_slice(&PCT_LEVELS);
@@ -499,45 +652,62 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
             0.0
         }
     }));
-    for f in &forecasts {
-        out.extend_from_slice(&[f.estimate.min(), f.estimate.likely(), f.estimate.max()]);
+    for forecast in &forecasts {
+        out.extend_from_slice(&[
+            forecast.estimate.min(),
+            forecast.estimate.likely(),
+            forecast.estimate.max(),
+        ]);
     }
     out.extend(forecasts.iter().map(|f| f.spent));
     out.extend(forecasts.iter().map(|f| f.state.code()));
+    out.extend(assignees.iter().map(|&m| m as f64));
     out.extend_from_slice(output.prefix.as_slice());
-    out.extend_from_slice(calendar.capacity());
-    out.extend_from_slice(calendar.cumulative());
-    out.extend(calendar.flags().iter().map(|&f| f as f64));
+    out.extend_from_slice(&member_grid_hi);
+    for calendar in &calendars {
+        out.extend_from_slice(calendar.capacity());
+    }
+    for calendar in &calendars {
+        out.extend_from_slice(calendar.cumulative());
+    }
+    for calendar in &calendars {
+        out.extend(calendar.flags().iter().map(|&f| f64::from(f)));
+    }
     out
 }
 
-/// レスポンスの各区画がどこから始まるかを数えるヘルパ。JS 側の読み取りと対応する。
+/// [`response_offsets`] が返す配列の、末尾 (= 全体の長さ) の位置。
+pub const LAST_OFFSET: usize = 14;
+
+/// レスポンス本体の各区画がどこから始まるかを数える。JS 側の読み取りと対応する。
 ///
-/// 返り値は `(probs, cdf, levels, values, sensitivity, effective, spent, state,
-/// prefix, capacity, cumulative, flags, 末尾)` の開始位置。
+/// 返り値の最後の要素はバッファ全体の長さ。
 pub fn response_offsets(
     n_bins: usize,
     n_pct: usize,
     n_tasks: usize,
     prefix_width: usize,
+    n_members: usize,
     n_days: usize,
-) -> [usize; 13] {
+) -> [usize; 15] {
     let mut at = RESP_HEADER;
-    let mut offsets = [0usize; 13];
+    let mut offsets = [0usize; 15];
     for (slot, len) in offsets.iter_mut().zip([
-        n_bins,
-        n_bins + 1,
-        n_pct,
-        n_pct,
-        n_tasks,
-        n_tasks * 3,
-        n_tasks,
-        n_tasks,
-        n_tasks * prefix_width,
-        n_days,
-        n_days,
-        n_days,
-        0,
+        n_bins,                 // bin_probs
+        n_bins + 1,             // cdf
+        n_pct,                  // percentile_levels
+        n_pct,                  // percentile_values
+        n_tasks,                // sensitivity
+        n_tasks * 3,            // effective
+        n_tasks,                // spent
+        n_tasks,                // state
+        n_tasks,                // assignee
+        n_tasks * prefix_width, // prefix_cdf
+        n_members,              // member_grid_hi
+        n_members * n_days,     // member_capacity
+        n_members * n_days,     // member_cumulative
+        n_members * n_days,     // member_flags
+        0,                      // 末尾 (= 全体の長さ)
     ]) {
         *slot = at;
         at += len;
@@ -557,12 +727,25 @@ pub fn state_from_code(code: f64) -> TaskState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calendar::{FLAG_EVENT, FLAG_FORCED_WORKDAY, FLAG_HOLIDAY};
     use crate::date::days_from_civil;
 
     const TASKS: [(f64, f64, f64); 3] = [(5.0, 8.0, 20.0), (2.0, 3.0, 5.0), (10.0, 15.0, 40.0)];
+
     /// 2026-09-21 (月)。
     fn monday() -> i64 {
         days_from_civil(2026, 9, 21)
+    }
+
+    /// 月〜金 9:00〜17:00 (= 1 人日/日)。
+    fn eight_hour_weekdays() -> MemberSchedule {
+        let mut start = [0; 7];
+        let mut end = [0; 7];
+        for weekday in 1..=5 {
+            start[weekday] = 9 * 60;
+            end[weekday] = 17 * 60;
+        }
+        MemberSchedule::new(start, end)
     }
 
     fn request(engine: Engine) -> Request {
@@ -573,10 +756,11 @@ mod tests {
             calendar: CalendarConfig {
                 start_day: monday(),
                 horizon_days: 180,
-                use_japanese_holidays: false,
-                ..Request::default().calendar
+                hours_per_person_day: 8.0,
             },
+            use_japanese_holidays: false,
             today_day: monday(),
+            members: vec![eight_hour_weekdays()],
             tasks: TASKS
                 .iter()
                 .map(|&(a, m, b)| TaskInput::estimate_only(a, m, b))
@@ -588,9 +772,10 @@ mod tests {
     /// レスポンスを区画ごとに切り出す。JS 側の読み取り手順をそのまま再現している。
     struct Response<'a> {
         raw: &'a [f64],
-        offsets: [usize; 13],
+        offsets: [usize; 15],
         n_bins: usize,
         n_tasks: usize,
+        n_members: usize,
         prefix_width: usize,
         n_days: usize,
     }
@@ -605,12 +790,14 @@ mod tests {
             } else {
                 0
             };
-            let n_days = raw[15] as usize;
+            let n_days = raw[14] as usize;
+            let n_members = raw[17] as usize;
             Self {
                 raw,
-                offsets: response_offsets(n_bins, n_pct, n_tasks, prefix_width, n_days),
+                offsets: response_offsets(n_bins, n_pct, n_tasks, prefix_width, n_members, n_days),
                 n_bins,
                 n_tasks,
+                n_members,
                 prefix_width,
                 n_days,
             }
@@ -634,8 +821,8 @@ mod tests {
             self.section(4, self.n_tasks)
         }
         fn effective(&self, task: usize) -> (f64, f64, f64) {
-            let s = self.section(5, self.n_tasks * 3);
-            (s[task * 3], s[task * 3 + 1], s[task * 3 + 2])
+            let all = self.section(5, self.n_tasks * 3);
+            (all[task * 3], all[task * 3 + 1], all[task * 3 + 2])
         }
         fn spent(&self) -> &[f64] {
             self.section(6, self.n_tasks)
@@ -643,24 +830,33 @@ mod tests {
         fn states(&self) -> &[f64] {
             self.section(7, self.n_tasks)
         }
+        fn assignees(&self) -> &[f64] {
+            self.section(8, self.n_tasks)
+        }
         fn prefix(&self, task: usize) -> &[f64] {
-            let all = self.section(8, self.n_tasks * self.prefix_width);
+            let all = self.section(9, self.n_tasks * self.prefix_width);
             &all[task * self.prefix_width..(task + 1) * self.prefix_width]
         }
-        fn capacity(&self) -> &[f64] {
-            self.section(9, self.n_days)
+        fn member_grid_hi(&self) -> &[f64] {
+            self.section(10, self.n_members)
         }
-        fn cumulative(&self) -> &[f64] {
-            self.section(10, self.n_days)
+        fn capacity(&self, member: usize) -> &[f64] {
+            let all = self.section(11, self.n_members * self.n_days);
+            &all[member * self.n_days..(member + 1) * self.n_days]
         }
-        fn flags(&self) -> &[f64] {
-            self.section(11, self.n_days)
+        fn cumulative(&self, member: usize) -> &[f64] {
+            let all = self.section(12, self.n_members * self.n_days);
+            &all[member * self.n_days..(member + 1) * self.n_days]
+        }
+        fn flags(&self, member: usize) -> &[f64] {
+            let all = self.section(13, self.n_members * self.n_days);
+            &all[member * self.n_days..(member + 1) * self.n_days]
         }
         /// ヘッダの宣言どおりに読み切れること。JS が範囲外を読まないための最重要不変条件。
         fn assert_consistent(&self) {
             assert_eq!(
                 self.raw.len(),
-                self.offsets[12],
+                self.offsets[LAST_OFFSET],
                 "宣言長とバッファ長が一致しない"
             );
         }
@@ -673,23 +869,38 @@ mod tests {
     fn encoding_a_request_round_trips() {
         let mut r = request(Engine::Convolution);
         r.kind = DistKind::Triangular;
+        r.members = vec![eight_hour_weekdays(), MemberSchedule::default()];
         r.events = vec![
+            CalendarEvent::all_day(monday() + 3, monday() + 4),
             CalendarEvent {
-                start_day: monday() + 3,
-                end_day: monday() + 4,
-                hours: -1.0,
+                start_day: monday() + 1,
+                end_day: monday() + 1,
+                start_minute: Some(10 * 60 + 5),
+                end_minute: Some(10 * 60 + 50),
+                repeat_weeks: 2,
+                until_day: Some(monday() + 60),
             },
-            CalendarEvent {
-                start_day: monday() + 10,
-                end_day: monday() + 10,
-                hours: 2.5,
+        ];
+        r.event_members = vec![
+            EventMember {
+                event: 0,
+                member: 0,
+            },
+            EventMember {
+                event: 1,
+                member: 0,
+            },
+            EventMember {
+                event: 1,
+                member: 1,
             },
         ];
         r.forced_workdays = vec![monday() + 5, monday() + 12];
         r.tasks[1].start_day = Some(monday());
         r.tasks[1].progress = 0.4;
-        r.tasks[2].end_day = Some(monday() + 7);
+        r.tasks[1].assignee = 1;
         r.tasks[2].start_day = Some(monday() + 1);
+        r.tasks[2].end_day = Some(monday() + 7);
 
         let decoded = Request::decode(&r.encode()).expect("復号できるはず");
         assert_eq!(decoded, r);
@@ -714,81 +925,268 @@ mod tests {
                 resp.p80() > raw[11],
                 "{engine:?}: P80 が Σlikely を超えない"
             );
+            assert_eq!(resp.assignees(), &[0.0; 3]);
+            assert_eq!(resp.member_grid_hi(), &[65.0]);
         }
     }
 
     #[test]
     fn the_response_layout_holds_across_parameter_ranges() {
-        for (n_bins, prefix_bins, horizon) in [
-            (MIN_BINS, 0, 0),
-            (17, 64, 30),
-            (MAX_BINS, 256, 365),
-            (64, MAX_PREFIX_BINS, 1),
+        for (n_bins, prefix_bins, horizon, members) in [
+            (MIN_BINS, 0, 0, 1),
+            (17, 64, 30, 3),
+            (MAX_BINS, 256, 365, 2),
+            (64, MAX_PREFIX_BINS, 1, 1),
         ] {
             let mut r = request(Engine::Convolution);
             r.n_bins = n_bins;
             r.prefix_bins = prefix_bins;
             r.calendar.horizon_days = horizon;
+            r.members = vec![eight_hour_weekdays(); members];
             let raw = handle(&r.encode());
             assert_eq!(raw[0], Status::Ok as u8 as f64, "bins={n_bins}");
             Response::parse(&raw).assert_consistent();
         }
     }
 
+    /// 担当者を分けると、それぞれのカレンダーで並行して進む。
+    #[test]
+    fn tasks_assigned_to_different_members_run_in_parallel() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays(), eight_hour_weekdays()];
+        r.tasks = vec![
+            TaskInput::estimate_only(5.0, 5.0, 5.0).assigned_to(0),
+            TaskInput::estimate_only(5.0, 5.0, 5.0).assigned_to(1),
+        ];
+        r.calendar.horizon_days = 30;
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        resp.assert_consistent();
+        assert_eq!(resp.member_grid_hi(), &[5.0, 5.0], "担当ぶんだけを持つ");
+
+        // どちらも 5 人日なので、5 稼働日後にそれぞれ完了する。
+        // 累積和はタスクごとに 5 人日で 1 に達する (直列に 10 人日にはならない)。
+        let step = 5.0 / r.prefix_bins as f64;
+        let at_five = (5.0 / step).round() as usize;
+        for task in 0..2 {
+            let row = resp.prefix(task);
+            assert!(
+                row[at_five - 1] < 0.5,
+                "タスク {task}: 5 人日未満では終わらない"
+            );
+            assert!(row[at_five] > 0.99, "タスク {task}: 5 人日で完了する");
+        }
+    }
+
+    /// 同じ人に積むと直列になる。
+    #[test]
+    fn tasks_on_the_same_member_queue_up() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays(), eight_hour_weekdays()];
+        r.tasks = vec![
+            TaskInput::estimate_only(5.0, 5.0, 5.0).assigned_to(0),
+            TaskInput::estimate_only(5.0, 5.0, 5.0).assigned_to(0),
+        ];
+        r.calendar.horizon_days = 30;
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert_eq!(resp.member_grid_hi(), &[10.0, 0.0]);
+
+        let step = 10.0 / r.prefix_bins as f64;
+        let at = |effort: f64| (effort / step).round() as usize;
+        assert!(resp.prefix(0)[at(5.0)] > 0.99, "1 件目は 5 人日で完了");
+        assert!(
+            resp.prefix(1)[at(5.0)] < 0.01,
+            "2 件目は 5 人日では終わらない"
+        );
+        assert!(resp.prefix(1)[at(10.0)] > 0.99, "2 件目は 10 人日で完了");
+    }
+
+    #[test]
+    fn each_member_gets_their_own_calendar() {
+        let mut r = request(Engine::Convolution);
+        r.calendar.horizon_days = 7;
+        // 2 人目は午前中だけ働く。
+        let mut start = [0; 7];
+        let mut end = [0; 7];
+        for weekday in 1..=5 {
+            start[weekday] = 9 * 60;
+            end[weekday] = 13 * 60;
+        }
+        r.members = vec![eight_hour_weekdays(), MemberSchedule::new(start, end)];
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        resp.assert_consistent();
+        assert_eq!(resp.capacity(0)[0], 1.0);
+        assert_eq!(resp.capacity(1)[0], 0.5, "半日だけ");
+        assert_eq!(*resp.cumulative(0).last().unwrap(), 5.0);
+        assert_eq!(*resp.cumulative(1).last().unwrap(), 2.5);
+        assert!((raw[18] - 7.5).abs() < 1e-12, "全員ぶんの合計");
+    }
+
+    #[test]
+    fn a_shared_event_takes_time_from_every_participant() {
+        let mut r = request(Engine::Convolution);
+        r.calendar.horizon_days = 7;
+        r.members = vec![
+            eight_hour_weekdays(),
+            eight_hour_weekdays(),
+            eight_hour_weekdays(),
+        ];
+        // 1 時間の定例に 0 番と 2 番だけ出る。
+        r.events = vec![CalendarEvent {
+            start_day: monday(),
+            end_day: monday(),
+            start_minute: Some(10 * 60),
+            end_minute: Some(11 * 60),
+            repeat_weeks: 0,
+            until_day: None,
+        }];
+        r.event_members = vec![
+            EventMember {
+                event: 0,
+                member: 0,
+            },
+            EventMember {
+                event: 0,
+                member: 2,
+            },
+        ];
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert!((resp.capacity(0)[0] - 7.0 / 8.0).abs() < 1e-12);
+        assert_eq!(resp.capacity(1)[0], 1.0, "参加していない人は削られない");
+        assert!((resp.capacity(2)[0] - 7.0 / 8.0).abs() < 1e-12);
+        assert_eq!(resp.flags(0)[0] as u8 & FLAG_EVENT, FLAG_EVENT);
+        assert_eq!(resp.flags(1)[0] as u8 & FLAG_EVENT, 0);
+    }
+
+    #[test]
+    fn a_biweekly_event_only_hits_every_other_week() {
+        let mut r = request(Engine::Convolution);
+        r.calendar.horizon_days = 28;
+        r.events = vec![CalendarEvent {
+            start_day: monday(),
+            end_day: monday(),
+            start_minute: Some(9 * 60),
+            end_minute: Some(11 * 60),
+            repeat_weeks: 2,
+            until_day: None,
+        }];
+        r.event_members = vec![EventMember {
+            event: 0,
+            member: 0,
+        }];
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        for week in 0..4 {
+            let index = week * 7;
+            let expected = if week % 2 == 0 { 6.0 / 8.0 } else { 1.0 };
+            assert!(
+                (resp.capacity(0)[index] - expected).abs() < 1e-12,
+                "{week} 週目"
+            );
+        }
+    }
+
+    #[test]
+    fn five_minute_events_are_honoured() {
+        let mut r = request(Engine::Convolution);
+        r.calendar.horizon_days = 3;
+        r.events = vec![CalendarEvent {
+            start_day: monday(),
+            end_day: monday(),
+            start_minute: Some(9 * 60 + 55),
+            end_minute: Some(10 * 60),
+            repeat_weeks: 0,
+            until_day: None,
+        }];
+        r.event_members = vec![EventMember {
+            event: 0,
+            member: 0,
+        }];
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        // 8 時間のうち 5 分だけ失われる。
+        assert!((resp.capacity(0)[0] - 475.0 / 480.0).abs() < 1e-12);
+    }
+
     #[test]
     fn the_calendar_comes_back_with_capacity_and_flags() {
         let mut r = request(Engine::Convolution);
         r.calendar.horizon_days = 14;
-        r.calendar.use_japanese_holidays = true;
+        r.use_japanese_holidays = true;
         let raw = handle(&r.encode());
         let resp = Response::parse(&raw);
         resp.assert_consistent();
 
-        assert_eq!(resp.capacity().len(), 14);
-        assert_eq!(raw[16], monday() as f64, "カレンダーの開始日");
-        assert!((raw[18] - 1.0).abs() < 1e-12, "1 稼働日あたり 1 人日");
+        assert_eq!(resp.capacity(0).len(), 14);
+        assert_eq!(raw[15], monday() as f64, "カレンダーの開始日");
         // 2026-09-21 は敬老の日、22 は国民の休日、23 は秋分の日。
-        assert_eq!(&resp.capacity()[0..3], &[0.0; 3]);
-        assert_eq!(resp.flags()[0] as u8 & crate::calendar::FLAG_HOLIDAY, 2);
-        assert!(resp.cumulative().windows(2).all(|w| w[1] >= w[0]));
-        assert_eq!(*resp.cumulative().last().unwrap(), raw[19]);
+        assert_eq!(&resp.capacity(0)[0..3], &[0.0; 3]);
+        assert_eq!(resp.flags(0)[0] as u8 & FLAG_HOLIDAY, FLAG_HOLIDAY);
+        assert!(resp.cumulative(0).windows(2).all(|w| w[1] >= w[0]));
     }
 
     #[test]
-    fn a_completed_task_is_replaced_by_its_actual_effort() {
+    fn a_forced_workday_applies_to_everyone() {
         let mut r = request(Engine::Convolution);
-        // 1 番目を月曜着手・金曜完了にする → 稼働 5 日ぶん。
-        r.tasks[0].start_day = Some(monday());
-        r.tasks[0].end_day = Some(monday() + 4);
-        r.tasks[0].progress = 1.0;
+        r.calendar.horizon_days = 14;
+        r.members = vec![eight_hour_weekdays(), eight_hour_weekdays()];
+        r.forced_workdays = vec![monday() + 5]; // 土曜
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        for member in 0..2 {
+            assert_eq!(resp.capacity(member)[5], 1.0, "{member} 人目");
+            assert_eq!(
+                resp.flags(member)[5] as u8 & FLAG_FORCED_WORKDAY,
+                FLAG_FORCED_WORKDAY
+            );
+        }
+    }
+
+    #[test]
+    fn spent_effort_is_measured_on_the_assignee_calendar() {
+        let mut r = request(Engine::Convolution);
+        // 2 人目は半日勤務。
+        let mut start = [0; 7];
+        let mut end = [0; 7];
+        for weekday in 1..=5 {
+            start[weekday] = 9 * 60;
+            end[weekday] = 13 * 60;
+        }
+        r.members = vec![eight_hour_weekdays(), MemberSchedule::new(start, end)];
+        r.tasks = vec![
+            TaskInput {
+                start_day: Some(monday()),
+                end_day: Some(monday() + 4),
+                progress: 1.0,
+                ..TaskInput::estimate_only(5.0, 8.0, 20.0)
+            },
+            TaskInput {
+                start_day: Some(monday()),
+                end_day: Some(monday() + 4),
+                progress: 1.0,
+                ..TaskInput::estimate_only(5.0, 8.0, 20.0)
+            }
+            .assigned_to(1),
+        ];
         r.today_day = monday() + 10;
 
         let raw = handle(&r.encode());
         let resp = Response::parse(&raw);
-        resp.assert_consistent();
-        assert_eq!(resp.effective(0), (5.0, 5.0, 5.0), "完了したタスクは幅ゼロ");
-        assert_eq!(resp.spent()[0], 5.0);
-        assert_eq!(resp.states()[0], 2.0, "Done");
-        assert_eq!(resp.states()[1], 0.0, "NotStarted");
-        // Σlikely は 8 + 3 + 15 = 26 から 5 + 3 + 15 = 23 に変わる。
-        assert_eq!(raw[11], 23.0);
-        assert_eq!(raw[17], 5.0, "消化済み工数の合計");
-    }
-
-    #[test]
-    fn an_in_progress_task_widens_the_forecast_when_it_falls_behind() {
-        let mut r = request(Engine::Convolution);
-        r.tasks[0].start_day = Some(monday());
-        r.tasks[0].progress = 0.25;
-        r.today_day = monday() + 11; // 10 稼働日を消化
-
-        let raw = handle(&r.encode());
-        let resp = Response::parse(&raw);
-        assert_eq!(resp.states()[0], 1.0, "InProgress");
-        assert_eq!(resp.spent()[0], 10.0);
-        let (min, likely, _) = resp.effective(0);
-        assert!(min >= 10.0, "消化済みを下回らない");
-        assert!(likely > 8.0, "遅れているので見通しは当初より大きい");
+        assert_eq!(resp.spent()[0], 5.0, "フルタイムの人は 5 人日");
+        assert_eq!(resp.spent()[1], 2.5, "半日勤務の人は 2.5 人日");
+        assert_eq!(resp.effective(1), (2.5, 2.5, 2.5));
+        assert_eq!(resp.states(), &[2.0, 2.0]);
+        assert_eq!(raw[16], 7.5, "消化済み工数の合計");
     }
 
     #[test]
@@ -798,7 +1196,6 @@ mod tests {
             let resp = Response::parse(&raw);
             resp.assert_consistent();
             assert_eq!(resp.prefix_width, 257);
-            assert_eq!(raw[14], 65.0, "累積和グリッドの上限は Σmax");
 
             for i in 0..3 {
                 let row = resp.prefix(i);
@@ -812,6 +1209,36 @@ mod tests {
                     let previous = resp.prefix(i - 1);
                     assert!(row.iter().zip(previous).all(|(a, b)| *a <= b + 1e-9));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn both_engines_agree_on_the_per_member_prefixes() {
+        let mut r = request(Engine::MonteCarlo);
+        r.members = vec![eight_hour_weekdays(), eight_hour_weekdays()];
+        r.tasks = vec![
+            TaskInput::estimate_only(5.0, 8.0, 20.0).assigned_to(0),
+            TaskInput::estimate_only(2.0, 3.0, 5.0).assigned_to(1),
+            TaskInput::estimate_only(10.0, 15.0, 40.0).assigned_to(0),
+            TaskInput::estimate_only(1.0, 4.0, 9.0).assigned_to(1),
+        ];
+        r.iterations = 400_000;
+        let monte_carlo = handle(&r.encode());
+
+        r.engine = Engine::Convolution;
+        r.grid_points = 4_096;
+        let convolution = handle(&r.encode());
+
+        let a = Response::parse(&monte_carlo);
+        let b = Response::parse(&convolution);
+        assert_eq!(a.member_grid_hi(), &[60.0, 14.0]);
+        for task in 0..4 {
+            for (k, (&x, &y)) in a.prefix(task).iter().zip(b.prefix(task)).enumerate() {
+                assert!(
+                    (x - y).abs() < 0.02,
+                    "タスク {task} の k={k} で {x} と {y} が一致しない"
+                );
             }
         }
     }
@@ -853,16 +1280,45 @@ mod tests {
     }
 
     #[test]
+    fn member_count_must_be_sane() {
+        for value in [0.0, -1.0, f64::NAN, (MAX_MEMBERS + 1) as f64] {
+            let mut raw = request(Engine::MonteCarlo).encode();
+            raw[16] = value;
+            assert_eq!(
+                handle(&raw)[0],
+                Status::BadMembers as u8 as f64,
+                "n_members = {value} が弾かれていない"
+            );
+        }
+
+        // 人員 × 日数が大きすぎる組み合わせも弾く。
+        let mut r = request(Engine::MonteCarlo);
+        r.members = vec![eight_hour_weekdays(); MAX_MEMBERS];
+        r.calendar.horizon_days = MAX_HORIZON;
+        assert_eq!(handle(&r.encode())[0], Status::BadMembers as u8 as f64);
+    }
+
+    #[test]
+    fn an_assignee_outside_the_member_list_falls_back_to_the_first() {
+        let mut r = request(Engine::Convolution);
+        r.tasks[0].assignee = 7;
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert_eq!(raw[0], Status::Ok as u8 as f64);
+        assert_eq!(resp.assignees()[0], 0.0);
+    }
+
+    #[test]
     fn out_of_range_parameters_are_rejected() {
         for (index, value) in [
-            (6, 0.0), // 試行回数 0
+            (6, 0.0),
             (6, (MAX_ITERATIONS + 1) as f64),
             (6, f64::NAN),
-            (8, 1.0), // ビン数が少なすぎる
+            (8, 1.0),
             (8, (MAX_BINS + 1) as f64),
-            (9, 1.0), // グリッドが粗すぎる
+            (9, 1.0),
             (9, (MAX_GRID + 1) as f64),
-            (11, (MAX_PREFIX_BINS + 1) as f64), // 累積和のビン数
+            (11, (MAX_PREFIX_BINS + 1) as f64),
         ] {
             let mut raw = request(Engine::MonteCarlo).encode();
             raw[index] = value;
@@ -877,13 +1333,13 @@ mod tests {
     #[test]
     fn bad_calendar_settings_are_rejected() {
         for (index, value) in [
-            (15, (MAX_HORIZON + 1) as f64), // 期間が長すぎる
+            (15, (MAX_HORIZON + 1) as f64),
             (15, -1.0),
-            (17, f64::NAN), // 1 日の作業時間
-            (18, 0.0),      // 1 人日あたりの時間が 0
-            (18, -8.0),
-            (19, -1.0),                    // チーム人数が負
-            (12, (MAX_EVENTS + 1) as f64), // 予定が多すぎる
+            (17, f64::NAN),
+            (17, 0.0),
+            (17, -8.0),
+            (12, (MAX_EVENTS + 1) as f64),
+            (18, (MAX_EVENT_MEMBERS + 1) as f64),
         ] {
             let mut raw = request(Engine::MonteCarlo).encode();
             raw[index] = value;
@@ -929,7 +1385,8 @@ mod tests {
         assert_eq!(raw.len(), RESP_HEADER);
         assert_eq!(raw[2], 0.0, "n_bins は 0");
         assert_eq!(raw[4], 0.0, "n_tasks は 0");
-        assert_eq!(raw[15], 0.0, "n_days は 0");
+        assert_eq!(raw[14], 0.0, "n_days は 0");
+        assert_eq!(raw[17], 0.0, "n_members は 0");
     }
 
     #[test]
@@ -941,26 +1398,5 @@ mod tests {
         let pert = handle(&raw);
         assert_eq!(fallback[0], Status::Ok as u8 as f64);
         assert_eq!(fallback[6], pert[6], "平均が PERT と一致する");
-    }
-
-    #[test]
-    fn events_and_forced_workdays_change_the_capacity() {
-        let mut r = request(Engine::Convolution);
-        r.calendar.horizon_days = 14;
-        r.events = vec![CalendarEvent {
-            start_day: monday() + 1,
-            end_day: monday() + 1,
-            hours: -1.0,
-        }];
-        let raw = handle(&r.encode());
-        let resp = Response::parse(&raw);
-        assert_eq!(resp.capacity()[1], 0.0, "終日の予定で稼働が 0 になる");
-        assert_eq!(resp.flags()[1] as u8 & crate::calendar::FLAG_EVENT, 4);
-
-        // 土曜 (添字 5) を休日出勤にする。
-        r.forced_workdays = vec![monday() + 5];
-        let raw = handle(&r.encode());
-        let resp = Response::parse(&raw);
-        assert_eq!(resp.capacity()[5], 1.0);
     }
 }

@@ -21,6 +21,7 @@ pub mod date;
 pub mod dist;
 pub mod empirical;
 pub mod estimate;
+pub mod member;
 pub mod montecarlo;
 pub mod prefix;
 pub mod rng;

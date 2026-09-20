@@ -155,9 +155,16 @@ mod tests {
         } else {
             0
         };
-        let n_days = resp[15] as usize;
-        let expected =
-            mhc_core::abi::response_offsets(n_bins, n_pct, n_tasks, prefix_width, n_days)[12];
+        let n_days = resp[14] as usize;
+        let n_members = resp[17] as usize;
+        let expected = mhc_core::abi::response_offsets(
+            n_bins,
+            n_pct,
+            n_tasks,
+            prefix_width,
+            n_members,
+            n_days,
+        )[mhc_core::abi::LAST_OFFSET];
         assert_eq!(resp.len(), expected, "宣言長とバッファ長が一致しない");
     }
 

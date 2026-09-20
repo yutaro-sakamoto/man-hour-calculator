@@ -1,11 +1,13 @@
 /** WASM とやり取りするバッファのレイアウト。`crates/core/src/abi.rs` と対応する。 */
 
 export const MAGIC = 20250920;
-export const ABI_VERSION = 2;
+export const ABI_VERSION = 3;
 export const REQ_HEADER = 32;
 export const RESP_HEADER = 24;
-export const REQ_TASK_STRIDE = 6;
-export const REQ_EVENT_STRIDE = 3;
+export const REQ_TASK_STRIDE = 7;
+export const REQ_MEMBER_STRIDE = 15;
+export const REQ_EVENT_STRIDE = 6;
+export const REQ_EVENT_MEMBER_STRIDE = 2;
 
 export const ENGINE = { monteCarlo: 0, convolution: 1 } as const;
 export const DIST = { pert: 0, triangular: 1 } as const;
@@ -37,6 +39,7 @@ export function responseOffsets(
   nPct: number,
   nTasks: number,
   prefixWidth: number,
+  nMembers: number,
   nDays: number,
 ): number[] {
   const lengths = [
@@ -48,11 +51,13 @@ export function responseOffsets(
     nTasks * 3, // 実績反映後の見積もり
     nTasks, // 消化済み工数
     nTasks, // 状態
+    nTasks, // 担当者
     nTasks * prefixWidth, // 累積和の CDF
-    nDays, // 日ごとの工数
-    nDays, // 累積工数
-    nDays, // 日ごとのフラグ
-    0, // 末尾
+    nMembers, // 担当者ごとの累積和グリッド上限
+    nMembers * nDays, // 日ごとの工数
+    nMembers * nDays, // 累積工数
+    nMembers * nDays, // 日ごとのフラグ
+    0, // 末尾 (= 全体の長さ)
   ];
   const offsets: number[] = [];
   let at = RESP_HEADER;
@@ -62,3 +67,6 @@ export function responseOffsets(
   }
   return offsets;
 }
+
+/** `responseOffsets` の末尾 (= 全体の長さ) の位置。 */
+export const LAST_OFFSET = 14;

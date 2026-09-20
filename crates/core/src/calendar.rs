@@ -1,21 +1,25 @@
-//! 稼働カレンダー。「何人日の作業がいつ終わるか」を答えるための土台。
+//! 人員ひとりぶんの稼働カレンダー。「何人日の作業がいつ終わるか」の土台。
 //!
-//! 工数 (人日) と暦日をつなぐのがこのモジュールの役割。
-//! 各暦日に **その日に投入できる工数 (人日)** を割り当て、その累積を持っておくと、
+//! 工数 (人日) と暦日をつなぐのがこのモジュールの役割。各暦日に
+//! **その人がその日に投入できる工数 (人日)** を割り当て、その累積を持っておくと、
 //! 「累積が X 人日に達する最初の日」＝ X 人日の作業が終わる日、として引ける。
 //!
 //! 1 日の工数は次のように決まる:
 //!
 //! ```text
-//! 基準 = チーム人数 × 1日の作業可能時間 ÷ 1人日あたりの時間
-//! 週末・祝日      → 0 (ただし特別稼働日に指定されていれば基準どおり)
-//! 予定 (終日)     → 0
-//! 予定 (時間指定) → 基準 − チーム人数 × 予定時間 ÷ 1人日あたりの時間
+//! 稼働分数 = その曜日の稼働時間帯の長さ
+//!            − 予定が稼働時間帯を覆う分数 (重なりは 1 回だけ数える)
+//! 工数     = 稼働分数 ÷ 60 ÷ 1人日あたりの時間
+//! 週末・祝日 → 0 (ただし特別稼働日に指定されていれば通常どおり)
 //! ```
+//!
+//! 予定を分単位の時刻で持つのは、5 分刻みの会議を正しく引くため。
+//! 稼働時間帯の外にある予定は 1 分も削らない。
 
-use crate::date::{civil_from_days, japanese_holidays, weekday};
+use crate::date::weekday;
+use crate::member::{union_length, MemberSchedule};
 
-/// 非稼働曜日 (週末など)。
+/// 非稼働曜日。
 pub const FLAG_WEEKEND: u8 = 1;
 /// 祝日。
 pub const FLAG_HOLIDAY: u8 = 2;
@@ -28,38 +32,85 @@ pub const FLAG_FORCED_WORKDAY: u8 = 8;
 pub const MAX_HORIZON_DAYS: usize = 20_000;
 
 /// 稼働に影響する予定。
+///
+/// `repeat_weeks` が 1 以上なら、その週数ごとに同じ曜日・同じ時刻で繰り返す
+/// (1 = 毎週、2 = 隔週)。`until_day` まで続き、`None` なら期間いっぱい。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CalendarEvent {
     pub start_day: i64,
     pub end_day: i64,
-    /// 1 人あたりこの予定で失われる時間。負の値は「終日休み」を表す。
-    pub hours: f64,
+    /// 開始時刻 (0 時からの分)。`None` なら終日。
+    pub start_minute: Option<i32>,
+    /// 終了時刻 (0 時からの分)。
+    pub end_minute: Option<i32>,
+    pub repeat_weeks: u32,
+    pub until_day: Option<i64>,
 }
 
-/// カレンダーの設定。
+impl CalendarEvent {
+    /// 終日休みの予定。
+    pub fn all_day(start_day: i64, end_day: i64) -> Self {
+        Self {
+            start_day,
+            end_day,
+            start_minute: None,
+            end_minute: None,
+            repeat_weeks: 0,
+            until_day: None,
+        }
+    }
+
+    /// その日にこの予定が発生するか。
+    pub fn occurs_on(&self, day: i64) -> bool {
+        if day < self.start_day {
+            return false;
+        }
+        if self.repeat_weeks == 0 {
+            return day <= self.end_day;
+        }
+
+        let period = 7 * self.repeat_weeks as i64;
+        let span = self.end_day - self.start_day;
+        // 期間より長い予定も扱えるよう、直近の 2 回ぶんを見る。
+        let latest = (day - self.start_day) / period;
+        for back in 0..=1 {
+            let index = latest - back;
+            if index < 0 {
+                continue;
+            }
+            let from = self.start_day + period * index;
+            if let Some(until) = self.until_day {
+                if from > until {
+                    continue;
+                }
+            }
+            if day >= from && day <= from + span {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// その日に失われる時間帯。終日なら稼働時間帯そのもの。
+    fn busy_window(&self, work: (i32, i32)) -> (i32, i32) {
+        match (self.start_minute, self.end_minute) {
+            (Some(from), Some(to)) => (from.max(work.0), to.min(work.1)),
+            // 片側しか無い、あるいは終日の指定はまるごと潰す。
+            _ => work,
+        }
+    }
+}
+
+/// カレンダー全体で共通の設定。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CalendarConfig {
     pub start_day: i64,
     pub horizon_days: usize,
-    /// ビット i (0 = 日曜) が立っていればその曜日は稼働日。
-    pub weekday_mask: u8,
-    pub hours_per_day: f64,
+    /// 1 人日を何時間とみなすか。
     pub hours_per_person_day: f64,
-    pub team_size: f64,
-    pub use_japanese_holidays: bool,
 }
 
-impl CalendarConfig {
-    /// 1 稼働日あたりに投入できる工数 (人日)。
-    pub fn base_capacity(&self) -> f64 {
-        if self.hours_per_person_day <= 0.0 {
-            return 0.0;
-        }
-        (self.team_size * self.hours_per_day / self.hours_per_person_day).max(0.0)
-    }
-}
-
-/// 日ごとの稼働可能工数とその累積。
+/// 人員ひとりぶんの、日ごとの稼働可能工数とその累積。
 #[derive(Debug, Clone)]
 pub struct Calendar {
     start_day: i64,
@@ -69,38 +120,32 @@ pub struct Calendar {
 }
 
 impl Calendar {
-    /// 設定と予定からカレンダーを組み立てる。
+    /// 設定・稼働予定・予定からカレンダーを組み立てる。
     ///
-    /// `forced_workdays` は週末・祝日であっても稼働する日 (休日出勤)。
+    /// `holidays` は昇順に並んだ祝日 (全員に共通)。
+    /// `forced_workdays` は週末・祝日でも稼働する日。
     pub fn build(
         config: &CalendarConfig,
+        schedule: &MemberSchedule,
         events: &[CalendarEvent],
         forced_workdays: &[i64],
+        holidays: &[i64],
     ) -> Self {
         let horizon = config.horizon_days.min(MAX_HORIZON_DAYS);
-        let base = config.base_capacity();
-
-        // 対象期間にかかる年の祝日をまとめて求めておく。
-        let holidays = if config.use_japanese_holidays && horizon > 0 {
-            let first = civil_from_days(config.start_day).0;
-            let last = civil_from_days(config.start_day + horizon as i64).0;
-            let mut all: Vec<i64> = (first..=last).flat_map(japanese_holidays).collect();
-            all.sort_unstable();
-            all
-        } else {
-            Vec::new()
-        };
+        let minutes_per_person_day = (config.hours_per_person_day * 60.0).max(1.0);
 
         let mut capacity = Vec::with_capacity(horizon);
         let mut cumulative = Vec::with_capacity(horizon);
         let mut flags = Vec::with_capacity(horizon);
         let mut running = 0.0;
+        let mut busy: Vec<(i32, i32)> = Vec::new();
 
         for offset in 0..horizon {
             let day = config.start_day + offset as i64;
             let mut mark = 0u8;
 
-            if (config.weekday_mask >> weekday(day)) & 1 == 0 {
+            let window = schedule.window(weekday(day));
+            if window.is_none() {
                 mark |= FLAG_WEEKEND;
             }
             if holidays.binary_search(&day).is_ok() {
@@ -111,23 +156,39 @@ impl Calendar {
                 mark |= FLAG_FORCED_WORKDAY;
             }
 
-            let mut available = if mark & (FLAG_WEEKEND | FLAG_HOLIDAY) != 0 && !forced {
-                0.0
-            } else {
-                base
-            };
-
+            // 予定は稼働日でなくても「入っている」ことは示す (画面で見えるように)。
+            busy.clear();
             for event in events {
-                if day < event.start_day || day > event.end_day {
+                if !event.occurs_on(day) {
                     continue;
                 }
                 mark |= FLAG_EVENT;
-                if event.hours < 0.0 {
-                    available = 0.0;
-                } else if config.hours_per_person_day > 0.0 {
-                    available -= config.team_size * event.hours / config.hours_per_person_day;
+                if let Some(work) = window {
+                    let (from, to) = event.busy_window(work);
+                    if to > from {
+                        busy.push((from, to));
+                    }
                 }
             }
+
+            let available = match window {
+                // 祝日は稼働しない。特別稼働日に指定されていればそのまま働く。
+                Some(_) if mark & FLAG_HOLIDAY != 0 && !forced => 0.0,
+                Some((from, to)) => {
+                    let minutes =
+                        (to - from - schedule.break_minutes() - union_length(&mut busy)).max(0);
+                    minutes as f64 / minutes_per_person_day
+                }
+                // 非稼働曜日でも、特別稼働日なら平日の標準的な稼働時間で働くとみなす。
+                None if forced => {
+                    let weekday_minutes = (0..7)
+                        .map(|w| schedule.working_minutes(w))
+                        .max()
+                        .unwrap_or(0);
+                    weekday_minutes as f64 / minutes_per_person_day
+                }
+                None => 0.0,
+            };
 
             let available = if available.is_finite() {
                 available.max(0.0)
@@ -218,50 +279,246 @@ impl Calendar {
     }
 }
 
+/// 期間にかかる年の日本の祝日を、昇順に並べて返す。
+pub fn japanese_holidays_for(start_day: i64, horizon_days: usize) -> Vec<i64> {
+    use crate::date::{civil_from_days, japanese_holidays};
+    if horizon_days == 0 {
+        return Vec::new();
+    }
+    let first = civil_from_days(start_day).0;
+    let last = civil_from_days(start_day + horizon_days as i64).0;
+    let mut all: Vec<i64> = (first..=last).flat_map(japanese_holidays).collect();
+    all.sort_unstable();
+    all
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::date::days_from_civil;
 
-    /// 月〜金稼働、1 人、8 時間/日、1 人日 = 8 時間。
-    fn weekday_config(start: (i32, u32, u32), horizon: usize) -> CalendarConfig {
+    /// 2026-09-21 は月曜。
+    const MONDAY: (i32, u32, u32) = (2026, 9, 21);
+
+    fn day(offset: i64) -> i64 {
+        days_from_civil(MONDAY.0, MONDAY.1, MONDAY.2) + offset
+    }
+
+    fn config(horizon: usize) -> CalendarConfig {
         CalendarConfig {
-            start_day: days_from_civil(start.0, start.1, start.2),
+            start_day: day(0),
             horizon_days: horizon,
-            weekday_mask: 0b0011_1110, // 月〜金 (bit0=日 … bit6=土)
-            hours_per_day: 8.0,
             hours_per_person_day: 8.0,
-            team_size: 1.0,
-            use_japanese_holidays: false,
         }
+    }
+
+    /// 月〜金 9:00〜17:00 (= 8 時間 = 1 人日)。
+    fn eight_hour_weekdays() -> MemberSchedule {
+        let mut start = [0; 7];
+        let mut end = [0; 7];
+        for weekday in 1..=5 {
+            start[weekday] = 9 * 60;
+            end[weekday] = 17 * 60;
+        }
+        MemberSchedule::new(start, end)
+    }
+
+    fn build(horizon: usize, events: &[CalendarEvent]) -> Calendar {
+        Calendar::build(&config(horizon), &eight_hour_weekdays(), events, &[], &[])
     }
 
     #[test]
     fn weekends_have_no_capacity() {
-        // 2026-09-21 は月曜。
-        let cal = Calendar::build(&weekday_config((2026, 9, 21), 14), &[], &[]);
-        let cap = cal.capacity();
-        assert_eq!(&cap[0..5], &[1.0; 5], "月〜金は 1 人日");
-        assert_eq!(&cap[5..7], &[0.0; 2], "土日は 0");
+        let cal = build(14, &[]);
+        assert_eq!(&cal.capacity()[0..5], &[1.0; 5], "月〜金は 1 人日");
+        assert_eq!(&cal.capacity()[5..7], &[0.0; 2], "土日は 0");
         assert_eq!(cal.flags()[5] & FLAG_WEEKEND, FLAG_WEEKEND);
         assert_eq!(cal.total_capacity(), 10.0, "2 週で 10 人日");
     }
 
     #[test]
-    fn team_size_and_hours_scale_the_capacity() {
-        let mut config = weekday_config((2026, 9, 21), 5);
-        config.team_size = 3.0;
-        config.hours_per_day = 6.0;
-        assert_eq!(config.base_capacity(), 3.0 * 6.0 / 8.0);
-        let cal = Calendar::build(&config, &[], &[]);
-        assert!((cal.total_capacity() - 5.0 * 2.25).abs() < 1e-12);
+    fn the_working_window_decides_the_capacity() {
+        // 10:00〜14:00 だけ働く人は 0.5 人日/日。
+        let mut start = [0; 7];
+        let mut end = [0; 7];
+        for weekday in 1..=5 {
+            start[weekday] = 10 * 60;
+            end[weekday] = 14 * 60;
+        }
+        let cal = Calendar::build(&config(5), &MemberSchedule::new(start, end), &[], &[], &[]);
+        assert_eq!(cal.total_capacity(), 2.5);
+    }
+
+    #[test]
+    fn a_meeting_costs_exactly_its_overlap_with_the_working_hours() {
+        // 9:00〜17:00 の人にとって、10:00〜10:45 の会議は 45 分。
+        let cal = build(
+            2,
+            &[CalendarEvent {
+                start_day: day(0),
+                end_day: day(0),
+                start_minute: Some(10 * 60),
+                end_minute: Some(10 * 60 + 45),
+                repeat_weeks: 0,
+                until_day: None,
+            }],
+        );
+        assert!((cal.capacity()[0] - (480.0 - 45.0) / 480.0).abs() < 1e-12);
+        assert_eq!(cal.flags()[0] & FLAG_EVENT, FLAG_EVENT);
+    }
+
+    #[test]
+    fn a_meeting_outside_the_working_hours_costs_nothing() {
+        // 8:00〜9:00 は稼働時間の外。
+        let cal = build(
+            2,
+            &[CalendarEvent {
+                start_day: day(0),
+                end_day: day(0),
+                start_minute: Some(8 * 60),
+                end_minute: Some(9 * 60),
+                repeat_weeks: 0,
+                until_day: None,
+            }],
+        );
+        assert_eq!(cal.capacity()[0], 1.0, "稼働時間を 1 分も削らない");
+        assert_eq!(cal.flags()[0] & FLAG_EVENT, FLAG_EVENT, "予定自体はある");
+    }
+
+    #[test]
+    fn a_meeting_is_clipped_to_the_working_hours() {
+        // 16:00〜19:00 のうち、稼働中なのは 16:00〜17:00 の 1 時間だけ。
+        let cal = build(
+            2,
+            &[CalendarEvent {
+                start_day: day(0),
+                end_day: day(0),
+                start_minute: Some(16 * 60),
+                end_minute: Some(19 * 60),
+                repeat_weeks: 0,
+                until_day: None,
+            }],
+        );
+        assert!((cal.capacity()[0] - 420.0 / 480.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn overlapping_meetings_are_counted_once() {
+        let overlapping = [
+            CalendarEvent {
+                start_day: day(0),
+                end_day: day(0),
+                start_minute: Some(10 * 60),
+                end_minute: Some(11 * 60),
+                repeat_weeks: 0,
+                until_day: None,
+            },
+            CalendarEvent {
+                start_day: day(0),
+                end_day: day(0),
+                start_minute: Some(10 * 60 + 30),
+                end_minute: Some(11 * 60 + 30),
+                repeat_weeks: 0,
+                until_day: None,
+            },
+        ];
+        let cal = build(2, &overlapping);
+        // 10:00〜11:30 の 90 分。
+        assert!((cal.capacity()[0] - (480.0 - 90.0) / 480.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn an_all_day_event_zeroes_the_day() {
+        let cal = build(3, &[CalendarEvent::all_day(day(1), day(1))]);
+        assert_eq!(cal.capacity()[1], 0.0);
+        assert_eq!(cal.total_capacity(), 2.0);
+    }
+
+    #[test]
+    fn a_weekly_meeting_repeats_on_the_same_weekday() {
+        let weekly = CalendarEvent {
+            start_day: day(0),
+            end_day: day(0),
+            start_minute: Some(10 * 60),
+            end_minute: Some(11 * 60),
+            repeat_weeks: 1,
+            until_day: None,
+        };
+        let cal = build(21, &[weekly]);
+        for week in 0..3 {
+            let index = (week * 7) as usize;
+            assert!(
+                (cal.capacity()[index] - 420.0 / 480.0).abs() < 1e-12,
+                "{week} 週目の月曜"
+            );
+            assert_eq!(
+                cal.capacity()[index + 1],
+                1.0,
+                "{week} 週目の火曜は影響なし"
+            );
+        }
+    }
+
+    #[test]
+    fn a_biweekly_meeting_skips_every_other_week() {
+        let biweekly = CalendarEvent {
+            start_day: day(0),
+            end_day: day(0),
+            start_minute: Some(13 * 60),
+            end_minute: Some(14 * 60),
+            repeat_weeks: 2,
+            until_day: None,
+        };
+        let cal = build(28, &[biweekly]);
+        for week in 0..4 {
+            let index = (week * 7) as usize;
+            let affected = week % 2 == 0;
+            let expected = if affected { 420.0 / 480.0 } else { 1.0 };
+            assert!(
+                (cal.capacity()[index] - expected).abs() < 1e-12,
+                "{week} 週目 (影響あり: {affected})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeat_stops_at_its_end_date() {
+        let weekly = CalendarEvent {
+            start_day: day(0),
+            end_day: day(0),
+            start_minute: Some(10 * 60),
+            end_minute: Some(11 * 60),
+            repeat_weeks: 1,
+            until_day: Some(day(8)),
+        };
+        let cal = build(28, &[weekly]);
+        assert!(cal.capacity()[0] < 1.0, "1 回目");
+        assert!(cal.capacity()[7] < 1.0, "2 回目 (until 以内)");
+        assert_eq!(cal.capacity()[14], 1.0, "3 回目は until を越えるので無い");
+    }
+
+    #[test]
+    fn a_multi_day_event_repeats_as_a_block() {
+        // 月〜水の合宿が隔週である、という形。
+        let block = CalendarEvent {
+            start_day: day(0),
+            end_day: day(2),
+            start_minute: None,
+            end_minute: None,
+            repeat_weeks: 2,
+            until_day: None,
+        };
+        let cal = build(28, &[block]);
+        assert_eq!(&cal.capacity()[0..3], &[0.0; 3], "1 回目");
+        assert_eq!(&cal.capacity()[3..5], &[1.0; 2], "木金は通常どおり");
+        assert_eq!(&cal.capacity()[7..10], &[1.0; 3], "翌週は無い");
+        assert_eq!(&cal.capacity()[14..17], &[0.0; 3], "2 回目");
     }
 
     #[test]
     fn japanese_holidays_remove_capacity() {
-        let mut config = weekday_config((2026, 9, 21), 7);
-        config.use_japanese_holidays = true;
-        let cal = Calendar::build(&config, &[], &[]);
+        let holidays = japanese_holidays_for(day(0), 7);
+        let cal = Calendar::build(&config(7), &eight_hour_weekdays(), &[], &[], &holidays);
         // 2026-09-21 敬老の日、9/22 国民の休日、9/23 秋分の日。
         assert_eq!(&cal.capacity()[0..3], &[0.0; 3], "3 連休のはず");
         assert_eq!(cal.flags()[0] & FLAG_HOLIDAY, FLAG_HOLIDAY);
@@ -269,123 +526,45 @@ mod tests {
     }
 
     #[test]
-    fn a_forced_workday_overrides_a_holiday() {
-        let mut config = weekday_config((2026, 9, 21), 7);
-        config.use_japanese_holidays = true;
-        let holiday = days_from_civil(2026, 9, 22);
-        let cal = Calendar::build(&config, &[], &[holiday]);
-        assert_eq!(cal.capacity()[1], 1.0, "休日出勤した日は稼働する");
+    fn a_forced_workday_overrides_a_holiday_and_a_weekend() {
+        let holidays = japanese_holidays_for(day(0), 7);
+        let forced = [day(1), day(5)]; // 祝日の火曜と、土曜
+        let cal = Calendar::build(&config(7), &eight_hour_weekdays(), &[], &forced, &holidays);
+        assert_eq!(cal.capacity()[1], 1.0, "祝日に出勤");
         assert_eq!(cal.flags()[1] & FLAG_FORCED_WORKDAY, FLAG_FORCED_WORKDAY);
-        assert_eq!(
-            cal.flags()[1] & FLAG_HOLIDAY,
-            FLAG_HOLIDAY,
-            "祝日である事実は残す"
-        );
-    }
-
-    #[test]
-    fn an_all_day_event_zeroes_the_day() {
-        let config = weekday_config((2026, 9, 21), 5);
-        let day = days_from_civil(2026, 9, 23);
-        let cal = Calendar::build(
-            &config,
-            &[CalendarEvent {
-                start_day: day,
-                end_day: day,
-                hours: -1.0,
-            }],
-            &[],
-        );
-        assert_eq!(cal.capacity()[2], 0.0);
-        assert_eq!(cal.flags()[2] & FLAG_EVENT, FLAG_EVENT);
-        assert_eq!(cal.total_capacity(), 4.0);
-    }
-
-    #[test]
-    fn an_hourly_event_reduces_the_day_proportionally() {
-        let mut config = weekday_config((2026, 9, 21), 5);
-        config.team_size = 2.0; // 基準は 2 人日/日
-        let day = days_from_civil(2026, 9, 22);
-        let cal = Calendar::build(
-            &config,
-            &[CalendarEvent {
-                start_day: day,
-                end_day: day,
-                hours: 2.0, // 全員が 2 時間とられる → 2 人 × 2h ÷ 8h = 0.5 人日
-            }],
-            &[],
-        );
-        assert!((cal.capacity()[1] - 1.5).abs() < 1e-12);
-    }
-
-    #[test]
-    fn events_spanning_several_days_apply_to_each_day() {
-        let config = weekday_config((2026, 9, 21), 7);
-        let cal = Calendar::build(
-            &config,
-            &[CalendarEvent {
-                start_day: days_from_civil(2026, 9, 22),
-                end_day: days_from_civil(2026, 9, 24),
-                hours: -1.0,
-            }],
-            &[],
-        );
-        assert_eq!(&cal.capacity()[1..4], &[0.0; 3]);
-        assert_eq!(cal.total_capacity(), 2.0, "月曜と金曜だけ残る");
-    }
-
-    #[test]
-    fn overlapping_events_never_push_capacity_below_zero() {
-        let config = weekday_config((2026, 9, 21), 3);
-        let day = days_from_civil(2026, 9, 21);
-        let events = vec![
-            CalendarEvent {
-                start_day: day,
-                end_day: day,
-                hours: 6.0,
-            },
-            CalendarEvent {
-                start_day: day,
-                end_day: day,
-                hours: 6.0,
-            },
-        ];
-        let cal = Calendar::build(&config, &events, &[]);
-        assert_eq!(cal.capacity()[0], 0.0, "負の工数は出さない");
+        assert_eq!(cal.capacity()[5], 1.0, "土曜に出勤");
     }
 
     #[test]
     fn effort_maps_to_the_day_it_finishes_on() {
-        let cal = Calendar::build(&weekday_config((2026, 9, 21), 14), &[], &[]);
-        // 1 人日/日なので、3 人日は 3 日目 (添字 2) に終わる。
+        let cal = build(14, &[]);
         assert_eq!(cal.day_index_for_effort(3.0), Some(2));
         assert_eq!(cal.day_index_for_effort(0.5), Some(0));
-        // 5 人日を超えると週末を挟んで翌週になる。
-        assert_eq!(cal.day_index_for_effort(5.5), Some(7));
-        // 期間内に終わらない工数。
+        assert_eq!(cal.day_index_for_effort(5.5), Some(7), "週末をまたぐ");
         assert_eq!(cal.day_index_for_effort(100.0), None);
     }
 
     #[test]
     fn capacity_between_clamps_to_the_calendar_range() {
-        let cal = Calendar::build(&weekday_config((2026, 9, 21), 14), &[], &[]);
-        let monday = days_from_civil(2026, 9, 21);
-        assert_eq!(cal.capacity_between(monday, monday + 4), 5.0);
-        assert_eq!(cal.capacity_between(monday + 5, monday + 6), 0.0, "土日");
-        // 範囲外は 0 として扱う。
-        assert_eq!(cal.capacity_between(monday - 100, monday - 50), 0.0);
-        assert_eq!(cal.capacity_between(monday + 500, monday + 600), 0.0);
-        // 片側だけはみ出す場合は重なった分だけ数える。
-        assert_eq!(cal.capacity_between(monday - 10, monday + 4), 5.0);
-        // 逆転した期間は 0。
-        assert_eq!(cal.capacity_between(monday + 4, monday), 0.0);
+        let cal = build(14, &[]);
+        assert_eq!(cal.capacity_between(day(0), day(4)), 5.0);
+        assert_eq!(cal.capacity_between(day(5), day(6)), 0.0, "土日");
+        assert_eq!(cal.capacity_between(day(-100), day(-50)), 0.0);
+        assert_eq!(cal.capacity_between(day(500), day(600)), 0.0);
+        assert_eq!(cal.capacity_between(day(-10), day(4)), 5.0);
+        assert_eq!(cal.capacity_between(day(4), day(0)), 0.0, "逆転した期間");
     }
 
     #[test]
     fn cumulative_capacity_is_monotone() {
-        let mut config = weekday_config((2026, 1, 1), 400);
-        config.use_japanese_holidays = true;
-        let cal = Calendar::build(&config, &[], &[]);
+        let holidays = japanese_holidays_for(day(0), 400);
+        let cal = Calendar::build(
+            &config(400),
+            &MemberSchedule::default(),
+            &[],
+            &[],
+            &holidays,
+        );
         assert!(cal.cumulative().windows(2).all(|w| w[1] >= w[0]));
         assert!(cal.capacity().iter().all(|&c| c >= 0.0));
         assert_eq!(cal.len(), 400);
@@ -393,16 +572,21 @@ mod tests {
 
     #[test]
     fn a_horizon_beyond_the_limit_is_clamped() {
-        let config = weekday_config((2026, 1, 1), MAX_HORIZON_DAYS + 5_000);
-        let cal = Calendar::build(&config, &[], &[]);
+        let mut settings = config(MAX_HORIZON_DAYS + 5_000);
+        settings.horizon_days = MAX_HORIZON_DAYS + 5_000;
+        let cal = Calendar::build(&settings, &eight_hour_weekdays(), &[], &[], &[]);
         assert_eq!(cal.len(), MAX_HORIZON_DAYS);
     }
 
     #[test]
-    fn a_calendar_with_no_working_days_finishes_nothing() {
-        let mut config = weekday_config((2026, 9, 21), 30);
-        config.weekday_mask = 0;
-        let cal = Calendar::build(&config, &[], &[]);
+    fn a_schedule_with_no_working_days_finishes_nothing() {
+        let cal = Calendar::build(
+            &config(30),
+            &MemberSchedule::new([0; 7], [0; 7]),
+            &[],
+            &[],
+            &[],
+        );
         assert_eq!(cal.total_capacity(), 0.0);
         assert_eq!(cal.day_index_for_effort(1.0), None);
     }

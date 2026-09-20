@@ -15,7 +15,7 @@
 
 use crate::dist::Sampler;
 use crate::empirical::EmpiricalDist;
-use crate::prefix::{EngineOutput, PrefixCdfs, PrefixSpec};
+use crate::prefix::{Assignment, EngineOutput, PrefixCdfs, PrefixSpec};
 
 /// 2 つの確率質量関数を畳み込む。
 fn convolve_pmf(a: &[f64], b: &[f64]) -> Vec<f64> {
@@ -36,80 +36,144 @@ fn convolve_pmf(a: &[f64], b: &[f64]) -> Vec<f64> {
 /// `grid_points` は全体レンジ `[Σmin, Σmax]` の分割数。大きいほど精度が上がるが、
 /// 計算量は `O(grid_points^2)` に近づく。
 pub fn convolve(samplers: &[Sampler], grid_points: usize) -> EmpiricalDist {
-    run(samplers, grid_points, PrefixSpec::none()).total
+    let members = vec![0usize; samplers.len()];
+    let grid_hi = [0.0];
+    run(
+        samplers,
+        grid_points,
+        PrefixSpec::none(),
+        &Assignment {
+            members: &members,
+            grid_hi: &grid_hi,
+        },
+    )
+    .total
 }
 
 /// 総工数に加えて、各タスクまでの累積工数の分布も求める。
 ///
+/// 総和は全タスクをまとめて 1 回畳み込む。累積和のほうは**担当者ごとに**
+/// 畳み込み直す。別の人のタスクは並行して進むので、一列に足せないため。
 /// 逐次畳み込みは途中経過そのものが「ここまでの累積工数の分布」なので、
 /// 1 タスクぶん畳み込むたびにその時点の CDF を書き出すだけで済む。
-pub fn run(samplers: &[Sampler], grid_points: usize, spec: PrefixSpec) -> EngineOutput {
+pub fn run(
+    samplers: &[Sampler],
+    grid_points: usize,
+    spec: PrefixSpec,
+    assignment: &Assignment<'_>,
+) -> EngineOutput {
+    let total = convolve_all(samplers, grid_points);
+    let mut prefix = PrefixCdfs::new(samplers.len(), spec);
+
+    if spec.is_enabled() {
+        for member in 0..assignment.members_count() {
+            let tasks = assignment.tasks_of(member);
+            if tasks.is_empty() {
+                continue;
+            }
+            record_prefixes(
+                samplers,
+                &tasks,
+                grid_points,
+                spec,
+                assignment.grid_hi.get(member).copied().unwrap_or(0.0),
+                &mut prefix,
+            );
+        }
+    }
+
+    EngineOutput { total, prefix }
+}
+
+/// 与えられたサンプラ列の総和の分布を、逐次畳み込みで求める。
+fn convolve_all(samplers: &[Sampler], grid_points: usize) -> EmpiricalDist {
     let lo: f64 = samplers.iter().map(|s| s.estimate().min()).sum();
     let hi: f64 = samplers.iter().map(|s| s.estimate().max()).sum();
-    let mut prefix = PrefixCdfs::new(samplers.len(), spec);
 
     // 全タスクが確定値なら分布は 1 点に潰れる。
     let span = hi - lo;
     if span.is_nan() || span <= 0.0 {
+        return EmpiricalDist::point_mass(lo);
+    }
+
+    let h = span / grid_points.max(1) as f64;
+    let mut acc = vec![1.0f64];
+    let mut spread_tasks = 0usize;
+    for sampler in samplers {
+        if sampler.estimate().is_degenerate() {
+            continue;
+        }
+        spread_tasks += 1;
+        acc = convolve_pmf(&acc, &discretize(sampler, h));
+    }
+    build_dist(&acc, lo, spread_tasks, h, true)
+}
+
+/// ある担当者のタスク列を順に畳み込み、1 件ごとの累積和 CDF を書き出す。
+fn record_prefixes(
+    samplers: &[Sampler],
+    tasks: &[usize],
+    grid_points: usize,
+    spec: PrefixSpec,
+    grid_hi: f64,
+    prefix: &mut PrefixCdfs,
+) {
+    let lo: f64 = tasks.iter().map(|&i| samplers[i].estimate().min()).sum();
+    let hi: f64 = tasks.iter().map(|&i| samplers[i].estimate().max()).sum();
+    let span = hi - lo;
+    let step = spec.step(grid_hi);
+    let mut row = vec![0.0; prefix.width()];
+
+    // すべて確定値なら階段状の CDF になる。
+    if span.is_nan() || span <= 0.0 {
         let mut running = 0.0;
-        let mut row = vec![0.0; prefix.width()];
-        for (index, s) in samplers.iter().enumerate() {
-            running += s.estimate().min();
-            let at = spec.bin_of(running);
+        for &task in tasks {
+            running += samplers[task].estimate().min();
+            let at = spec.bin_of(grid_hi, running);
             for (k, slot) in row.iter_mut().enumerate() {
                 *slot = if k >= at { 1.0 } else { 0.0 };
             }
-            prefix.set(index, &row);
+            prefix.set(task, &row);
         }
-        return EngineOutput {
-            total: EmpiricalDist::point_mass(lo),
-            prefix,
-        };
+        return;
     }
 
-    let grid_points = grid_points.max(1);
-    let h = span / grid_points as f64;
-
-    // 幅を持つタスクだけを畳み込む。確定値のタスクの工数は開始位置に含める。
+    let h = span / grid_points.max(1) as f64;
     let mut acc = vec![1.0f64];
     let mut spread_tasks = 0usize;
     let mut lo_running = 0.0;
-    let mut row = vec![0.0; prefix.width()];
 
-    for (index, s) in samplers.iter().enumerate() {
-        let e = s.estimate();
-        lo_running += e.min();
-
-        if !e.is_degenerate() {
+    for &task in tasks {
+        let estimate = samplers[task].estimate();
+        lo_running += estimate.min();
+        if !estimate.is_degenerate() {
             spread_tasks += 1;
-            // ビン数は幅を刻み幅で割った切り上げ。最後の端点は必ず max 以上になるので、
-            // 差分の総和はちょうど 1 になる。
-            let bins = ((e.width() / h).ceil() as usize).max(1);
-            let mut pmf = Vec::with_capacity(bins);
-            let mut prev = 0.0;
-            for j in 1..=bins {
-                let edge = e.min() + j as f64 * h;
-                let c = s.cdf(edge);
-                pmf.push((c - prev).max(0.0));
-                prev = c;
-            }
-            acc = convolve_pmf(&acc, &pmf);
+            acc = convolve_pmf(&acc, &discretize(&samplers[task], h));
         }
-
-        if !row.is_empty() {
-            let partial = build_dist(&acc, lo_running, spread_tasks, h, false);
-            let step = spec.step();
-            for (k, slot) in row.iter_mut().enumerate() {
-                *slot = partial.cdf_at(k as f64 * step);
-            }
-            prefix.set(index, &row);
+        let partial = build_dist(&acc, lo_running, spread_tasks, h, false);
+        for (k, slot) in row.iter_mut().enumerate() {
+            *slot = partial.cdf_at(k as f64 * step);
         }
+        prefix.set(task, &row);
     }
+}
 
-    EngineOutput {
-        total: build_dist(&acc, lo, spread_tasks, h, true),
-        prefix,
+/// 1 タスクの分布を刻み幅 `h` のビンに落とす。
+///
+/// ビン数は幅を刻み幅で割った切り上げ。最後の端点は必ず max 以上になるので、
+/// CDF の差分の総和はちょうど 1 になる。
+fn discretize(sampler: &Sampler, h: f64) -> Vec<f64> {
+    let estimate = sampler.estimate();
+    let bins = ((estimate.width() / h).ceil() as usize).max(1);
+    let mut pmf = Vec::with_capacity(bins);
+    let mut previous = 0.0;
+    for j in 1..=bins {
+        let edge = estimate.min() + j as f64 * h;
+        let value = sampler.cdf(edge);
+        pmf.push((value - previous).max(0.0));
+        previous = value;
     }
+    pmf
 }
 
 /// 畳み込み結果の確率質量を [`EmpiricalDist`] に組み立てる。
@@ -149,7 +213,12 @@ mod tests {
     use crate::dist::{DistKind, DEFAULT_LAMBDA};
     use crate::estimate::TaskEstimate;
     use crate::montecarlo;
-    use crate::prefix::PrefixSpec;
+    use crate::prefix::{Assignment, PrefixSpec};
+
+    /// 全タスクを 1 人が担当する形の割当。
+    fn solo(tasks: usize, grid_hi: f64) -> (Vec<usize>, Vec<f64>) {
+        (vec![0; tasks], vec![grid_hi])
+    }
 
     fn samplers(rows: &[(f64, f64, f64)], kind: DistKind) -> Vec<Sampler> {
         rows.iter()
@@ -251,7 +320,12 @@ mod tests {
     }
 
     /// 累積和の分布が満たすべき構造。片方のエンジンだけ壊れていれば必ず落ちる。
-    fn assert_prefix_shape(out: &crate::prefix::EngineOutput, spec: PrefixSpec, label: &str) {
+    fn assert_prefix_shape(
+        out: &crate::prefix::EngineOutput,
+        spec: PrefixSpec,
+        grid_hi: f64,
+        label: &str,
+    ) {
         let tasks = out.prefix.tasks();
         for i in 0..tasks {
             let row = out.prefix.row(i);
@@ -285,7 +359,7 @@ mod tests {
 
         // 最後のタスクの累積和は総工数そのもの。
         let last = out.prefix.row(tasks - 1);
-        let step = spec.step();
+        let step = spec.step(grid_hi);
         for (k, &value) in last.iter().enumerate() {
             let x = k as f64 * step;
             let direct = out.total.cdf_at(x);
@@ -299,16 +373,19 @@ mod tests {
     #[test]
     fn both_engines_agree_on_the_per_task_prefix_distributions() {
         let rows = [(5.0, 8.0, 20.0), (2.0, 3.0, 5.0), (10.0, 15.0, 40.0)];
-        let spec = PrefixSpec {
-            bins: 256,
-            grid_hi: rows.iter().map(|r| r.2).sum(),
+        let grid_hi: f64 = rows.iter().map(|r| r.2).sum();
+        let spec = PrefixSpec { bins: 256 };
+        let (members, hi) = solo(rows.len(), grid_hi);
+        let assignment = Assignment {
+            members: &members,
+            grid_hi: &hi,
         };
         for kind in [DistKind::Pert, DistKind::Triangular] {
             let ss = samplers(&rows, kind);
-            let mc = montecarlo::run(&ss, 400_000, 20_250_920, spec);
-            let cv = run(&ss, 4096, spec);
-            assert_prefix_shape(&mc, spec, "モンテカルロ");
-            assert_prefix_shape(&cv, spec, "畳み込み");
+            let mc = montecarlo::run(&ss, 400_000, 20_250_920, spec, &assignment);
+            let cv = run(&ss, 4096, spec, &assignment);
+            assert_prefix_shape(&mc, spec, grid_hi, "モンテカルロ");
+            assert_prefix_shape(&cv, spec, grid_hi, "畳み込み");
 
             for i in 0..rows.len() {
                 for (k, (&a, &b)) in mc.prefix.row(i).iter().zip(cv.prefix.row(i)).enumerate() {
@@ -325,12 +402,17 @@ mod tests {
     fn prefix_distributions_handle_fixed_tasks() {
         // 確定値のタスクが混ざっても階段状の CDF になる。
         let rows = [(3.0, 3.0, 3.0), (0.0, 2.0, 6.0), (1.0, 1.0, 1.0)];
-        let spec = PrefixSpec {
-            bins: 100,
-            grid_hi: 10.0,
+        let spec = PrefixSpec { bins: 100 };
+        let (members, hi) = solo(rows.len(), 10.0);
+        let assignment = Assignment {
+            members: &members,
+            grid_hi: &hi,
         };
         let ss = samplers(&rows, DistKind::Pert);
-        for out in [montecarlo::run(&ss, 50_000, 7, spec), run(&ss, 2048, spec)] {
+        for out in [
+            montecarlo::run(&ss, 50_000, 7, spec, &assignment),
+            run(&ss, 2048, spec, &assignment),
+        ] {
             // 1 番目は 3 人日ちょうどで必ず完了する。
             let first = out.prefix.row(0);
             assert!(first[29] < 0.01, "3 人日未満では終わらない");
@@ -341,12 +423,17 @@ mod tests {
     #[test]
     fn all_fixed_tasks_still_produce_prefix_distributions() {
         let rows = [(2.0, 2.0, 2.0), (3.0, 3.0, 3.0)];
-        let spec = PrefixSpec {
-            bins: 50,
-            grid_hi: 10.0,
+        let spec = PrefixSpec { bins: 50 };
+        let (members, hi) = solo(rows.len(), 10.0);
+        let assignment = Assignment {
+            members: &members,
+            grid_hi: &hi,
         };
         let ss = samplers(&rows, DistKind::Pert);
-        for out in [montecarlo::run(&ss, 100, 1, spec), run(&ss, 512, spec)] {
+        for out in [
+            montecarlo::run(&ss, 100, 1, spec, &assignment),
+            run(&ss, 512, spec, &assignment),
+        ] {
             assert_eq!(out.prefix.row(0)[9], 0.0, "2 人日未満では終わらない");
             assert_eq!(out.prefix.row(0)[10], 1.0, "2 人日で完了");
             // 刻みは 10 / 50 = 0.2 人日なので、5 人日は添字 25。

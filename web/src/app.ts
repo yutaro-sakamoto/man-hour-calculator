@@ -4,9 +4,10 @@ import type { ComputeResult } from "./wasm.ts";
 import type { ScheduleModel } from "./model/schedule.ts";
 import type { TreeRow } from "./model/tree.ts";
 import type { ColumnMode, Project, TaskFilter } from "./types.ts";
+import type { ResolvedMembers } from "./model/members.ts";
 
-export type TabId = "tasks" | "calendar" | "distribution" | "schedule";
-export const TABS: readonly TabId[] = ["tasks", "calendar", "distribution", "schedule"];
+export type TabId = "tasks" | "members" | "calendar" | "distribution" | "schedule";
+export const TABS: readonly TabId[] = ["tasks", "members", "calendar", "distribution", "schedule"];
 
 export interface AppState {
   project: Project;
@@ -14,11 +15,15 @@ export interface AppState {
   rows: TreeRow[];
   result: ComputeResult | null;
   schedule: ScheduleModel | null;
+  /** 未割当ぶんを補った人員一覧。計算に渡した並びと一致する。 */
+  members: ResolvedMembers;
   filter: TaskFilter;
   columnMode: ColumnMode;
   activeTab: TabId;
   /** カレンダーの月表示で見ている月。 */
   calendarMonth: { year: number; month: number };
+  /** 月表示で見ている人員の添字。`null` なら全員の合計。 */
+  calendarMember: number | null;
   status: { text: string; tone: "info" | "error" };
   /** スケジュールタブで確率を見る日。 */
   probeDate: string | null;

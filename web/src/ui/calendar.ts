@@ -1,4 +1,4 @@
-/** カレンダータブ。稼働条件・予定・月表示。 */
+/** カレンダータブ。期間の設定・予定・月表示。 */
 
 import { DAY_FLAG } from "../abi.ts";
 import type { AppActions, AppState } from "../app.ts";
@@ -11,9 +11,11 @@ import {
   weekdayLabels,
 } from "../format.ts";
 import { lang, t } from "../i18n.ts";
+import { memberLabel } from "../model/members.ts";
 import { newId } from "../model/project.ts";
 import { isNonWorkingDay } from "../model/schedule.ts";
 import type { CalendarEventItem } from "../types.ts";
+import { memberSlice } from "../wasm.ts";
 import {
   button,
   card,
@@ -23,19 +25,32 @@ import {
   h,
   iconButton,
   numberInput,
+  select,
   textInput,
 } from "./dom.ts";
 
+const REPEAT_CHOICES = [
+  { value: "0", label: "cal.repeat.none" },
+  { value: "1", label: "cal.repeat.weekly" },
+  { value: "2", label: "cal.repeat.biweekly" },
+  { value: "4", label: "cal.repeat.fourWeekly" },
+] as const;
+
 function renderBasics(state: AppState, actions: AppActions): HTMLElement {
   const calendar = state.project.calendar;
-  const labels = weekdayLabels(lang());
   const setNumber =
-    (key: "hoursPerDay" | "hoursPerPersonDay" | "teamSize" | "horizonDays") => (value: string) => {
+    (key: "hoursPerPersonDay" | "horizonDays") =>
+    (value: string): void => {
       actions.mutate((project) => {
         const parsed = Number(value);
-        if (Number.isFinite(parsed)) project.calendar[key] = Math.max(0, parsed);
+        if (Number.isFinite(parsed)) project.calendar[key] = Math.max(0.1, parsed);
       });
     };
+
+  const totalPerDay =
+    state.result === null || state.result.nDays === 0
+      ? 0
+      : state.result.totalCapacity / state.result.nDays;
 
   return card(t("cal.basics"), [
     h("div", { class: "controls" }, [
@@ -62,35 +77,10 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
         }),
       ),
       field(
-        t("cal.teamSize"),
-        numberInput(calendar.teamSize, setNumber("teamSize"), {
-          attrs: { min: 0, step: 0.5 },
-        }),
-      ),
-      field(
-        t("cal.hoursPerDay"),
-        numberInput(calendar.hoursPerDay, setNumber("hoursPerDay"), {
-          attrs: { min: 0, max: 24, step: 0.5 },
-        }),
-      ),
-      field(
         t("cal.hoursPerPersonDay"),
         numberInput(calendar.hoursPerPersonDay, setNumber("hoursPerPersonDay"), {
           attrs: { min: 0.5, max: 24, step: 0.5 },
         }),
-      ),
-    ]),
-    h("div", { class: "weekdays" }, [
-      h("span", { class: "field-label", text: t("cal.workdays") }),
-      ...labels.map((label, index) =>
-        h("label", { class: "weekday" }, [
-          checkbox(calendar.workdays[index] ?? false, (checked) => {
-            actions.mutate((project) => {
-              project.calendar.workdays[index] = checked;
-            });
-          }),
-          h("span", { text: label }),
-        ]),
       ),
     ]),
     h("label", { class: "toggle" }, [
@@ -107,7 +97,7 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
         state.result === null
           ? ""
           : `${t("cal.capacityPerDay", {
-              value: formatNumber(state.result.baseCapacity, lang(), 2),
+              value: formatNumber(totalPerDay, lang(), 2),
             })} · ${t("cal.totalCapacity", {
               value: formatNumber(state.result.totalCapacity, lang(), 1),
             })}`,
@@ -116,75 +106,128 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
 }
 
 function renderEvent(
+  state: AppState,
+  actions: AppActions,
   event: CalendarEventItem,
   index: number,
-  actions: AppActions,
-): HTMLTableRowElement {
+): HTMLElement {
   const patch = (change: Partial<CalendarEventItem>): void => {
     actions.mutate((project) => {
       const target = project.calendar.events[index];
       if (target) Object.assign(target, change);
     });
   };
-  const allDay = event.hours === null;
+  const allDay = event.startTime === null || event.endTime === null;
+  const members = state.project.calendar.members;
 
-  return h("tr", {}, [
-    h("td", {}, [
+  const timeInput = (value: string, which: "startTime" | "endTime") =>
+    h("input", {
+      dataset: { focus: `event:${event.id}:${which}` },
+      attrs: {
+        type: "time",
+        step: 300,
+        value,
+        "aria-label": `${t("cal.eventTime")} ${which === "startTime" ? "1" : "2"}`,
+      },
+      on: {
+        change: (domEvent) => {
+          patch({ [which]: (domEvent.target as HTMLInputElement).value });
+        },
+      },
+    });
+
+  return h("div", { class: "event-card" }, [
+    h("div", { class: "event-head" }, [
       textInput(
         event.name,
         (value) => {
           patch({ name: value });
         },
         {
+          class: "event-name",
           dataset: { focus: `event:${event.id}:name` },
           attrs: { placeholder: t("cal.eventName"), "aria-label": t("cal.eventName") },
         },
       ),
-    ]),
-    h("td", {}, [
-      dateInput(
-        event.startDate,
-        (value) => {
-          if (value !== null)
-            patch({ startDate: value, endDate: value > event.endDate ? value : event.endDate });
-        },
-        { attrs: { "aria-label": t("cal.eventFrom") } },
-      ),
-    ]),
-    h("td", {}, [
-      dateInput(
-        event.endDate,
-        (value) => {
-          if (value !== null) patch({ endDate: value });
-        },
-        { attrs: { "aria-label": t("cal.eventTo") } },
-      ),
-    ]),
-    h("td", {}, [
-      h("label", { class: "toggle" }, [
-        checkbox(allDay, (checked) => {
-          patch({ hours: checked ? null : 2 });
-        }),
-        h("span", { text: t("cal.allDay") }),
-      ]),
-    ]),
-    h("td", { class: "num" }, [
-      allDay
-        ? h("span", { class: "muted", text: "—" })
-        : numberInput(
-            event.hours ?? 0,
-            (value) => {
-              patch({ hours: Math.max(0, Number(value) || 0) });
-            },
-            { attrs: { min: 0, max: 24, step: 0.5, "aria-label": t("cal.eventHours") } },
-          ),
-    ]),
-    h("td", { class: "actions" }, [
       iconButton("×", t("cal.removeEvent"), () => {
         actions.mutate((project) => {
           project.calendar.events.splice(index, 1);
         });
       }),
+    ]),
+    h("div", { class: "controls" }, [
+      field(
+        t("cal.eventFrom"),
+        dateInput(event.startDate, (value) => {
+          if (value === null) return;
+          patch({ startDate: value, endDate: value > event.endDate ? value : event.endDate });
+        }),
+      ),
+      field(
+        t("cal.eventTo"),
+        dateInput(event.endDate, (value) => {
+          if (value !== null) patch({ endDate: value });
+        }),
+      ),
+      h("label", { class: "field" }, [
+        h("span", { class: "field-label", text: t("cal.eventTime") }),
+        h("div", { class: "time-range" }, [
+          h("label", { class: "toggle compact" }, [
+            checkbox(allDay, (checked) => {
+              patch(
+                checked
+                  ? { startTime: null, endTime: null }
+                  : { startTime: "10:00", endTime: "11:00" },
+              );
+            }),
+            h("span", { text: t("cal.allDay") }),
+          ]),
+          allDay ? null : timeInput(event.startTime ?? "10:00", "startTime"),
+          allDay ? null : h("span", { class: "muted", text: "–" }),
+          allDay ? null : timeInput(event.endTime ?? "11:00", "endTime"),
+        ]),
+      ]),
+      field(
+        t("cal.repeat"),
+        select(
+          String(event.repeatWeeks),
+          REPEAT_CHOICES.map((choice) => ({ value: choice.value, label: t(choice.label) })),
+          (value) => {
+            patch({ repeatWeeks: Number(value) });
+          },
+        ),
+      ),
+      event.repeatWeeks === 0
+        ? null
+        : field(
+            t("cal.until"),
+            dateInput(event.until, (value) => {
+              patch({ until: value });
+            }),
+          ),
+    ]),
+    h("div", { class: "participants" }, [
+      h("span", { class: "field-label", text: t("cal.participants") }),
+      members.length === 0
+        ? h("span", { class: "muted", text: t("cal.allMembers") })
+        : h(
+            "div",
+            { class: "participant-list" },
+            members.map((member, memberIndex) =>
+              h("label", { class: "toggle compact" }, [
+                checkbox(event.memberIds.includes(member.id), (checked) => {
+                  const next = checked
+                    ? [...event.memberIds, member.id]
+                    : event.memberIds.filter((id) => id !== member.id);
+                  patch({ memberIds: next });
+                }),
+                h("span", { text: memberLabel(member, memberIndex) }),
+              ]),
+            ),
+          ),
+      event.memberIds.length === 0
+        ? h("span", { class: "chip muted", text: t("cal.allMembers") })
+        : null,
     ]),
   ]);
 }
@@ -192,27 +235,14 @@ function renderEvent(
 function renderEvents(state: AppState, actions: AppActions): HTMLElement {
   const events = state.project.calendar.events;
   return card(t("cal.events"), [
+    h("p", { class: "hint", text: t("cal.eventHint") }),
     events.length === 0
       ? h("p", { class: "empty", text: t("cal.noEvents") })
-      : h("div", { class: "table-scroll" }, [
-          h("table", {}, [
-            h("thead", {}, [
-              h("tr", {}, [
-                h("th", { text: t("cal.eventName") }),
-                h("th", { text: t("cal.eventFrom") }),
-                h("th", { text: t("cal.eventTo") }),
-                h("th", { text: t("cal.allDay") }),
-                h("th", { text: t("cal.hoursUnit"), class: "num" }),
-                h("th", { text: t("col.actions") }),
-              ]),
-            ]),
-            h(
-              "tbody",
-              {},
-              events.map((event, index) => renderEvent(event, index, actions)),
-            ),
-          ]),
-        ]),
+      : h(
+          "div",
+          { class: "event-list" },
+          events.map((event, index) => renderEvent(state, actions, event, index)),
+        ),
     h("div", { class: "row-actions" }, [
       button(
         t("cal.addEvent"),
@@ -224,7 +254,11 @@ function renderEvents(state: AppState, actions: AppActions): HTMLElement {
               name: "",
               startDate: today,
               endDate: today,
-              hours: null,
+              startTime: "10:00",
+              endTime: "11:00",
+              repeatWeeks: 0,
+              until: null,
+              memberIds: project.calendar.members.map((member) => member.id),
             });
           });
         },
@@ -240,6 +274,28 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
   const result = state.result;
   const labels = weekdayLabels(lang());
   const leading = (((first + 4) % 7) + 7) % 7;
+  const viewing = state.calendarMember;
+
+  /** 表示中の人員 (または全員) のその日の工数とフラグ。 */
+  const dayInfo = (index: number): { capacity: number; flags: number } => {
+    if (result === null || index < 0 || index >= result.nDays) return { capacity: 0, flags: 0 };
+    if (viewing !== null) {
+      return {
+        capacity: memberSlice(result, result.capacity, viewing)[index] ?? 0,
+        flags: memberSlice(result, result.dayFlags, viewing)[index] ?? 0,
+      };
+    }
+    let capacity = 0;
+    let flags = 0;
+    let allOff = true;
+    for (let member = 0; member < result.nMembers; member++) {
+      const memberFlags = memberSlice(result, result.dayFlags, member)[index] ?? 0;
+      capacity += memberSlice(result, result.capacity, member)[index] ?? 0;
+      flags |= memberFlags;
+      if (!isNonWorkingDay(memberFlags)) allOff = false;
+    }
+    return { capacity, flags: allOff ? flags | DAY_FLAG.weekend : flags & ~DAY_FLAG.weekend };
+  };
 
   const cells: HTMLElement[] = [];
   for (let i = 0; i < leading; i++) cells.push(h("div", { class: "day empty" }));
@@ -247,9 +303,8 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
   for (let offset = 0; offset < length; offset++) {
     const day = first + offset;
     const index = result === null ? -1 : day - result.calendarStartDay;
-    const inRange = result !== null && index >= 0 && index < result.capacity.length;
-    const flags = inRange ? (result.dayFlags[index] ?? 0) : 0;
-    const capacity = inRange ? (result.capacity[index] ?? 0) : 0;
+    const inRange = result !== null && index >= 0 && index < result.nDays;
+    const { capacity, flags } = dayInfo(index);
     const iso = isoFromDay(day);
     const classes = ["day"];
     if (!inRange) classes.push("outside");
@@ -325,6 +380,22 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
           });
         },
         { class: "ghost" },
+      ),
+      select(
+        viewing === null ? "" : String(viewing),
+        [
+          { value: "", label: t("cal.allMembers") },
+          ...state.members.all.map((member, index) => ({
+            value: String(index),
+            label: memberLabel(member, index),
+          })),
+        ],
+        (value) => {
+          actions.patch((s) => {
+            s.calendarMember = value === "" ? null : Number(value);
+          });
+        },
+        { attrs: { "aria-label": t("cal.memberView") } },
       ),
     ]),
     h("div", { class: "month-grid" }, [

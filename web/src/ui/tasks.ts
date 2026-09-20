@@ -13,6 +13,7 @@ import {
   removeSubtree,
   type TreeRow,
 } from "../model/tree.ts";
+import { memberLabel, UNASSIGNED_ID } from "../model/members.ts";
 import { PRIORITIES, type ColumnMode, type Priority, type Task, type TaskState } from "../types.ts";
 import {
   button,
@@ -50,6 +51,10 @@ function matches(state: AppState, row: TreeRow): boolean {
   }
   if (filter.priority !== "" && task.priority !== filter.priority) return false;
   if (filter.state !== "" && stateOf(state, row) !== filter.state) return false;
+  if (filter.assignee !== "") {
+    const wanted = filter.assignee === UNASSIGNED_ID ? null : filter.assignee;
+    if (task.assigneeId !== wanted) return false;
+  }
   return true;
 }
 
@@ -64,7 +69,8 @@ function visibleRows(state: AppState): TreeRow[] {
     state.filter.text !== "" ||
     state.filter.group !== "" ||
     state.filter.priority !== "" ||
-    state.filter.state !== "";
+    state.filter.state !== "" ||
+    state.filter.assignee !== "";
   if (!isFiltering) return state.rows;
 
   const keep = new Set<string>();
@@ -93,7 +99,7 @@ function renderFilterBar(state: AppState, actions: AppActions, shown: number): H
   const groups = collectGroups(state.project.tasks);
   const clear = (): void => {
     actions.patch((s) => {
-      s.filter = { text: "", group: "", priority: "", state: "" };
+      s.filter = { text: "", group: "", priority: "", state: "", assignee: "" };
     });
   };
 
@@ -152,6 +158,23 @@ function renderFilterBar(state: AppState, actions: AppActions, shown: number): H
         });
       },
       { attrs: { "aria-label": t("filter.state") } },
+    ),
+    select(
+      state.filter.assignee,
+      [
+        { value: "", label: `${t("filter.assignee")}: ${t("filter.all")}` },
+        ...state.project.calendar.members.map((member, index) => ({
+          value: member.id,
+          label: memberLabel(member, index),
+        })),
+        { value: UNASSIGNED_ID, label: t("members.unassigned") },
+      ],
+      (value) => {
+        actions.patch((s) => {
+          s.filter.assignee = value;
+        });
+      },
+      { attrs: { "aria-label": t("filter.assignee") } },
     ),
     button(t("filter.clear"), clear, { class: "ghost" }),
     h("span", {
@@ -349,6 +372,32 @@ function renderRow(
     );
   }
 
+  // 担当者は常に見せる。誰の列に積まれるかで日付が変わるため。
+  cells.push(
+    h("td", {}, [
+      row.hasChildren
+        ? h("span", { class: "muted", text: "—" })
+        : select(
+            task.assigneeId ?? "",
+            [
+              { value: "", label: t("members.unassigned") },
+              ...state.project.calendar.members.map((member, memberIndex) => ({
+                value: member.id,
+                label: memberLabel(member, memberIndex),
+              })),
+            ],
+            (value) => {
+              setTask({ assigneeId: value === "" ? null : value });
+            },
+            {
+              class: "assignee",
+              dataset: { focus: `${task.id}:assignee` },
+              attrs: { "aria-label": `${label} — ${t("col.assignee")}` },
+            },
+          ),
+    ]),
+  );
+
   // 完了予測は常に見せる。これがこのアプリの答えそのもの。
   const scheduleRow = state.schedule?.rows.find((r) => r.id === task.id);
   const finishDay = scheduleRow?.marks.p80 ?? null;
@@ -460,7 +509,11 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
       { label: t("col.state") },
     );
   }
-  header.push({ label: t("col.finish"), class: "num" }, { label: t("col.actions") });
+  header.push(
+    { label: t("col.assignee") },
+    { label: t("col.finish"), class: "num" },
+    { label: t("col.actions") },
+  );
 
   const totals = state.rows.filter((row) => row.leafIndex !== null);
   const sum = (key: "min" | "likely" | "max"): number =>
@@ -515,6 +568,7 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
       }),
     ]),
     h("p", { class: "hint", text: t("tasks.orderHint") }),
+    h("p", { class: "hint", text: t("tasks.assignHint") }),
     h("p", {
       class: "status",
       text: t("tasks.totals", {

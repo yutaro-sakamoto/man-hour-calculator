@@ -4,13 +4,16 @@ import {
   ABI_VERSION,
   MAGIC,
   PCT_LEVELS,
+  REQ_EVENT_MEMBER_STRIDE,
   REQ_EVENT_STRIDE,
   REQ_HEADER,
+  REQ_MEMBER_STRIDE,
   REQ_TASK_STRIDE,
   STATUS_OK,
   responseOffsets,
 } from "./abi.ts";
-import { dayFromIso } from "./format.ts";
+import { dayFromIso, minutesFromTime } from "./format.ts";
+import { memberIndexOf, participantsOf, type ResolvedMembers } from "./model/members.ts";
 import type { CalendarSettings, ComputeSettings, Task } from "./types.ts";
 
 interface WasmExports {
@@ -62,9 +65,11 @@ export interface LeafInput {
   startDay: number | null;
   progress: number;
   endDay: number | null;
+  /** 担当する人員の添字。 */
+  assignee: number;
 }
 
-export function leafInputFromTask(task: Task): LeafInput {
+export function leafInputFromTask(task: Task, members: ResolvedMembers): LeafInput {
   return {
     min: Number(task.min),
     likely: Number(task.likely),
@@ -72,32 +77,70 @@ export function leafInputFromTask(task: Task): LeafInput {
     startDay: dayFromIso(task.startDate),
     progress: Math.min(1, Math.max(0, task.progress / 100)),
     endDay: dayFromIso(task.endDate),
+    assignee: memberIndexOf(members, task),
   };
 }
 
 const NOT_SET = Number.NaN;
 
+/** 予定 1 件を数値の並びに直したもの。 */
+interface EncodedEvent {
+  startDay: number;
+  endDay: number;
+  startMinute: number;
+  endMinute: number;
+  repeatWeeks: number;
+  untilDay: number;
+  members: number[];
+}
+
+function encodeEvents(calendar: CalendarSettings, members: ResolvedMembers): EncodedEvent[] {
+  const encoded: EncodedEvent[] = [];
+  for (const event of calendar.events) {
+    const startDay = dayFromIso(event.startDate);
+    const endDay = dayFromIso(event.endDate);
+    if (startDay === null || endDay === null) continue;
+    const startMinute = minutesFromTime(event.startTime);
+    const endMinute = minutesFromTime(event.endTime);
+    // 時刻が片方しか読めないものは終日として扱う。
+    const timed = startMinute !== null && endMinute !== null && endMinute > startMinute;
+    encoded.push({
+      startDay,
+      endDay: Math.max(startDay, endDay),
+      startMinute: timed ? startMinute : NOT_SET,
+      endMinute: timed ? endMinute : NOT_SET,
+      repeatWeeks: Math.max(0, Math.round(event.repeatWeeks)),
+      untilDay: dayFromIso(event.until) ?? NOT_SET,
+      members: participantsOf(members, event.memberIds),
+    });
+  }
+  return encoded;
+}
+
 export function buildRequest(
   leaves: readonly LeafInput[],
   calendar: CalendarSettings,
+  members: ResolvedMembers,
   settings: ComputeSettings,
   prefixBins: number,
 ): Float64Array {
   const startDay = dayFromIso(calendar.startDate) ?? 0;
   const today = dayFromIso(calendar.today) ?? startDay;
-  const events = calendar.events
-    .map((event) => ({
-      start: dayFromIso(event.startDate),
-      end: dayFromIso(event.endDate),
-      hours: event.hours ?? -1,
-    }))
-    .filter(
-      (e): e is { start: number; end: number; hours: number } => e.start !== null && e.end !== null,
-    );
-  const forced = calendar.forcedWorkdays.map(dayFromIso).filter((d): d is number => d !== null);
+  const events = encodeEvents(calendar, members);
+  const links = events.flatMap((event, index) =>
+    event.members.map((member) => [index, member] as const),
+  );
+  const forced = calendar.forcedWorkdays
+    .map((day) => dayFromIso(day))
+    .filter((day): day is number => day !== null);
 
   const request = new Float64Array(
-    REQ_HEADER + leaves.length * REQ_TASK_STRIDE + events.length * REQ_EVENT_STRIDE + forced.length,
+    REQ_HEADER +
+      leaves.length * REQ_TASK_STRIDE +
+      members.all.length * REQ_MEMBER_STRIDE +
+      events.length * REQ_EVENT_STRIDE +
+      links.length * REQ_EVENT_MEMBER_STRIDE +
+      forced.length,
   );
   request[0] = MAGIC;
   request[1] = ABI_VERSION;
@@ -115,12 +158,11 @@ export function buildRequest(
   request[13] = forced.length;
   request[14] = startDay;
   request[15] = calendar.horizonDays;
-  request[16] = calendar.workdays.reduce((mask, on, index) => mask | (on ? 1 << index : 0), 0);
-  request[17] = calendar.hoursPerDay;
-  request[18] = calendar.hoursPerPersonDay;
-  request[19] = calendar.teamSize;
-  request[20] = calendar.useJapaneseHolidays ? 1 : 0;
-  request[21] = today;
+  request[16] = members.all.length;
+  request[17] = calendar.hoursPerPersonDay;
+  request[18] = links.length;
+  request[19] = calendar.useJapaneseHolidays ? 1 : 0;
+  request[20] = today;
 
   let at = REQ_HEADER;
   for (const leaf of leaves) {
@@ -130,11 +172,24 @@ export function buildRequest(
     request[at++] = leaf.startDay ?? NOT_SET;
     request[at++] = leaf.progress;
     request[at++] = leaf.endDay ?? NOT_SET;
+    request[at++] = leaf.assignee;
+  }
+  for (const member of members.all) {
+    for (const window of member.workdays) request[at++] = minutesFromTime(window.start) ?? 0;
+    for (const window of member.workdays) request[at++] = minutesFromTime(window.end) ?? 0;
+    request[at++] = Math.max(0, Math.round(member.breakMinutes));
   }
   for (const event of events) {
-    request[at++] = event.start;
-    request[at++] = event.end;
-    request[at++] = event.hours;
+    request[at++] = event.startDay;
+    request[at++] = event.endDay;
+    request[at++] = event.startMinute;
+    request[at++] = event.endMinute;
+    request[at++] = event.repeatWeeks;
+    request[at++] = event.untilDay;
+  }
+  for (const [event, member] of links) {
+    request[at++] = event;
+    request[at++] = member;
   }
   for (const day of forced) request[at++] = day;
   return request;
@@ -144,6 +199,8 @@ export function buildRequest(
 export interface ComputeResult {
   nBins: number;
   nTasks: number;
+  nMembers: number;
+  nDays: number;
   mean: number;
   sd: number;
   lo: number;
@@ -152,7 +209,6 @@ export interface ComputeResult {
   totalLikely: number;
   totalMax: number;
   totalSpent: number;
-  baseCapacity: number;
   totalCapacity: number;
   probs: Float64Array;
   cdf: Float64Array;
@@ -161,13 +217,26 @@ export interface ComputeResult {
   effective: Float64Array;
   spent: Float64Array;
   states: Float64Array;
+  assignees: Float64Array;
   prefixWidth: number;
-  prefixGridHi: number;
   prefix: Float64Array;
+  /** 人員ごとの累積和グリッド上限。 */
+  memberGridHi: Float64Array;
   calendarStartDay: number;
+  /** 人員ごと・日ごとの工数 (長さ `nMembers * nDays`)。 */
   capacity: Float64Array;
   cumulative: Float64Array;
   dayFlags: Float64Array;
+}
+
+/** 人員 `member` の 1 日ぶんの配列を切り出す。 */
+export function memberSlice(
+  result: ComputeResult,
+  source: Float64Array,
+  member: number,
+): Float64Array {
+  const from = member * result.nDays;
+  return source.subarray(from, from + result.nDays);
 }
 
 export class ComputeError extends Error {
@@ -209,14 +278,17 @@ export function compute(request: Float64Array): ComputeResult {
   const nTasks = raw[4] ?? 0;
   const prefixBins = raw[13] ?? 0;
   const prefixWidth = prefixBins > 0 ? prefixBins + 1 : 0;
-  const nDays = raw[15] ?? 0;
-  const at = responseOffsets(nBins, nPct, nTasks, prefixWidth, nDays);
+  const nDays = raw[14] ?? 0;
+  const nMembers = raw[17] ?? 0;
+  const at = responseOffsets(nBins, nPct, nTasks, prefixWidth, nMembers, nDays);
   const take = (index: number, length: number): Float64Array =>
     raw.subarray(at[index] ?? 0, (at[index] ?? 0) + length);
 
   return {
     nBins,
     nTasks,
+    nMembers,
+    nDays,
     mean: raw[6] ?? 0,
     sd: raw[7] ?? 0,
     lo: raw[8] ?? 0,
@@ -224,9 +296,8 @@ export function compute(request: Float64Array): ComputeResult {
     totalMin: raw[10] ?? 0,
     totalLikely: raw[11] ?? 0,
     totalMax: raw[12] ?? 0,
-    totalSpent: raw[17] ?? 0,
-    baseCapacity: raw[18] ?? 0,
-    totalCapacity: raw[19] ?? 0,
+    totalSpent: raw[16] ?? 0,
+    totalCapacity: raw[18] ?? 0,
     probs: take(0, nBins),
     cdf: take(1, nBins + 1),
     percentiles: take(3, nPct),
@@ -234,13 +305,14 @@ export function compute(request: Float64Array): ComputeResult {
     effective: take(5, nTasks * 3),
     spent: take(6, nTasks),
     states: take(7, nTasks),
+    assignees: take(8, nTasks),
     prefixWidth,
-    prefixGridHi: raw[14] ?? 0,
-    prefix: take(8, nTasks * prefixWidth),
-    calendarStartDay: raw[16] ?? 0,
-    capacity: take(9, nDays),
-    cumulative: take(10, nDays),
-    dayFlags: take(11, nDays),
+    prefix: take(9, nTasks * prefixWidth),
+    memberGridHi: take(10, nMembers),
+    calendarStartDay: raw[15] ?? 0,
+    capacity: take(11, nMembers * nDays),
+    cumulative: take(12, nMembers * nDays),
+    dayFlags: take(13, nMembers * nDays),
   };
 }
 

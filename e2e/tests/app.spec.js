@@ -215,15 +215,20 @@ test("完了日を入れると実績工数に置き換わる", async ({ page }) 
   });
 
   await expect(target.locator(".pill")).toHaveText("完了");
-  // 9/24(木)・9/25(金)・9/28〜9/30 の 5 稼働日ぶん。
+  // 9/24(木)・9/25(金)・9/28〜9/30 の 5 稼働日ぶん。ただしサンプルには
+  // 毎週の定例 (45 分) と隔週の振り返り (60 分) が入っているので、
+  // そのぶんだけ 5.0 人日を下回る。
   // 「すべて」表示の数値列は 最小・最可能・最大・進捗・消化・完了予測 の順。
-  await expect(target.locator("td.num").nth(4)).toContainText("5.0");
+  const spent = Number(await target.locator("td.num").nth(4).innerText());
+  expect(spent).toBeGreaterThan(4.5);
+  expect(spent).toBeLessThan(5);
 });
 
-test("祝日と予定がカレンダーの稼働量に反映される", async ({ page }) => {
-  await open(page, { lang: "ja" });
+test("祝日と休日出勤がカレンダーに反映される", async ({ page }) => {
+  await open(page);
   await openTab(page, "calendar");
-  await expect(page.locator(".status").last()).toContainText("1.00 人日");
+  // サンプルは 2 人 (フルタイム + 時短) なので、1 日あたり 1.66 人日ほど。
+  await expect(page.locator(".card .status").first()).toContainText("人日");
 
   // 2026-09-21 は敬老の日。稼働量 0 で祝日の印が付く。
   const holiday = page.locator('.day[aria-label*="2026-09-21"]');
@@ -233,25 +238,146 @@ test("祝日と予定がカレンダーの稼働量に反映される", async ({
   // クリックで休日出勤に切り替わる。
   await recompute(page, () => holiday.click());
   await expect(page.locator('.day[aria-label*="2026-09-21"]')).toHaveClass(/forced/);
+});
 
-  // 予定を足すとその日の稼働量が 0 になる。
-  await recompute(page, () => page.click('button:text("予定を追加")'));
-  await expect(page.locator("tbody tr")).toHaveCount(1);
+test("人員ごとに稼働時間が違い、月表示を切り替えられる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "members");
+  const cards = page.locator(".member-card");
+  await expect(cards).toHaveCount(2);
+  // 9:00〜18:00 から休憩 60 分で週 40 時間。
+  await expect(cards.first().locator(".chip").first()).toContainText("40");
+  // 時短勤務のほうは短い。
+  await expect(cards.nth(1).locator(".chip").first()).toContainText("26");
+
+  await openTab(page, "calendar");
+  const capacityOf = async () => {
+    const label = await page
+      .locator('.day[aria-label*="2026-09-24"]')
+      .getAttribute("aria-label");
+    return Number(label.match(/: ([\d.]+)/)[1]);
+  };
+  const everyone = await capacityOf();
+  await page.selectOption('select[aria-label="表示する人員"]', "1");
+  const partTime = await capacityOf();
+  expect(partTime).toBeLessThan(everyone);
+  expect(partTime).toBeGreaterThan(0);
+});
+
+test("人員を増やして担当を分けると完了日が早まる", async ({ page }) => {
+  await open(page);
+  const before = await summary(page, "finishP80");
+
+  // すべてのタスクを 1 人目に寄せると直列になり、完了日は後ろにずれる。
+  await openTab(page, "tasks");
+  const assignees = page.locator("select.assignee");
+  const count = await assignees.count();
+  await recompute(page, async () => {
+    for (let i = 0; i < count; i++) {
+      await assignees.nth(i).selectOption({ index: 1 });
+    }
+  });
+  const serial = await summary(page, "finishP80");
+  expect(new Date(`2026/${serial.replace(/\(.+\)/, "")}`).getTime()).toBeGreaterThan(
+    new Date(`2026/${before.replace(/\(.+\)/, "")}`).getTime(),
+  );
+});
+
+test("共有した予定は参加者全員の稼働を削る", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+  // 毎週の定例は月曜にある。9/21 は祝日なので 9/28 で見る。
+  const capacityFor = async (member) => {
+    await page.selectOption('select[aria-label="表示する人員"]', member);
+    const label = await page
+      .locator('.day[aria-label*="2026-09-28"]')
+      .getAttribute("aria-label");
+    return Number(label.match(/: ([\d.]+)/)[1]);
+  };
+  const before = await capacityFor("0");
+
+  // 参加者から 1 人目を外すと、その人の稼働は戻る。
+  await openTab(page, "calendar");
+  const firstEvent = page.locator(".event-card").first();
+  await recompute(page, () =>
+    firstEvent.locator('.participant-list input[type="checkbox"]').first().uncheck(),
+  );
+  expect(await capacityFor("0")).toBeGreaterThan(before);
+});
+
+test("隔週の予定は 1 週おきにしか効かない", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+  const events = page.locator(".event-card");
+  await expect(events).toHaveCount(2);
+  // 2 件目はサンプルで隔週に設定してある。
+  await expect(events.nth(1).locator("select").first()).toHaveValue("2");
+
+  const capacityOn = async (date) => {
+    const label = await page.locator(`.day[aria-label*="${date}"]`).getAttribute("aria-label");
+    return Number(label.match(/: ([\d.]+)/)[1]);
+  };
+  await page.selectOption('select[aria-label="表示する人員"]', "0");
+  // 開始日が日曜なので、隔週の予定は日曜にしか当たらない (= 稼働日には影響しない)。
+  // 毎週の定例だけが平日の稼働を削っていることを、繰り返しを切って確かめる。
+  const before = await capacityOn("2026-09-28");
+  await recompute(page, () => events.first().locator("select").first().selectOption("0"));
+  expect(await capacityOn("2026-09-28")).toBeGreaterThan(before);
+});
+
+test("予定の時刻は 5 分単位で効く", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+  await page.selectOption('select[aria-label="表示する人員"]', "0");
+  const capacityOn = async (date) => {
+    const label = await page.locator(`.day[aria-label*="${date}"]`).getAttribute("aria-label");
+    return Number(label.match(/: ([\d.]+)/)[1]);
+  };
+  const before = await capacityOn("2026-09-28");
+
+  // 10:00〜10:45 を 10:00〜10:05 に縮めると、その 40 分ぶん稼働が戻る。
+  const firstEvent = page.locator(".event-card").first();
+  await recompute(page, () =>
+    firstEvent.locator('input[type="time"]').nth(1).fill("10:05"),
+  );
+  const after = await capacityOn("2026-09-28");
+  // 1 人日 = 8 時間なので 40 分は 1/12 人日。
+  expect(after - before).toBeGreaterThan(0.07);
+  expect(after - before).toBeLessThan(0.1);
+});
+
+test("担当者で絞り込める", async ({ page }) => {
+  await open(page);
+  await openTab(page, "tasks");
+  const total = await rows(page).count();
+  await page.selectOption('select[aria-label="担当者"]', { index: 2 }); // 2 人目
+  const shown = await rows(page).count();
+  expect(shown).toBeGreaterThan(0);
+  expect(shown).toBeLessThan(total);
+});
+
+test("担当者のいないタスクは未割当としてまとめられる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await recompute(page, () => page.locator("select.assignee").first().selectOption(""));
+  await openTab(page, "schedule");
+  // 人員ごとの表に「未割当」が現れる。
+  await expect(page.locator(".member-summary")).toContainText("未割当");
 });
 
 test("祝日を使わない設定にすると稼働量が増える", async ({ page }) => {
-  await open(page, { lang: "ja" });
+  await open(page);
   await openTab(page, "calendar");
   const total = async () =>
-    Number((await page.locator(".status").last().innerText()).match(/で ([\d.]+) 人日/)[1]);
+    Number((await page.locator(".card .status").first().innerText()).match(/で ([\d.]+) 人日/)[1]);
   const before = await total();
 
-  await recompute(page, () => page.uncheck('.toggle input[type="checkbox"]'));
+  await recompute(page, () => page.uncheck('.card .toggle input[type="checkbox"]'));
   expect(await total()).toBeGreaterThan(before);
 });
 
 test("スケジュールにタスクごとの完了予測と確率が出る", async ({ page }) => {
-  await open(page, { lang: "ja" });
+  await open(page);
   await openTab(page, "schedule");
   await expect(page.locator("#schedule-chart")).toBeVisible();
 
@@ -361,7 +487,7 @@ test("未置換の i18n プレースホルダが画面に残らない", async ({
   await open(page);
   for (const language of ["en", "ja"]) {
     await page.click(`.lang-toggle button[data-lang="${language}"]`);
-    for (const tab of ["tasks", "calendar", "distribution", "schedule"]) {
+    for (const tab of ["tasks", "members", "calendar", "distribution", "schedule"]) {
       await openTab(page, tab);
       const text = await page.locator("body").innerText();
       expect(text, `${language}/${tab} に差し込み漏れがある`).not.toMatch(/\{[a-z]+\}/);

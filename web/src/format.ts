@@ -46,6 +46,14 @@ export function weekdayOfDay(day: number): number {
   return (((day + 4) % 7) + 7) % 7;
 }
 
+/** `iso` 以降で最初に来る指定曜日 (0 = 日曜)。 */
+export function nextWeekday(iso: IsoDate, weekday: number): IsoDate {
+  const day = dayFromIso(iso);
+  if (day === null) return iso;
+  const shift = (((weekday - weekdayOfDay(day)) % 7) + 7) % 7;
+  return isoFromDay(day + shift);
+}
+
 export function weekdayOfIso(iso: IsoDate): number | null {
   const day = dayFromIso(iso);
   return day === null ? null : weekdayOfDay(day);
@@ -56,6 +64,39 @@ export function monthBounds(year: number, month: number): { first: number; lengt
   const first = Math.round(Date.UTC(year, month - 1, 1) / MS_PER_DAY);
   const next = Math.round(Date.UTC(month === 12 ? year + 1 : year, month % 12, 1) / MS_PER_DAY);
   return { first, length: next - first };
+}
+
+/** `HH:MM` を 0 時からの分に直す。不正な文字列は `null`。 */
+export function minutesFromTime(time: string | null | undefined): number | null {
+  if (!time) return null;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(time);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 24 || minutes > 59) return null;
+  const total = hours * 60 + minutes;
+  return total > 24 * 60 ? null : total;
+}
+
+/** 0 時からの分を `HH:MM` に直す。 */
+export function timeFromMinutes(minutes: number): string {
+  const clamped = Math.max(0, Math.min(24 * 60, Math.round(minutes)));
+  const hours = Math.floor(clamped / 60);
+  const rest = clamped % 60;
+  return `${String(hours).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+/** 分数を「7時間30分」のような表記にする。 */
+export function formatDuration(minutes: number, lang: Lang): string {
+  const total = Math.max(0, Math.round(minutes));
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  if (lang === "ja") {
+    if (hours === 0) return `${String(rest)}分`;
+    return rest === 0 ? `${String(hours)}時間` : `${String(hours)}時間${String(rest)}分`;
+  }
+  if (hours === 0) return `${String(rest)}m`;
+  return rest === 0 ? `${String(hours)}h` : `${String(hours)}h ${String(rest)}m`;
 }
 
 export type Lang = "ja" | "en";

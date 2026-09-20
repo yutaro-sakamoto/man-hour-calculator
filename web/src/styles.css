@@ -551,21 +551,136 @@ td.finish {
   color: var(--good);
 }
 
-/* ===== カレンダー ===== */
-.weekdays {
+/* ===== 人員 ===== */
+.member-list,
+.event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.member-card,
+.event-card {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px 14px;
+  background: var(--surface-sunken);
+}
+.member-head,
+.event-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
-  margin-top: 14px;
+  margin-bottom: 10px;
 }
-.weekday {
+.member-name,
+.event-name {
+  flex: 1 1 160px;
+  min-width: 120px;
+}
+.inline-field {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  cursor: pointer;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  white-space: nowrap;
 }
+.inline-field input {
+  width: 66px;
+}
+.chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--ink-secondary);
+  white-space: nowrap;
+}
+.chip.warn {
+  color: var(--critical);
+  border-color: var(--critical);
+}
+.chip.muted {
+  color: var(--ink-muted);
+}
+
+/* 曜日ごとの稼働時間帯 */
+.weekday-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.weekday-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.weekday-cell.off {
+  background: var(--offday);
+}
+.weekday-cell .weekday-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-start;
+  font-size: 11px;
+  color: var(--ink-secondary);
+  cursor: pointer;
+  padding: 0;
+}
+.weekday-cell input[type="time"] {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  padding: 3px 4px;
+  min-height: 26px;
+}
+.weekday-cell.off input[type="time"] {
+  opacity: 0.4;
+}
+
+/* 予定 */
+.time-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.toggle.compact {
+  margin-top: 0;
+  font-size: 12px;
+  gap: 5px;
+}
+.participants {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--grid);
+}
+.participant-list {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+select.assignee {
+  width: 96px;
+}
+.member-summary td:first-child,
+.member-summary th:first-child {
+  width: 100%;
+}
+
+/* ===== カレンダー ===== */
 .month-head {
   display: flex;
   align-items: center;

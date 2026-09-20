@@ -1,29 +1,37 @@
 /**
  * 工数の分布を「完了日の確率」に変換する。
  *
- * WASM は各タスクについて「そこまでの累積工数」の CDF を返し、
- * カレンダーは各日までに投入できる工数の累積を返す。この 2 つを
+ * WASM は各タスクについて「同じ担当者の中でそこまでの累積工数」の CDF を返し、
+ * 人員ごとのカレンダーは各日までに投入できる工数の累積を返す。この 2 つを
  * 突き合わせれば
  *
  * ```text
- * P(タスク i が d 日までに終わっている) = P(累積工数_i <= 累積稼働量(d))
+ * P(タスク i が d 日までに終わっている)
+ *     = P(担当者内の累積工数_i <= その担当者の累積稼働量(d))
  * ```
  *
- * が得られる。並び順＝着手順という前提だけで、追加のシミュレーションは要らない。
+ * が得られる。
+ *
+ * 複数人にまたがるまとまり (親タスクや全体) が終わっているのは、
+ * **関わる全員がそれぞれの担当ぶんを終えている**ときなので、
+ * 人ごとの確率の積になる。タスクは互いに独立としているため、
+ * 別々の人が持つ担当ぶんの合計も独立で、積が厳密な答えになる。
  */
 
 import { DAY_FLAG } from "../abi.ts";
-import type { TreeRow } from "./tree.ts";
 import type { ComputeResult } from "../wasm.ts";
+import type { TreeRow } from "./tree.ts";
 
 /** 累積和 CDF を工数の実数値で引く (グリッド間は線形補間)。 */
-export function prefixCdfAt(result: ComputeResult, leafIndex: number, effort: number): number {
+export function prefixCdfAt(result: ComputeResult, task: number, effort: number): number {
   const width = result.prefixWidth;
   if (width < 2) return 0;
-  const step = result.prefixGridHi / (width - 1);
+  const member = result.assignees[task] ?? 0;
+  const gridHi = result.memberGridHi[member] ?? 0;
+  const step = gridHi / (width - 1);
   if (!(step > 0)) return effort >= 0 ? 1 : 0;
 
-  const base = leafIndex * width;
+  const base = task * width;
   const position = effort / step;
   if (position <= 0) return result.prefix[base] ?? 0;
   if (position >= width - 1) return result.prefix[base + width - 1] ?? 1;
@@ -58,29 +66,36 @@ export interface ScheduleRow {
   depth: number;
   isParent: boolean;
   done: boolean;
-  /** 日ごとの完了確率。 */
+  /** この行に関わる人員の添字。 */
+  members: number[];
   probabilities: Float64Array;
   marks: ScheduleMarks;
+}
+
+export interface MemberSummary {
+  index: number;
+  label: string;
+  /** 担当ぶんをすべて終えている確率。 */
+  probabilities: Float64Array;
+  marks: ScheduleMarks;
+  /** 担当タスクの件数。 */
+  taskCount: number;
+  /** 担当ぶんの工数 (最大側)。 */
+  gridHi: number;
 }
 
 export interface ScheduleModel {
   startDay: number;
   days: number;
-  dayFlags: Float64Array;
-  /** 基準日の添字。カレンダーの範囲外なら `null`。 */
+  /** グラフに描く日数。ほぼ確実に完了する日まで自動で詰める。 */
+  displayDays: number;
+  /** 全員が非稼働の日を示すフラグ。 */
+  dayFlags: Uint8Array;
   todayIndex: number | null;
   rows: ScheduleRow[];
-  /** 全タスクが完了している確率。 */
+  members: MemberSummary[];
   overall: Float64Array;
   overallMarks: ScheduleMarks;
-  /**
-   * グラフに描く日数。
-   *
-   * 計算する期間 (既定 1 年) をそのまま横軸にすると、実際に動きがあるのは
-   * 左端の数割だけで帯がほとんど読めなくなる。ほぼ確実に完了する日まで
-   * 少し余裕を足した範囲だけを描く。
-   */
-  displayDays: number;
 }
 
 function marksOf(probabilities: Float64Array): ScheduleMarks {
@@ -94,17 +109,54 @@ function marksOf(probabilities: Float64Array): ScheduleMarks {
   };
 }
 
-/** ある累積和 CDF の行から、日ごとの完了確率を作る。 */
-function probabilitiesFor(
-  result: ComputeResult,
-  leafIndex: number,
-  cumulative: Float64Array,
-): Float64Array {
-  const out = new Float64Array(cumulative.length);
-  for (let day = 0; day < cumulative.length; day++) {
-    out[day] = prefixCdfAt(result, leafIndex, cumulative[day] ?? 0);
+/** タスク 1 件について、日ごとの完了確率を作る。 */
+function probabilitiesForTask(result: ComputeResult, task: number): Float64Array {
+  const member = result.assignees[task] ?? 0;
+  const base = member * result.nDays;
+  const out = new Float64Array(result.nDays);
+  for (let day = 0; day < result.nDays; day++) {
+    out[day] = prefixCdfAt(result, task, result.cumulative[base + day] ?? 0);
   }
   return out;
+}
+
+/** 複数のタスクがすべて終わっている確率 (人ごとの独立性から積になる)。 */
+function combine(parts: readonly Float64Array[], days: number): Float64Array {
+  const out = new Float64Array(days).fill(1);
+  for (const part of parts) {
+    for (let day = 0; day < days; day++) {
+      out[day] = (out[day] ?? 1) * (part[day] ?? 0);
+    }
+  }
+  return out;
+}
+
+/**
+ * 部分木のなかで、人員ごとに「いちばん後ろのタスク」を集める。
+ *
+ * 同じ人の中では後ろのタスクが終われば前のタスクも終わっているので、
+ * 人ごとに最後の 1 件だけ見ればよい。
+ */
+function lastTaskPerMember(
+  rows: readonly TreeRow[],
+  from: number,
+  result: ComputeResult,
+): Map<number, number> {
+  const base = rows[from];
+  const last = new Map<number, number>();
+  if (!base) return last;
+  for (let i = from; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) break;
+    if (i > from && row.depth <= base.depth) break;
+    if (row.leafIndex === null) continue;
+    const member = result.assignees[row.leafIndex] ?? 0;
+    const previous = last.get(member);
+    if (previous === undefined || row.leafIndex > previous) {
+      last.set(member, row.leafIndex);
+    }
+  }
+  return last;
 }
 
 /** 一覧に出す行と計算結果から、スケジュール表示用のモデルを組み立てる。 */
@@ -113,52 +165,100 @@ export function buildScheduleModel(
   rows: readonly TreeRow[],
   todayDay: number,
   untitled: string,
+  memberLabels: readonly string[],
 ): ScheduleModel {
-  const cumulative = result.cumulative;
-  const scheduleRows: ScheduleRow[] = [];
+  const days = result.nDays;
+  const taskProbabilities = new Map<number, Float64Array>();
+  const probabilitiesOf = (task: number): Float64Array => {
+    let cached = taskProbabilities.get(task);
+    if (!cached) {
+      cached = probabilitiesForTask(result, task);
+      taskProbabilities.set(task, cached);
+    }
+    return cached;
+  };
 
-  for (const row of rows) {
-    // 親は配下の最後の葉が終わったときに終わる。
-    const leafIndex = row.lastLeafIndex;
-    if (leafIndex === null) continue;
-    const probabilities = probabilitiesFor(result, leafIndex, cumulative);
+  const scheduleRows: ScheduleRow[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) continue;
+    const last = lastTaskPerMember(rows, i, result);
+    if (last.size === 0) continue;
+    const parts = [...last.values()].map(probabilitiesOf);
+    const probabilities =
+      parts.length === 1 ? (parts[0] ?? new Float64Array(days)) : combine(parts, days);
     scheduleRows.push({
       id: row.task.id,
       label: row.task.name.trim() === "" ? untitled : row.task.name,
       depth: row.depth,
       isParent: row.hasChildren,
-      done: !row.hasChildren && result.states[row.leafIndex ?? -1] === 2,
+      done: row.leafIndex !== null && result.states[row.leafIndex] === 2,
+      members: [...last.keys()].sort((a, b) => a - b),
       probabilities,
       marks: marksOf(probabilities),
     });
   }
 
-  const lastLeaf = result.nTasks - 1;
-  const overall =
-    lastLeaf >= 0 && result.prefixWidth > 0
-      ? probabilitiesFor(result, lastLeaf, cumulative)
-      : new Float64Array(cumulative.length);
+  // 人員ごとのまとめ。その人の最後のタスクが終われば担当ぶんは終わり。
+  const members: MemberSummary[] = [];
+  for (let member = 0; member < result.nMembers; member++) {
+    let lastTask: number | null = null;
+    let count = 0;
+    for (let task = 0; task < result.nTasks; task++) {
+      if ((result.assignees[task] ?? 0) !== member) continue;
+      count += 1;
+      lastTask = task;
+    }
+    const probabilities =
+      lastTask === null ? new Float64Array(days).fill(1) : probabilitiesOf(lastTask);
+    members.push({
+      index: member,
+      label: memberLabels[member] ?? `#${String(member + 1)}`,
+      probabilities,
+      marks: marksOf(probabilities),
+      taskCount: count,
+      gridHi: result.memberGridHi[member] ?? 0,
+    });
+  }
 
-  const todayIndex =
-    todayDay >= result.calendarStartDay && todayDay < result.calendarStartDay + cumulative.length
-      ? todayDay - result.calendarStartDay
-      : null;
+  // 全体は「全員が担当ぶんを終えている」確率。
+  const overall = combine(
+    members.filter((member) => member.taskCount > 0).map((member) => member.probabilities),
+    days,
+  );
+
+  // 全員が非稼働の日だけを「休み」として塗る。
+  const dayFlags = new Uint8Array(days);
+  for (let day = 0; day < days; day++) {
+    let allOff = result.nMembers > 0;
+    let anyFlags = 0;
+    for (let member = 0; member < result.nMembers; member++) {
+      const flags = result.dayFlags[member * days + day] ?? 0;
+      anyFlags |= flags;
+      if (!isNonWorkingDay(flags)) allOff = false;
+    }
+    dayFlags[day] = allOff ? anyFlags | DAY_FLAG.weekend : anyFlags & ~DAY_FLAG.weekend;
+  }
 
   const almostDone = firstDayAtLeast(overall, 0.995);
   const displayDays =
-    almostDone === null
-      ? cumulative.length
-      : Math.max(30, Math.min(cumulative.length, Math.ceil((almostDone + 1) * 1.15)));
+    almostDone === null ? days : Math.max(30, Math.min(days, Math.ceil((almostDone + 1) * 1.15)));
+
+  const todayIndex =
+    todayDay >= result.calendarStartDay && todayDay < result.calendarStartDay + days
+      ? todayDay - result.calendarStartDay
+      : null;
 
   return {
     startDay: result.calendarStartDay,
-    days: cumulative.length,
-    dayFlags: result.dayFlags,
+    days,
+    displayDays,
+    dayFlags,
     todayIndex,
     rows: scheduleRows,
+    members,
     overall,
     overallMarks: marksOf(overall),
-    displayDays,
   };
 }
 

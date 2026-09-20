@@ -4,6 +4,7 @@ import type { AppActions, AppState, AppWidgets } from "../app.ts";
 import { dayFromIso, formatDayLong, formatDayShort, formatPercent, isoFromDay } from "../format.ts";
 import { lang, t } from "../i18n.ts";
 import type { ScheduleModel } from "../model/schedule.ts";
+import { formatNumber } from "../format.ts";
 import { card, dateInput, h } from "./dom.ts";
 
 function legend(): HTMLElement {
@@ -13,6 +14,48 @@ function legend(): HTMLElement {
     h("span", { class: "legend-item" }, [
       h("i", { class: "swatch marker" }),
       t("sched.legendMedian"),
+    ]),
+  ]);
+}
+
+/** 人員ごとに「担当ぶんを終える時期」をまとめる。 */
+function renderMemberSummary(model: ScheduleModel): HTMLElement | null {
+  const working = model.members.filter((member) => member.taskCount > 0);
+  if (working.length <= 1) return null;
+  const l = lang();
+
+  return card(t("sched.byMember"), [
+    h("p", { class: "hint", text: t("sched.memberNote") }),
+    h("table", { class: "member-summary" }, [
+      h("thead", {}, [
+        h("tr", {}, [
+          h("th", { text: t("sched.memberCol") }),
+          h("th", { class: "num", text: t("members.tasks", { count: "" }).trim() }),
+          h("th", { class: "num", text: `${t("col.forecast")} (${t("unit.days")})` }),
+          h("th", { text: t("summary.finishP50") }),
+          h("th", { text: t("summary.finishP80") }),
+        ]),
+      ]),
+      h(
+        "tbody",
+        {},
+        working.map((member) =>
+          h("tr", {}, [
+            h("td", { text: member.label }),
+            h("td", { class: "num", text: String(member.taskCount) }),
+            h("td", { class: "num", text: formatNumber(member.gridHi, l) }),
+            ...([member.marks.p50, member.marks.p80] as const).map((mark) =>
+              h("td", {
+                text:
+                  mark === null
+                    ? t("sched.notFinishing")
+                    : formatDayShort(model.startDay + mark, l),
+                class: mark === null ? "warn" : "",
+              }),
+            ),
+          ]),
+        ),
+      ),
     ]),
   ]);
 }
@@ -123,6 +166,7 @@ export function renderScheduleTab(
         }`,
       }),
     ]),
+    renderMemberSummary(model),
     renderProbeTable(state, actions, model),
   ]);
 }

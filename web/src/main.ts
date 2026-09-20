@@ -13,6 +13,7 @@ import { createDistributionChart } from "./charts/distribution.ts";
 import { createScheduleChart } from "./charts/schedule.ts";
 import { dayFromIso, formatDayShort, formatNumber, formatPercent, todayIso } from "./format.ts";
 import { lang, setLang, t } from "./i18n.ts";
+import { memberLabel, resolveMembers } from "./model/members.ts";
 import { emptyProject, sampleProject } from "./model/project.ts";
 import { buildScheduleModel } from "./model/schedule.ts";
 import { buildRows, invalidRows } from "./model/tree.ts";
@@ -27,6 +28,7 @@ import {
 } from "./model/storage.ts";
 import { button, h, clear } from "./ui/dom.ts";
 import { renderCalendarTab } from "./ui/calendar.ts";
+import { renderMembersTab } from "./ui/members.ts";
 import { renderDistributionTab } from "./ui/results.ts";
 import { renderScheduleTab } from "./ui/schedule.ts";
 import { renderTasksTab } from "./ui/tasks.ts";
@@ -44,10 +46,12 @@ const state: AppState = {
   rows: [],
   result: null,
   schedule: null,
-  filter: { text: "", group: "", priority: "", state: "" },
+  members: { all: [], indexById: new Map(), unassignedIndex: null },
+  filter: { text: "", group: "", priority: "", state: "", assignee: "" },
   columnMode: "estimate",
   activeTab: "tasks",
   calendarMonth: { year: startMonth.getUTCFullYear(), month: startMonth.getUTCMonth() + 1 },
+  calendarMember: null,
   status: { text: "", tone: "info" },
   probeDate: null,
 };
@@ -108,6 +112,15 @@ function recompute(): void {
   const leaves = state.rows.filter((row) => row.leafIndex !== null);
   const broken = invalidRows(state.rows);
 
+  // 担当者のいないタスクは「未割当」という仮の人員にまとめる。
+  state.members = resolveMembers(
+    state.project.calendar.members,
+    leaves.map((row) => row.task),
+  );
+  if (state.calendarMember !== null && state.calendarMember >= state.members.all.length) {
+    state.calendarMember = null;
+  }
+
   if (broken.length > 0) {
     state.result = null;
     state.schedule = null;
@@ -124,8 +137,9 @@ function recompute(): void {
   const started = performance.now();
   try {
     const request = buildRequest(
-      leaves.map((row) => leafInputFromTask(row.task)),
+      leaves.map((row) => leafInputFromTask(row.task, state.members)),
       state.project.calendar,
+      state.members,
       state.project.settings,
       PREFIX_BINS,
     );
@@ -134,8 +148,8 @@ function recompute(): void {
     state.result = null;
     state.schedule = null;
     if (error instanceof ComputeError) {
-      const key = `error.${error.status}` as `error.${1 | 2 | 3 | 4 | 5 | 6 | 7}`;
-      const known = [1, 2, 3, 4, 5, 6, 7].includes(error.status);
+      const key = `error.${error.status}` as `error.${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}`;
+      const known = [1, 2, 3, 4, 5, 6, 7, 8].includes(error.status);
       setStatus(
         known ? t(key, { index: error.detail + 1 }) : t("error.unknown", { code: error.status }),
         "error",
@@ -151,6 +165,7 @@ function recompute(): void {
     state.rows,
     dayFromIso(state.project.calendar.today) ?? state.result.calendarStartDay,
     t("tasks.untitled"),
+    state.members.all.map(memberLabel),
   );
   setStatus(
     t("status.done", {
@@ -391,6 +406,8 @@ function tabContent(actions: AppActions): HTMLElement {
   switch (state.activeTab) {
     case "tasks":
       return renderTasksTab(state, actions);
+    case "members":
+      return renderMembersTab(state, actions);
     case "calendar":
       return renderCalendarTab(state, actions);
     case "distribution":

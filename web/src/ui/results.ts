@@ -4,16 +4,9 @@ import { P50_INDEX, P80_INDEX, P90_INDEX, PCT_LEVELS } from "../abi.ts";
 import type { AppActions, AppState, AppWidgets } from "../app.ts";
 import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
+import { firstDayAtLeast, type ScheduleModel } from "../model/schedule.ts";
 import type { ComputeResult } from "../wasm.ts";
 import { card, field, h, numberInput, select } from "./dom.ts";
-
-/** 工数 `effort` を消化し終える日の添字。期間内に終わらなければ `null`。 */
-export function dayForEffort(result: ComputeResult, effort: number): number | null {
-  for (let day = 0; day < result.cumulative.length; day++) {
-    if ((result.cumulative[day] ?? 0) >= effort) return day;
-  }
-  return null;
-}
 
 function tile(key: string, label: string, value: string, accent = false): HTMLElement {
   return h("div", { class: `tile${accent ? " accent" : ""}`, dataset: { key, value } }, [
@@ -39,7 +32,7 @@ function renderTiles(result: ComputeResult): HTMLElement {
   ]);
 }
 
-function renderPercentileTable(result: ComputeResult): HTMLElement {
+function renderPercentileTable(result: ComputeResult, schedule: ScheduleModel | null): HTMLElement {
   const l = lang();
   return h("div", { class: "pct-table" }, [
     h("h3", { class: "section-title", text: t("pct.heading") }),
@@ -57,16 +50,18 @@ function renderPercentileTable(result: ComputeResult): HTMLElement {
         { id: "pct-body" },
         PCT_LEVELS.map((level, index) => {
           const value = result.percentiles[index] ?? 0;
-          const day = dayForEffort(result, value);
+          // 完了日は「その確率で全員が終わっている日」。工数を 1 本のカレンダーに
+          // 当てるのではなく、人ごとの進み方を踏まえた確率から引く。
+          const day = schedule === null ? null : firstDayAtLeast(schedule.overall, level);
           const pct = Math.round(level * 100);
           return h("tr", { dataset: { highlight: String(pct === 80) } }, [
             h("th", { text: `P${String(pct)}`, attrs: { scope: "row" } }),
             h("td", { class: "num", text: formatNumber(value, l) }),
             h("td", {
               text:
-                day === null
+                day === null || schedule === null
                   ? t("sched.notFinishing")
-                  : formatDayShort(result.calendarStartDay + day, l),
+                  : formatDayShort(schedule.startDay + day, l),
               class: day === null ? "warn" : "",
             }),
             h("td", { text: t("pct.meaningText", { pct }) }),
@@ -323,7 +318,7 @@ export function renderDistributionTab(
       }),
       renderDataView(result),
       renderProbe(result),
-      renderPercentileTable(result),
+      renderPercentileTable(result, state.schedule),
     ]),
     renderSensitivity(state, result),
     renderSettings(state, actions),

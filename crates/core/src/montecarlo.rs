@@ -9,47 +9,77 @@
 
 use crate::dist::Sampler;
 use crate::empirical::EmpiricalDist;
-use crate::prefix::{EngineOutput, PrefixCdfs, PrefixSpec};
+use crate::prefix::{Assignment, EngineOutput, PrefixCdfs, PrefixSpec};
 use crate::rng::Rng;
 
 /// 総工数のモンテカルロ・シミュレーションを実行する。
 ///
 /// `iterations` が 0 の場合やタスクが空の場合は点質量を返す。
 pub fn simulate(samplers: &[Sampler], iterations: usize, seed: u64) -> EmpiricalDist {
-    run(samplers, iterations, seed, PrefixSpec::none()).total
+    let members = vec![0usize; samplers.len()];
+    let grid_hi = [0.0];
+    run(
+        samplers,
+        iterations,
+        seed,
+        PrefixSpec::none(),
+        &Assignment {
+            members: &members,
+            grid_hi: &grid_hi,
+        },
+    )
+    .total
 }
 
 /// 総工数に加えて、各タスクまでの累積工数の分布も求める。
 ///
-/// 累積和は試行ごとにグリッドの添字を数えるだけなので、サンプルを
-/// タスク数ぶん保持する必要がなく、メモリはタスク数 × ビン数で収まる。
-pub fn run(samplers: &[Sampler], iterations: usize, seed: u64, spec: PrefixSpec) -> EngineOutput {
+/// 累積和は**担当者ごとに**積み上げる。別の人のタスクは並行して進むので、
+/// 一列に足してはいけない。試行ごとにグリッドの添字を数えるだけなので、
+/// サンプルをタスク数ぶん保持する必要はなく、メモリはタスク数 × ビン数で収まる。
+pub fn run(
+    samplers: &[Sampler],
+    iterations: usize,
+    seed: u64,
+    spec: PrefixSpec,
+    assignment: &Assignment<'_>,
+) -> EngineOutput {
     let mut prefix = PrefixCdfs::new(samplers.len(), spec);
+    let members = assignment.members_count().max(1);
 
     if iterations == 0 {
-        let mut running = 0.0;
-        for (i, s) in samplers.iter().enumerate() {
-            running += s.estimate().likely();
-            let at = spec.bin_of(running);
-            prefix.set(i, &row_from_step(at, spec.bins));
+        let mut running = vec![0.0; members];
+        let mut total = 0.0;
+        for (index, sampler) in samplers.iter().enumerate() {
+            let likely = sampler.estimate().likely();
+            total += likely;
+            let member = assignment.member_of(index);
+            running[member] += likely;
+            let at = spec.bin_of(assignment.grid_hi_of(index), running[member]);
+            prefix.set(index, &row_from_step(at, spec.bins));
         }
         return EngineOutput {
-            total: EmpiricalDist::point_mass(running),
+            total: EmpiricalDist::point_mass(total),
             prefix,
         };
     }
 
     let width = prefix.width();
     let mut counts = vec![0u32; samplers.len() * width];
+    let mut running = vec![0.0; members];
 
     let mut rng = Rng::new(seed);
     let mut totals = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let mut total = 0.0;
-        for (i, s) in samplers.iter().enumerate() {
-            total += s.quantile(rng.next_u01());
+        running.iter_mut().for_each(|value| *value = 0.0);
+        for (index, sampler) in samplers.iter().enumerate() {
+            let drawn = sampler.quantile(rng.next_u01());
+            total += drawn;
             if width > 0 {
-                counts[i * width + spec.bin_of(total)] += 1;
+                let member = assignment.member_of(index);
+                running[member] += drawn;
+                let bin = spec.bin_of(assignment.grid_hi_of(index), running[member]);
+                counts[index * width + bin] += 1;
             }
         }
         totals.push(total);
@@ -59,13 +89,16 @@ pub fn run(samplers: &[Sampler], iterations: usize, seed: u64, spec: PrefixSpec)
     if width > 0 {
         let scale = 1.0 / iterations as f64;
         let mut row = vec![0.0; width];
-        for i in 0..samplers.len() {
-            let mut running = 0u32;
-            for (slot, &count) in row.iter_mut().zip(&counts[i * width..(i + 1) * width]) {
-                running += count;
-                *slot = running as f64 * scale;
+        for index in 0..samplers.len() {
+            let mut accumulated = 0u32;
+            for (slot, &count) in row
+                .iter_mut()
+                .zip(&counts[index * width..(index + 1) * width])
+            {
+                accumulated += count;
+                *slot = accumulated as f64 * scale;
             }
-            prefix.set(i, &row);
+            prefix.set(index, &row);
         }
     }
 
