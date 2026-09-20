@@ -1,0 +1,10 @@
+[package]
+name = "mhc-core"
+description = "3点見積もりから総工数の確率分布を求めるコアロジック"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

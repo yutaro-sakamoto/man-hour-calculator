@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同じブランチに続けて push したら古い実行は打ち切る。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ツールチェーンは rust-toolchain.toml が決める (バージョンを 1 か所に集約)。
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  wasm:
+    name: build single-file HTML
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      # wasm-opt でバイナリを 3 割ほど小さくできる。無くてもビルドは通るが、
+      # CI では必ず適用してサイズの実測値を残す。
+      - name: Install binaryen
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      # サイズ上限 (400 KiB) を超えたら xtask が失敗する。
+      - name: Build
+        run: cargo xtask build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/index.html
+          if-no-files-found: error
+
+  e2e:
+    name: end-to-end (file://)
+    needs: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      # ここで「1 枚の HTML を file:// から開くだけで動き、外部通信が 0 件」
+      # という配布物としての前提そのものを検査している。
+      - name: Run tests
+        working-directory: e2e
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7

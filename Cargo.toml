@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/wasm", "crates/xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+license = "MIT"
+repository = "https://github.com/yutaro-sakamoto/man-hour-calculator"
+
+# WASM バイナリを単一 HTML に埋め込むため、サイズを最優先に最適化する。
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

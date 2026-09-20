@@ -1,0 +1,14 @@
+[package]
+name = "mhc-wasm"
+description = "mhc-core を WebAssembly から呼び出すための薄い FFI 層"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+mhc-core = { path = "../core" }

@@ -1,0 +1,294 @@
+/* ===== トークン =====================================================
+   色は dataviz のリファレンスパレットに準拠。ダークは自動反転ではなく、
+   ダーク面用に選び直した値を使う。                                    */
+:root {
+  color-scheme: light;
+
+  --page:            #f9f9f7;
+  --surface:         #fcfcfb;
+  --surface-sunken:  #f2f1ed;
+  --ink:             #0b0b0b;
+  --ink-secondary:   #52514e;
+  --ink-muted:       #898781;
+  --grid:            #e1e0d9;
+  --axis:            #c3c2b7;
+  --border:          rgba(11, 11, 11, 0.10);
+  --series:          #2a78d6;
+  --series-soft:     rgba(42, 120, 214, 0.14);
+  --critical:        #d03b3b;
+  --good:            #006300;
+
+  --radius:   10px;
+  --gap:      16px;
+  --font: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --page:           #0d0d0d;
+    --surface:        #1a1a19;
+    --surface-sunken: #232322;
+    --ink:            #ffffff;
+    --ink-secondary:  #c3c2b7;
+    --ink-muted:      #898781;
+    --grid:           #2c2c2a;
+    --axis:           #383835;
+    --border:         rgba(255, 255, 255, 0.10);
+    --series:         #3987e5;
+    --series-soft:    rgba(57, 135, 229, 0.20);
+    --critical:       #e66767;
+    --good:           #0ca30c;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 16px 64px;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.wrap { max-width: 1040px; margin: 0 auto; }
+
+/* ===== ヘッダ ===== */
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+  padding: 28px 0 8px;
+}
+header h1 { font-size: 22px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+header p  { margin: 0; color: var(--ink-secondary); font-size: 13px; flex: 1 1 260px; }
+
+.lang-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.lang-toggle button {
+  border: 0;
+  background: transparent;
+  color: var(--ink-secondary);
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 14px;
+  min-height: 32px;
+  cursor: pointer;
+}
+.lang-toggle button[aria-pressed="true"] {
+  background: var(--series);
+  color: #fff;
+}
+
+/* ===== カード ===== */
+section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px 20px;
+  margin-top: var(--gap);
+}
+section > h2 {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+  margin: 0 0 14px;
+}
+
+/* ===== タスク表 ===== */
+table { border-collapse: collapse; width: 100%; }
+th, td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--grid);
+  font-size: 14px;
+}
+th {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+#task-table input[type="text"],
+#task-table input[type="number"] {
+  width: 100%;
+  min-width: 72px;
+  padding: 5px 8px;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+#task-table input[type="number"] { text-align: right; font-variant-numeric: tabular-nums; }
+#task-table input:focus-visible,
+.controls :is(select, input):focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--series);
+  outline-offset: 1px;
+}
+#task-table input[aria-invalid="true"] {
+  border-color: var(--critical);
+  background: color-mix(in srgb, var(--critical) 8%, var(--surface-sunken));
+}
+#task-table tr[data-invalid="true"] td { background: color-mix(in srgb, var(--critical) 4%, transparent); }
+
+.row-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 14px;
+  min-height: 34px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  cursor: pointer;
+}
+button:hover { border-color: var(--axis); }
+button.primary { background: var(--series); border-color: transparent; color: #fff; }
+button.icon {
+  padding: 4px 9px;
+  min-height: 28px;
+  color: var(--ink-muted);
+  background: transparent;
+  border-color: transparent;
+  font-size: 16px;
+  line-height: 1;
+}
+button.icon:hover { color: var(--critical); border-color: var(--border); }
+
+/* ===== 設定行 (グラフをまとめてスコープする 1 本の行) ===== */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: flex-end;
+}
+.control { display: flex; flex-direction: column; gap: 4px; }
+.control > span { font-size: 12px; color: var(--ink-muted); letter-spacing: 0.02em; }
+.control :is(select, input) {
+  padding: 6px 8px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+.control input[type="number"] { width: 118px; text-align: right; font-variant-numeric: tabular-nums; }
+.control[data-disabled="true"] { opacity: 0.45; }
+
+/* ===== KPI タイル ===== */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.tile {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 11px 13px;
+}
+.tile dt { font-size: 11px; color: var(--ink-muted); letter-spacing: 0.03em; margin: 0 0 2px; }
+/* 大きな数字は比例数字。tabular-nums は縦に揃える表だけに使う。 */
+.tile dd { margin: 0; font-size: 25px; font-weight: 620; letter-spacing: -0.02em; line-height: 1.15; }
+.tile dd .unit { font-size: 13px; font-weight: 500; color: var(--ink-muted); margin-left: 3px; letter-spacing: 0; }
+.tile.accent { background: var(--series-soft); border-color: transparent; }
+.tile.accent dd { color: var(--series); }
+
+/* ===== グラフ ===== */
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.chart-title { font-size: 14px; font-weight: 620; margin: 0; }
+.chart-note  { font-size: 12px; color: var(--ink-muted); margin: 0; }
+
+/* 高さは x 軸の帯を含めて確保する (軸ラベルがはみ出してカード内スクロールが
+   生まれるのを避けるため)。 */
+.chart-box { position: relative; margin-top: 10px; height: 420px; }
+.chart-box canvas { width: 100%; height: 100%; display: block; }
+
+.tooltip {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+  border-radius: 8px;
+  padding: 8px 11px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  z-index: 3;
+}
+.tooltip[data-visible="true"] { opacity: 1; }
+.tooltip b { font-variant-numeric: tabular-nums; font-weight: 620; }
+
+/* ===== 確率スライダ ===== */
+.probe { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--grid); }
+.probe-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.probe input[type="range"] { flex: 1 1 260px; accent-color: var(--series); min-height: 32px; }
+.probe output { font-size: 15px; color: var(--ink-secondary); }
+.probe output b { font-size: 19px; color: var(--series); font-weight: 650; }
+
+/* ===== 表 ===== */
+.pct-table { margin-top: 20px; }
+.pct-table td.num, .pct-table th.num { font-variant-numeric: tabular-nums; }
+tr[data-highlight="true"] :is(td, th) { background: var(--series-soft); font-weight: 600; }
+
+details.data-view { margin-top: 14px; }
+details.data-view summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink-secondary);
+  padding: 4px 0;
+  min-height: 28px;
+}
+details.data-view .scroll { max-height: 320px; overflow: auto; margin-top: 8px; }
+
+/* ===== 状態表示 ===== */
+.status { font-size: 13px; color: var(--ink-muted); margin: 0 0 14px; }
+.status[data-tone="error"] { color: var(--critical); }
+.empty { color: var(--ink-muted); font-size: 14px; margin: 0; }
+
+footer { color: var(--ink-muted); font-size: 12px; padding: 22px 2px 0; }
+footer code {
+  background: var(--surface-sunken);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+@media (max-width: 720px) {
+  .chart-box { height: 360px; }
+  header h1 { font-size: 19px; }
+  th, td { padding: 5px 5px; }
+}
