@@ -113,12 +113,27 @@ CORS で弾かれるためです。WASM は base64 文字列として HTML に�
 「画面では隠していたのにサーバでは通ってしまう」という食い違いが起きません。
 
 **計算はサーバに置きません。** 見積もりの計算はクライアントに同梱された WASM が
-その場で回すので、サーバを建ててもデータの置き場所と権限を見るだけで済みます。
+その場で回すので、サーバはデータの置き場所と権限を見るだけで済みます。
 詳しくは `docs/API.md`。
+
+### サーバ（複数人で使うとき）
+
+1 人で使うなら要りません。複数人で使うときは、**バイナリ 1 つを起動するだけ**です。
+
+```sh
+cargo xtask build                          # 先に画面を作っておく
+cargo build --profile server -p mhc-server
+./target/server/mhc-server                 # → 管理者とトークンが 1 度だけ表示される
+```
+
+SQLite も画面（HTML）もバイナリのなかに入っているので、データベースを用意する
+必要も、Web サーバを別に立てる必要もありません。保存先は SQLite と PostgreSQL、
+認証はトークン / 信頼するヘッダ / なし の 3 通り。建て方は `docs/SERVER.md`。
 
 | ディレクトリ | 中身 |
 |---|---|
 | `crates/api` | API の型・権限・振る舞い。クライアントとサーバが共有する |
+| `crates/server` | サーバ。単体のバイナリで動き、SQLite と PostgreSQL に保存する |
 | `crates/core` | 分布・乱数・2 つのエンジン・暦・祝日・人員・カレンダー・実績反映・統計・ABI |
 | `crates/wasm` | 計算と API を WebAssembly から呼ぶための FFI 層 |
 | `crates/xtask` | `web` をバンドルし、`dist/index.html` を組み立てるビルドツール |
@@ -127,6 +142,7 @@ CORS で弾かれるためです。WASM は base64 文字列として HTML に�
 | `docs/ABI.md` | JS ↔ WASM の計算バッファのレイアウト仕様 |
 | `docs/API.md` | クライアント–サーバの分け方と権限モデル |
 | `docs/openapi.yaml` | API の HTTP 仕様 |
+| `docs/SERVER.md` | サーバの建て方・認証・保存先・運用 |
 
 ### 人員と工数から日付へ
 
@@ -219,9 +235,8 @@ b' = m' + (b − m)·(1 − p)
 
 ## これから
 
-- **サーバの実装**。残っているのは薄い層 1 枚で、`Store` をデータベースに
-  差し替え、HTTP のハンドラから `dispatch` を呼び、認証で `actor` を埋めるだけです
-  （`docs/API.md` の最後に手順があります）
+- プロジェクト一覧ページ（遅れているものを強調表示）とグループ管理の画面
+- AWS（API Gateway + Lambda + DynamoDB）向けの構成
 - タスク間相関（単一ファクター・ガウシアンコピュラ）。ABI には場所を確保済み
 - [Kani](https://model-checking.github.io/kani/) による有界モデル検査と、
   不変条件 ⇔ 検証手段の追跡表（`docs/VERIFICATION.md`）

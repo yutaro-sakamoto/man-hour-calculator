@@ -307,6 +307,20 @@ pub enum Reply {
     Empty,
 }
 
+impl Reply {
+    /// HTTP の本文に載せる中身。
+    ///
+    /// `Reply` は経路を問わず使える形 (`{"kind":…,"value":…}`) をしているが、
+    /// HTTP ではルートが種類を表しているので、本文には中身だけを載せる。
+    /// [`Reply::Empty`] は本文なし (204 No Content) を意味する。
+    pub fn body(&self) -> Option<serde_json::Value> {
+        // 包んでから取り出す。各変種を並べ直すより、serde の結果を
+        // そのまま使うほうが取りこぼしが無い。
+        let mut wrapped = serde_json::to_value(self).ok()?;
+        wrapped.get_mut("value").map(serde_json::Value::take)
+    }
+}
+
 /// 1 回の呼び出し。
 ///
 /// `actor` と `now` を外から渡すのは、WASM のなかに認証も時計も
@@ -707,6 +721,27 @@ mod tests {
         assert_eq!(
             text,
             r#"{"op":"removeAccess","id":"p","principal":{"kind":"group","id":"team"}}"#
+        );
+    }
+
+    #[test]
+    fn a_reply_body_is_the_bare_value() {
+        let user = User {
+            id: UserId::new("alice"),
+            name: "佐藤".into(),
+            email: None,
+            system_role: SystemRole::Member,
+            created_at: NOW.into(),
+        };
+        let body = Reply::User(user.clone()).body().expect("本文がある");
+        assert_eq!(body, serde_json::to_value(&user).unwrap());
+        assert_eq!(body.get("kind"), None, "包みは剥がれている");
+
+        assert_eq!(Reply::Empty.body(), None, "204 になる");
+        assert_eq!(
+            Reply::Users(Vec::new()).body(),
+            Some(serde_json::json!([])),
+            "空の一覧は 204 ではなく空の配列"
         );
     }
 
