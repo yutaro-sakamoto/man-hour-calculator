@@ -37,6 +37,11 @@ pub struct UserGroupId(pub String);
 #[serde(transparent)]
 pub struct ProjectGroupId(pub String);
 
+/// コメントの識別子。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CommentId(pub String);
+
 impl UserId {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -65,6 +70,15 @@ impl UserGroupId {
 }
 
 impl ProjectGroupId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl CommentId {
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
@@ -171,6 +185,34 @@ impl AccessEntry {
     pub fn new(principal: Principal, role: ProjectRole) -> Self {
         Self { principal, role }
     }
+}
+
+/// コメント 1 件。
+///
+/// # なぜ内容 (`Document`) の外にあるのか
+///
+/// コメントは見積もりの中身とは別の寿命を持つ。内容の保存は毎回まるごと
+/// 置き換えるので、同じ中に入れると **2 人が同時に書いたときに片方が
+/// 消える**。閲覧しかできない人にも書かせたいという事情もある
+/// (内容を保存する権限は要らない)。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Comment {
+    pub id: CommentId,
+    pub project_id: ProjectId,
+    /// タスクに付いたコメントならそのタスク id。プロジェクト宛てなら `None`。
+    ///
+    /// タスク id は内容のなかの識別子で、参照先が消えることがある。消えた
+    /// タスクのコメントは残したまま「どのタスクか分からない」として扱う。
+    #[serde(default)]
+    pub task_id: Option<String>,
+    pub author: UserId,
+    /// Markdown。組み立てるのは画面側で、ここでは文字列として持つ。
+    pub body: String,
+    pub created_at: String,
+    /// 書き直した時刻。一度も直していなければ `None`。
+    #[serde(default)]
+    pub updated_at: Option<String>,
 }
 
 /// アカウントのまとまり。チームや部署。

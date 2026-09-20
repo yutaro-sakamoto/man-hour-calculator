@@ -20,6 +20,7 @@ import { lang, t } from "../i18n.ts";
 import { emptyDocument, newId } from "../model/project.ts";
 import { slackDays } from "../model/status.ts";
 import { renderAccounts } from "./accounts.ts";
+import { commentButton } from "./comments.ts";
 import { renderConnection } from "./connection.ts";
 import { button, card, dateInput, h, iconButton, select, textInput } from "./dom.ts";
 import { renderGroups } from "./groups.ts";
@@ -484,6 +485,15 @@ function renderProjectList(state: AppState, actions: AppActions): HTMLElement {
 export function renderProjectsTab(state: AppState, actions: AppActions): HTMLElement {
   return h("div", {}, [
     renderProjectList(state, actions),
+    // 開いているプロジェクトへのコメント。タスク宛ては一覧の行から開く。
+    state.open === null
+      ? null
+      : card(t("comments.heading"), [
+          h("p", { class: "hint", text: t("comments.viewerCanPost") }),
+          h("div", { class: "row-actions" }, [
+            commentButton(state, actions, null, t("comments.projectButton")),
+          ]),
+        ]),
     renderSharing(state, actions),
     // 一覧を主役にしたいので、管理まわりは畳んでおく。
     renderGroups(state, actions),

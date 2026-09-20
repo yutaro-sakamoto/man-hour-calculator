@@ -22,8 +22,9 @@ use std::sync::{Mutex, MutexGuard};
 
 use mhc_api::error::{ApiError, ApiResult};
 use mhc_api::model::{
-    AccessEntry, Document, Principal, Project, ProjectGroup, ProjectGroupId, ProjectId,
-    ProjectMeta, ProjectRole, ProjectStatus, SystemRole, User, UserGroup, UserGroupId, UserId,
+    AccessEntry, Comment, CommentId, Document, Principal, Project, ProjectGroup, ProjectGroupId,
+    ProjectId, ProjectMeta, ProjectRole, ProjectStatus, SystemRole, User, UserGroup, UserGroupId,
+    UserId,
 };
 use mhc_api::store::Store;
 
@@ -586,10 +587,84 @@ impl<C: Sql> Store for &SqlStore<C> {
             "DELETE FROM project_access WHERE project_id = ?",
             std::slice::from_ref(&key),
         )?;
+        // 行き先の無いコメントを残さない。
+        self.sql().execute(
+            "DELETE FROM comments WHERE project_id = ?",
+            std::slice::from_ref(&key),
+        )?;
         self.sql()
             .execute("DELETE FROM projects WHERE id = ?", &[key])?;
         Ok(true)
     }
+
+    /* ===== コメント ===== */
+
+    fn comments(&self, project: &ProjectId) -> ApiResult<Vec<Comment>> {
+        let rows = self.sql().query(
+            &format!(
+                "SELECT {COMMENT_COLUMNS} FROM comments WHERE project_id = ? \
+                 ORDER BY created_at, id"
+            ),
+            &[Value::text(project.as_str())],
+        )?;
+        rows.iter().map(read_comment).collect()
+    }
+
+    fn comment(&self, id: &CommentId) -> ApiResult<Option<Comment>> {
+        let rows = self.sql().query(
+            &format!("SELECT {COMMENT_COLUMNS} FROM comments WHERE id = ?"),
+            &[Value::text(id.as_str())],
+        )?;
+        rows.first().map(read_comment).transpose()
+    }
+
+    fn put_comment(&mut self, comment: Comment) -> ApiResult<()> {
+        let key = Value::text(comment.id.as_str());
+        self.sql().execute(
+            "DELETE FROM comments WHERE id = ?",
+            std::slice::from_ref(&key),
+        )?;
+        self.sql().execute(
+            "INSERT INTO comments \
+             (id, project_id, task_id, author, body, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            &[
+                key,
+                Value::text(comment.project_id.as_str()),
+                Value::opt_text(comment.task_id.as_deref()),
+                Value::text(comment.author.as_str()),
+                Value::text(&comment.body),
+                Value::text(&comment.created_at),
+                Value::opt_text(comment.updated_at.as_deref()),
+            ],
+        )
+    }
+
+    fn remove_comment(&mut self, id: &CommentId) -> ApiResult<bool> {
+        if self.comment(id)?.is_none() {
+            return Ok(false);
+        }
+        self.sql().execute(
+            "DELETE FROM comments WHERE id = ?",
+            &[Value::text(id.as_str())],
+        )?;
+        Ok(true)
+    }
+}
+
+const COMMENT_COLUMNS: &str = "id, project_id, task_id, author, body, created_at, updated_at";
+
+fn read_comment(row: &Row) -> ApiResult<Comment> {
+    let mut read = Reader::new(row);
+    Ok(Comment {
+        id: CommentId::new(read.text()?),
+        project_id: ProjectId::new(read.text()?),
+        task_id: read.opt_text()?,
+        author: UserId::new(read.text()?),
+        body: read.text()?,
+        created_at: read.text()?,
+        updated_at: read.opt_text()?,
+    })
 }
 
 fn read_user(row: &Row) -> ApiResult<User> {

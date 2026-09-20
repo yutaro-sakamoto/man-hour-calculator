@@ -25,7 +25,8 @@ use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use mhc_api::error::ApiError;
 use mhc_api::model::{
-    Document, Principal, ProjectGroupId, ProjectId, ProjectRole, ProjectStatus, SystemRole, UserId,
+    CommentId, Document, Principal, ProjectGroupId, ProjectId, ProjectRole, ProjectStatus,
+    SystemRole, UserId,
 };
 use mhc_api::protocol::{dispatch, Envelope, Outcome, Request};
 use mhc_api::service::Service;
@@ -221,6 +222,28 @@ struct RoleBody {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PostCommentBody {
+    comment_id: CommentId,
+    #[serde(default)]
+    task_id: Option<String>,
+    body: String,
+}
+
+#[derive(Deserialize)]
+struct BodyOnly {
+    body: String,
+}
+
+/// `?taskId=…` で絞り込む。
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CommentQuery {
+    #[serde(default)]
+    task_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateProjectBody {
     id: ProjectId,
     name: String,
@@ -345,6 +368,14 @@ pub fn router<C: Sql + 'static>(app: App<C>) -> Router {
         .route(
             "/v1/projects/{projectId}/duplicate",
             post(duplicate_project::<C>),
+        )
+        .route(
+            "/v1/projects/{projectId}/comments",
+            get(list_comments::<C>).post(post_comment::<C>),
+        )
+        .route(
+            "/v1/comments/{commentId}",
+            patch(edit_comment::<C>).delete(delete_comment::<C>),
         )
         .route("/v1/projects/{projectId}/access", get(list_access::<C>))
         .route(
@@ -669,6 +700,60 @@ async fn duplicate_project<C: Sql + 'static>(
         name: body.name,
     };
     call(app, headers, request, Ok_::Created).await
+}
+
+/* --- コメント --- */
+
+async fn list_comments<C: Sql + 'static>(
+    State(app): State<App<C>>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<CommentQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let request = Request::ListComments {
+        id: ProjectId::new(id),
+        task_id: query.task_id,
+    };
+    call(app, headers, request, Ok_::Fine).await
+}
+
+async fn post_comment<C: Sql + 'static>(
+    State(app): State<App<C>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<PostCommentBody>,
+) -> Response {
+    let request = Request::PostComment {
+        id: ProjectId::new(id),
+        comment_id: body.comment_id,
+        task_id: body.task_id,
+        body: body.body,
+    };
+    call(app, headers, request, Ok_::Created).await
+}
+
+async fn edit_comment<C: Sql + 'static>(
+    State(app): State<App<C>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<BodyOnly>,
+) -> Response {
+    let request = Request::EditComment {
+        comment_id: CommentId::new(id),
+        body: body.body,
+    };
+    call(app, headers, request, Ok_::Fine).await
+}
+
+async fn delete_comment<C: Sql + 'static>(
+    State(app): State<App<C>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let request = Request::DeleteComment {
+        comment_id: CommentId::new(id),
+    };
+    call(app, headers, request, Ok_::Fine).await
 }
 
 /* --- 権限 --- */

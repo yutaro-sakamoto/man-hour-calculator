@@ -27,6 +27,7 @@ import {
   select,
   textInput,
 } from "./dom.ts";
+import { commentButton } from "./comments.ts";
 
 const STATE_ORDER: readonly TaskState[] = ["notStarted", "inProgress", "done"];
 
@@ -461,6 +462,8 @@ function renderRow(
           );
         });
       }),
+      // 並べ替えや階層とは別の話なので、削除の手前にまとめて置く。
+      commentButton(state, actions, row.task.id, t("comments.taskButton")),
       iconButton("×", t("tasks.removeRow", { name: label }), () => {
         actions.mutate((document) => {
           document.tasks = removeSubtree(document.tasks, index);

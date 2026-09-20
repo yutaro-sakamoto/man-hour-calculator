@@ -78,6 +78,23 @@ const STEPS: &[&[&str]] = &[
         )",
         "CREATE INDEX api_tokens_by_user ON api_tokens (user_id)",
     ],
+    // 版 2: コメント。内容とは別の表に置く。
+    //
+    // 内容の保存は毎回まるごと置き換えるので、同じ JSON に入れると 2 人が
+    // 同時に書いたときに片方が消える。行に分けておけば、書き込みは 1 行の
+    // 追加で済む。
+    &[
+        "CREATE TABLE comments (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            task_id TEXT,
+            author TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT
+        )",
+        "CREATE INDEX comments_by_project ON comments (project_id, created_at)",
+    ],
 ];
 
 /// いま入っている版。まだ何も無ければ 0。

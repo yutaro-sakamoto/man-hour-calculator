@@ -46,6 +46,7 @@ import { buildRows, invalidRows, type TreeRow } from "./model/tree.ts";
 import { renderCalendarTab } from "./ui/calendar.ts";
 import { button, clear, h } from "./ui/dom.ts";
 import { renderMembersTab } from "./ui/members.ts";
+import { renderCommentsModal } from "./ui/comments.ts";
 import { renderProjectsTab } from "./ui/projects.ts";
 import { renderDistributionTab } from "./ui/results.ts";
 import { renderScheduleTab } from "./ui/schedule.ts";
@@ -98,6 +99,11 @@ const state: AppState = {
   calendarMember: null,
   editingEventId: null,
   expandedDay: null,
+  comments: [],
+  commentScope: null,
+  commentDraft: "",
+  commentPreview: false,
+  editingCommentId: null,
   status: { text: "", tone: "info" },
   probeDate: null,
 };
@@ -604,6 +610,10 @@ function render(): void {
           panel,
         ]),
   );
+  // コメントの窓はどのタブからでも開くので、タブの中身の外に置く。
+  const comments = renderCommentsModal(state, actions);
+  if (comments) root.append(comments);
+
   restoreFocus(focus);
 
   if (state.activeTab === "distribution") distributionChart.redraw();
@@ -696,6 +706,10 @@ async function openProject(project: {
     updatedAt: project.updatedAt,
   };
   state.document = project.document;
+  // コメントはまとめて持つ。タスク一覧に件数を出すため、1 件ずつ
+  // 数えに行くと行の数だけ問い合わせることになる。
+  state.comments = await state.client.listComments(project.id);
+  state.commentScope = null;
   // 基準日は開いた日に合わせる。保存された日付のまま進捗を測らない。
   if (state.document.calendar.today !== today) state.document.calendar.today = today;
   await reloadProjects();

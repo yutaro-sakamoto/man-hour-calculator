@@ -12,6 +12,8 @@
 
 import type {
   AccessEntry,
+  Comment,
+  CommentId,
   Principal,
   Project,
   ProjectDocument,
@@ -101,6 +103,20 @@ export interface ApiClient {
   updateProject: (id: ProjectId, patch: ProjectPatchInput) => Promise<ProjectSummary>;
   deleteProject: (id: ProjectId) => Promise<void>;
   duplicateProject: (id: ProjectId, newId: ProjectId, name: string) => Promise<Project>;
+
+  /** `taskId` を渡すとそのタスク宛てだけ。 */
+  listComments: (id: ProjectId, taskId?: string) => Promise<Comment[]>;
+  /** 閲覧できれば書ける。 */
+  postComment: (
+    id: ProjectId,
+    commentId: CommentId,
+    body: string,
+    taskId?: string,
+  ) => Promise<Comment>;
+  /** 書き直せるのは本人だけ。 */
+  editComment: (commentId: CommentId, body: string) => Promise<Comment>;
+  /** 消せるのは本人か、プロジェクトの所有者。 */
+  deleteComment: (commentId: CommentId) => Promise<void>;
 
   listAccess: (id: ProjectId) => Promise<AccessEntry[]>;
   setAccess: (id: ProjectId, principal: Principal, role: ProjectRole) => Promise<AccessEntry[]>;

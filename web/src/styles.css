@@ -1412,3 +1412,155 @@ td.num.short {
     font-size: 13px;
   }
 }
+
+/* ===== コメント ===== */
+.comment-open {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+.comment-open.has-comments {
+  border-color: color-mix(in srgb, var(--series) 45%, var(--border));
+  color: var(--series);
+}
+.comments-card {
+  width: min(680px, 100%);
+}
+.comments-heading {
+  flex: 1 1 auto;
+  font-size: 14px;
+}
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 14px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.comment {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px 4px;
+  background: var(--surface-sunken);
+}
+.comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+.comment-author {
+  font-size: 13px;
+  color: var(--ink);
+}
+.comment-time,
+.comment-edited {
+  font-variant-numeric: tabular-nums;
+}
+.spacer {
+  flex: 1 1 auto;
+}
+.comment-composer {
+  border-top: 1px solid var(--grid);
+  padding-top: 10px;
+}
+.composer-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.composer-tabs button[aria-pressed="true"] {
+  background: var(--series);
+  color: #fff;
+  border-color: transparent;
+}
+.comment-input {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  resize: vertical;
+}
+.comment-preview {
+  border: 1px dashed var(--grid);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: 88px;
+}
+
+/*
+ * コメントの本文。他人が書いた Markdown を組み立てたもの。
+ * 周りより一段小さくして、画面の見出しと張り合わないようにする。
+ */
+.markdown {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.markdown > *:first-child {
+  margin-top: 0;
+}
+.markdown > *:last-child {
+  margin-bottom: 0;
+}
+.markdown p,
+.markdown ul,
+.markdown ol,
+.markdown pre,
+.markdown blockquote {
+  margin: 6px 0;
+}
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 12px 0 4px;
+  font-weight: 650;
+  /* 本文と見分けはつくが、画面の見出しとは張り合わない大きさ。 */
+  font-size: 15px;
+}
+.markdown h5,
+.markdown h6 {
+  font-size: 14px;
+  color: var(--ink-secondary);
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+}
+.markdown code {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.92em;
+  font-family: ui-monospace, "SFMono-Regular", "Consolas", monospace;
+}
+.markdown pre {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  overflow-x: auto;
+}
+.markdown pre code {
+  background: none;
+  padding: 0;
+}
+.markdown blockquote {
+  border-left: 3px solid var(--axis);
+  padding-left: 10px;
+  color: var(--ink-secondary);
+}
+.markdown a {
+  color: var(--series);
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--grid);
+  margin: 10px 0;
+}

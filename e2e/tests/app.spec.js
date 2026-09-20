@@ -127,13 +127,13 @@ test("階層の上げ下げと並べ替えができる", async ({ page }) => {
 
   // 「テストとリリース」を 1 つ上げると「実装フェーズ」の直前に来る。
   await recompute(page, () =>
-    rows(page).nth(7).locator("button[title]").nth(0).click(),
+    rows(page).nth(7).locator('button[title="上へ"]').click(),
   );
   expect(await cellText(3)).toBe("テストとリリース");
 
   // 階層を下げると「設計フェーズ」の子になる。
   await recompute(page, () =>
-    rows(page).nth(3).locator("button[title]").nth(2).click(),
+    rows(page).nth(3).locator('button[title="階層を下げる"]').click(),
   );
   await expect(rows(page).nth(3)).toHaveAttribute("data-parent", "false");
   // 親の集計に取り込まれる (8 + 3 = 11 人日が最小)。
@@ -141,7 +141,7 @@ test("階層の上げ下げと並べ替えができる", async ({ page }) => {
 
   // 階層を上げると元に戻る。
   await recompute(page, () =>
-    rows(page).nth(3).locator("button[title]").nth(3).click(),
+    rows(page).nth(3).locator('button[title="階層を上げる"]').click(),
   );
   await expect(rows(page).first().locator("td.num").nth(0)).toHaveText("8.0");
 });
@@ -151,14 +151,14 @@ test("子タスクを追加すると親になり、削除は部分木ごと消�
 }) => {
   await open(page);
   await recompute(page, () =>
-    rows(page).nth(1).locator("button[title]").nth(4).click(),
+    rows(page).nth(1).locator('button[title="子タスクを追加"]').click(),
   );
   await expect(rows(page)).toHaveCount(9);
   await expect(rows(page).nth(1)).toHaveAttribute("data-parent", "true");
 
   // 「設計フェーズ」を消すと配下 3 件ごと消える。
   await recompute(page, () =>
-    rows(page).first().locator("button[title]").nth(5).click(),
+    rows(page).first().locator('button[title*="を削除"]').click(),
   );
   await expect(rows(page)).toHaveCount(5);
 });
@@ -1161,4 +1161,161 @@ test("進捗率を入れると、その分だけ完了が早まる", async ({ pa
   await openTab(page, "distribution");
   const meanAfter = await tile(page, "mean");
   expect(Math.abs(meanAfter - meanBefore)).toBeLessThan(meanBefore * 0.02);
+});
+
+/* ===== コメント ===== */
+
+/** タスクのコメント欄を開く。 */
+async function openTaskComments(page, index) {
+  await rows(page).nth(index).locator(".comment-open").click();
+  await expect(page.locator(".comments-card")).toBeVisible();
+}
+
+test("タスクにコメントを書けて、Markdown が組み立てられる", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+  await expect(page.locator(".comments-card .empty")).toContainText(
+    "まだコメント",
+  );
+
+  await page
+    .locator(".comment-input")
+    .fill(
+      "## 見直し\n\n**幅**が広すぎます。\n\n- 最小 1 人日は楽観的\n\n`code` もどうぞ",
+    );
+  await page.click('button[data-action="post-comment"]');
+
+  // 書いたものが Markdown として組み立てられる。
+  const body = page.locator(".comment .markdown").first();
+  await expect(body.locator("h4")).toHaveText("見直し");
+  await expect(body.locator("strong")).toHaveText("幅");
+  await expect(body.locator("li")).toHaveCount(1);
+  await expect(body.locator("code")).toHaveText("code");
+
+  // 件数が行のボタンに出る。
+  await page.click('.comments-card button[title="閉じる"]');
+  await expect(rows(page).nth(1).locator(".comment-open")).toContainText("1");
+});
+
+test("コメントの HTML は文字として出て、危ないリンクは通らない", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+
+  await page
+    .locator(".comment-input")
+    .fill('<img src=x onerror="alert(1)"> と [押して](javascript:alert(1))');
+  await page.click('button[data-action="post-comment"]');
+
+  const comment = page.locator(".comment").first();
+  // 印にはならず、書いたままの文字として出る。
+  await expect(comment.locator(".markdown")).toContainText("<img src=x");
+  await expect(comment.locator(".markdown img")).toHaveCount(0);
+  // 危ない綴りはリンクにしない。
+  await expect(comment.locator(".markdown a")).toHaveCount(0);
+  await expect(comment.locator(".markdown")).toContainText(
+    "javascript:alert(1)",
+  );
+});
+
+test("プレビューで組み立てたものを確かめてから書き込める", async ({ page }) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+
+  await page.locator(".comment-input").fill("- 下書き");
+  await page.click('.composer-tabs button:text("プレビュー")');
+  await expect(page.locator(".comment-preview li")).toHaveText("下書き");
+  // まだ書き込まれてはいない。
+  await expect(page.locator(".comment")).toHaveCount(0);
+
+  await page.click('.composer-tabs button:text("書く")');
+  await expect(page.locator(".comment-input")).toHaveValue("- 下書き", {
+    timeout: 5000,
+  });
+});
+
+test("自分のコメントは直せて、消せる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+  await page.locator(".comment-input").fill("最初の意見");
+  await page.click('button[data-action="post-comment"]');
+  await expect(page.locator(".comment")).toHaveCount(1);
+
+  await page.click('.comment button:text("編集")');
+  await expect(page.locator(".comment-input")).toHaveValue("最初の意見");
+  await page.locator(".comment-input").fill("直した意見");
+  await page.click('button[data-action="post-comment"]');
+  await expect(page.locator(".comment .markdown")).toContainText("直した意見");
+  await expect(page.locator(".comment-edited")).toBeVisible();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.click('.comment button[title="このコメントを削除"]');
+  await expect(page.locator(".comment")).toHaveCount(0);
+});
+
+test("プロジェクト宛てとタスク宛ては分かれている", async ({ page }) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+  await page.locator(".comment-input").fill("タスクの話");
+  await page.click('button[data-action="post-comment"]');
+  await page.click('.comments-card button[title="閉じる"]');
+
+  await openTab(page, "projects");
+  await page.click('.card:has-text("コメント") .comment-open');
+  await expect(page.locator(".comments-card")).toContainText("へのコメント");
+  // タスク宛ては混ざらない。
+  await expect(page.locator(".comment")).toHaveCount(0);
+
+  await page.locator(".comment-input").fill("プロジェクトの話");
+  await page.click('button[data-action="post-comment"]');
+  await expect(page.locator(".comment .markdown")).toContainText(
+    "プロジェクトの話",
+  );
+  await page.click('.comments-card button[title="閉じる"]');
+
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+  await expect(page.locator(".comment .markdown")).toContainText("タスクの話");
+  await expect(page.locator(".comment")).toHaveCount(1);
+});
+
+test("閲覧しかできない人もコメントは書ける", async ({ page }) => {
+  await open(page);
+  await openTab(page, "projects");
+
+  // 2 人目を作って、閲覧だけ配る。
+  await page.click('button:text("アカウントを追加")');
+  const added = page
+    .locator("tr[data-account]")
+    .filter({ has: page.locator('input[value="名前"]') });
+  await added.locator("input").fill("鈴木");
+  await expect(
+    page.locator('tr[data-account] input[value="鈴木"]'),
+  ).toHaveCount(1);
+
+  const addShare = page.locator('[data-add="share"]');
+  await addShare
+    .locator('select[aria-label="相手"]')
+    .selectOption({ label: "鈴木" });
+  await addShare
+    .locator('select[aria-label="権限"]')
+    .selectOption({ label: "閲覧者" });
+  await addShare.locator('button:text("共有する")').click();
+  await expect(page.locator("tr[data-principal]")).toHaveCount(2);
+
+  await actAs(page, "鈴木");
+  await openTab(page, "projects");
+  await page.click('.card:has-text("コメント") .comment-open');
+  await page.locator(".comment-input").fill("見積もりが楽観的では?");
+  await page.click('button[data-action="post-comment"]');
+  await expect(page.locator(".comment .markdown")).toContainText("楽観的");
+  await expect(page.locator(".comment-author")).toHaveText("鈴木");
 });

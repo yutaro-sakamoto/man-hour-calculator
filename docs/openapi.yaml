@@ -36,6 +36,8 @@ tags:
     description: プロジェクトのグループ。配下のプロジェクトに権限を継がせる
   - name: projects
     description: プロジェクト
+  - name: comments
+    description: プロジェクトとタスクへのコメント
   - name: access
     description: プロジェクトごとの権限
 
@@ -557,6 +559,106 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/projects/{projectId}/comments:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      tags: [comments]
+      summary: コメントの一覧
+      description: 古い順。`taskId` を付けるとそのタスク宛てだけを返す。
+      operationId: listComments
+      parameters:
+        - name: taskId
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Comment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      tags: [comments]
+      summary: コメントを書く
+      description: |
+        **閲覧できれば書ける。** 見積もりに口を出すのに編集権限まで要るのは
+        窮屈で、「見てもらって意見だけもらう」ができなくなるため。
+
+        `taskId` を付けるとそのタスク宛てになる。本文は Markdown として
+        保存するが、組み立てる (HTML にする) のは画面側。
+      operationId: postComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [commentId, body]
+              properties:
+                commentId: { type: string }
+                taskId: { type: string }
+                body: { type: string, minLength: 1 }
+      responses:
+        "201":
+          description: 書き込んだ
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /v1/comments/{commentId}:
+    parameters:
+      - name: commentId
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      tags: [comments]
+      summary: コメントを書き直す
+      description: |
+        **書いた本人だけ。** 所有者でも他人の発言は直せない
+        (消すことはできるが、書き換えてしまえるのは別のこと)。
+      operationId: editComment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Invalid" }
+    delete:
+      tags: [comments]
+      summary: コメントを消す
+      description: 書いた本人か、プロジェクトの所有者。
+      operationId: deleteComment
+      responses:
+        "204": { description: 消した }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/projects/{projectId}/access:
     parameters:
       - $ref: "#/components/parameters/projectId"
@@ -743,6 +845,26 @@ components:
       properties:
         kind: { type: string, enum: [user, group] }
         id: { type: string }
+
+    Comment:
+      type: object
+      description: |
+        プロジェクトやタスクへのコメント。**内容 (Document) の外**に持つ。
+        内容の保存は毎回まるごと置き換えるので、同じ中に入れると 2 人が
+        同時に書いたときに片方が消えるため。
+      required: [id, projectId, author, body, createdAt]
+      properties:
+        id: { type: string }
+        projectId: { type: string }
+        taskId:
+          type: [string, "null"]
+          description: |
+            タスク宛てならそのタスク id。プロジェクト宛てなら null。
+            参照先のタスクが消えることはあり、そのときもコメントは残る。
+        author: { type: string, description: 書いたアカウントの id }
+        body: { type: string, description: Markdown }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: [string, "null"], format: date-time }
 
     AccessEntry:
       type: object
