@@ -554,7 +554,9 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
             let calendar = calendars
                 .get(input.assignee)
                 .unwrap_or_else(|| &calendars[0]);
-            actuals::forecast(original, &actual, calendar, request.today_day)
+            // 消化工数が測れないときの目安に、当初見積もりの期待値を渡す。
+            let planned = Sampler::new(original, request.kind, request.lambda).mean();
+            actuals::forecast(original, planned, &actual, calendar, request.today_day)
         })
         .collect();
 
@@ -563,9 +565,13 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     let total_max: f64 = forecasts.iter().map(|f| f.estimate.max()).sum();
     let total_spent: f64 = forecasts.iter().map(|f| f.spent).sum();
 
+    // 標本を引くのは**残り**の工数。すでに終えたぶんをもう一度これからの
+    // 稼働で賄うことにならないよう、日程が消化するのはこちら。
+    // 総工数の分布は、あとで消化ぶんだけ平行移動して出す (定数のずれなので
+    // 形は変わらない)。
     let samplers: Vec<Sampler> = forecasts
         .iter()
-        .map(|f| Sampler::new(f.estimate, request.kind, request.lambda))
+        .map(|f| Sampler::new(f.remaining, request.kind, request.lambda))
         .collect();
 
     // --- 担当者ごとの累積和グリッドの上限
@@ -573,7 +579,7 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     let mut member_grid_hi = vec![0.0; request.members.len()];
     for (index, forecast) in forecasts.iter().enumerate() {
         if let Some(slot) = member_grid_hi.get_mut(assignees[index]) {
-            *slot += forecast.estimate.max();
+            *slot += forecast.remaining.max();
         }
     }
     let assignment = Assignment {
@@ -622,10 +628,12 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     out[2] = request.n_bins as f64;
     out[3] = n_pct as f64;
     out[4] = n_tasks as f64;
-    out[6] = summary.mean;
+    // 分布は「残り」で求めてあるので、消化ぶんだけずらして総工数にする。
+    // ずれは定数なので、ばらつき (sd) と形 (probs / cdf) はそのまま使える。
+    out[6] = summary.mean + total_spent;
     out[7] = summary.sd;
-    out[8] = summary.lo;
-    out[9] = summary.hi;
+    out[8] = summary.lo + total_spent;
+    out[9] = summary.hi + total_spent;
     out[10] = total_min;
     out[11] = total_likely;
     out[12] = total_max;
@@ -644,7 +652,7 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     out.extend_from_slice(&summary.probs);
     out.extend_from_slice(&summary.cdf);
     out.extend_from_slice(&PCT_LEVELS);
-    out.extend_from_slice(&summary.percentiles);
+    out.extend(summary.percentiles.iter().map(|value| value + total_spent));
     out.extend(samplers.iter().map(|s| {
         if total_variance > 0.0 {
             s.variance() / total_variance
@@ -1187,6 +1195,87 @@ mod tests {
         assert_eq!(resp.effective(1), (2.5, 2.5, 2.5));
         assert_eq!(resp.states(), &[2.0, 2.0]);
         assert_eq!(raw[16], 7.5, "消化済み工数の合計");
+    }
+
+    #[test]
+    fn progress_shortens_the_schedule_without_changing_the_total() {
+        // 着手日を入れずに進捗率だけを入れた場合。消化工数は測れないので
+        // 予定どおり進んだとみなす。総工数は動かず、残りだけが減る。
+        let measure = |progress: f64| {
+            let mut r = request(Engine::Convolution);
+            r.members = vec![eight_hour_weekdays()];
+            r.tasks = vec![TaskInput {
+                progress,
+                ..TaskInput::estimate_only(10.0, 10.0, 10.0)
+            }];
+            let raw = handle(&r.encode());
+            let resp = Response::parse(&raw);
+            // 残り = 担当者の累積和グリッドの上限。日程が消化するのはここ。
+            (
+                resp.percentiles()[4],
+                resp.member_grid_hi()[0],
+                resp.spent()[0],
+            )
+        };
+
+        let (fresh_p80, fresh_remaining, fresh_spent) = measure(0.0);
+        let (half_p80, half_remaining, half_spent) = measure(0.5);
+
+        assert_eq!(fresh_remaining, 10.0, "手つかずなら 10 人日ぶん残っている");
+        assert_eq!(half_remaining, 5.0, "半分終わっていれば残りは 5 人日");
+        assert_eq!(fresh_spent, 0.0);
+        assert_eq!(half_spent, 5.0, "測れないので予定どおり進んだとみなす");
+        assert!(
+            (half_p80 - fresh_p80).abs() < 1e-9,
+            "総工数は動かない: {fresh_p80} → {half_p80}"
+        );
+    }
+
+    #[test]
+    fn falling_behind_shows_up_as_more_total_effort() {
+        // 5 日かけて 25% しか進んでいない = 当初の見立てより重い仕事だった。
+        // 総工数は増え、それでも残りは当初の 3/4 に減る。
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.tasks = vec![TaskInput {
+            start_day: Some(monday()),
+            progress: 0.25,
+            ..TaskInput::estimate_only(8.0, 8.0, 8.0)
+        }];
+        r.today_day = monday() + 4;
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert_eq!(resp.spent()[0], 5.0, "月曜から金曜まで 5 人日");
+        assert_eq!(resp.member_grid_hi()[0], 6.0, "残りは 8 の 3/4");
+        assert!(
+            (resp.percentiles()[4] - 11.0).abs() < 1e-9,
+            "総工数は 5 + 6 = 11 人日 (当初の 8 より重い)"
+        );
+    }
+
+    #[test]
+    fn a_finished_task_asks_nothing_more_of_the_calendar() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.tasks = vec![TaskInput {
+            start_day: Some(monday()),
+            end_day: Some(monday() + 4),
+            progress: 1.0,
+            ..TaskInput::estimate_only(5.0, 8.0, 20.0)
+        }];
+        r.today_day = monday() + 10;
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert_eq!(
+            resp.member_grid_hi()[0],
+            0.0,
+            "終わった仕事をこれからの稼働で賄ってはいけない"
+        );
+        // 総工数のほうは、実際にかかったぶんとして残る。
+        assert_eq!(raw[16], 5.0, "消化済み工数");
+        assert!((resp.percentiles()[4] - 5.0).abs() < 1e-9);
     }
 
     #[test]

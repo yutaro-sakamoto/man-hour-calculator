@@ -1082,7 +1082,10 @@ test("期間をまたぐ予定は、その全日に出る", async ({ page }) => 
 
   await page.locator('.day[data-day="2026-09-29"] .day-add').click();
   await page.locator('.modal-card input[aria-label="内容"]').fill("出張");
-  await page.locator('.modal-card input[type="date"]').nth(1).fill("2026-10-01");
+  await page
+    .locator('.modal-card input[type="date"]')
+    .nth(1)
+    .fill("2026-10-01");
   await closeEditor(page);
 
   for (const date of ["2026-09-29", "2026-09-30"]) {
@@ -1120,4 +1123,42 @@ test("予定が多い日は畳まれ、開くと全部出る", async ({ page }) 
 
   await cell.locator(".day-more").click();
   await expect(cell.locator(".event-chip")).toHaveCount(5);
+});
+
+test("進捗率を入れると、その分だけ完了が早まる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "distribution");
+  const meanBefore = await tile(page, "mean");
+
+  await openTab(page, "tasks");
+  await page.click('.segmented button:text("すべて")');
+  const finishBefore = await summary(page, "finishP80");
+  const remainingBefore = Number(await summary(page, "remaining"));
+
+  // 着手日は入れずに、進捗率だけを入れる。ここが効かないと
+  // 「進捗を入れたのに何も変わらない」ことになる。
+  for (const index of [1, 2, 4, 5, 6, 7]) {
+    await rows(page)
+      .nth(index)
+      .locator('input[type="number"]')
+      .nth(3)
+      .fill("80");
+  }
+  await recompute(page, () => page.locator("#status").click());
+  await expect(rows(page).nth(1).locator(".pill")).toHaveText("進行中");
+
+  // 残りが 1/5 に減るので、完了は大きく前に出る。
+  const remainingAfter = Number(await summary(page, "remaining"));
+  expect(remainingAfter).toBeLessThan(remainingBefore * 0.5);
+  const finishAfter = await summary(page, "finishP80");
+  expect(
+    new Date(`2026/${finishAfter.replace(/\(.+\)/, "")}`).getTime(),
+  ).toBeLessThan(
+    new Date(`2026/${finishBefore.replace(/\(.+\)/, "")}`).getTime(),
+  );
+
+  // 総工数の中心は動かない。進んだだけで見積もりが縮むわけではない。
+  await openTab(page, "distribution");
+  const meanAfter = await tile(page, "mean");
+  expect(Math.abs(meanAfter - meanBefore)).toBeLessThan(meanBefore * 0.02);
 });
