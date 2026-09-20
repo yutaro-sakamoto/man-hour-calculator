@@ -5,7 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{ProjectRole, SystemRole, UserId};
+use crate::model::{
+    AccessEntry, Principal, ProjectGroup, ProjectMeta, ProjectRole, SystemRole, UserGroupId, UserId,
+};
 
 /// 操作の種類。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,11 +26,16 @@ pub enum Permission {
 }
 
 /// 操作している人。
+///
+/// 所属グループを持っているのは、権限がグループ経由でも届くため。
+/// 呼び出しごとに解決して詰めておく。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Actor {
     pub user_id: UserId,
     pub system_role: SystemRole,
+    #[serde(default)]
+    pub groups: Vec<UserGroupId>,
 }
 
 impl Actor {
@@ -36,6 +43,50 @@ impl Actor {
         Self {
             user_id,
             system_role,
+            groups: Vec::new(),
+        }
+    }
+
+    /// 所属グループを添えて作る。
+    pub fn with_groups(mut self, groups: Vec<UserGroupId>) -> Self {
+        self.groups = groups;
+        self
+    }
+
+    /// この人を指しうる相手の一覧 (本人 + 所属グループ)。
+    pub fn principals(&self) -> Vec<Principal> {
+        let mut out = vec![Principal::User(self.user_id.clone())];
+        out.extend(self.groups.iter().cloned().map(Principal::Group));
+        out
+    }
+
+    /// 付与の一覧から、この人に届く最も強い役割を拾う。
+    pub fn strongest(&self, access: &[AccessEntry]) -> Option<ProjectRole> {
+        let mine = self.principals();
+        access
+            .iter()
+            .filter(|entry| mine.contains(&entry.principal))
+            .map(|entry| entry.role)
+            .max()
+    }
+
+    /// プロジェクトに対する実効的な役割。
+    ///
+    /// プロジェクトへの直接の付与と、それが属するプロジェクトグループへの
+    /// 付与のうち、**強いほうを採る**。どちらにも無ければ `None`。
+    /// システム管理者は、共有されていなくても閲覧者として扱う
+    /// (実際の可否は [`Actor::may`] が別途通す)。
+    pub fn effective_role(
+        &self,
+        meta: &ProjectMeta,
+        project_group: Option<&ProjectGroup>,
+    ) -> Option<ProjectRole> {
+        let direct = self.strongest(&meta.access);
+        let inherited = project_group.and_then(|group| self.strongest(&group.access));
+        match direct.into_iter().chain(inherited).max() {
+            Some(role) => Some(role),
+            None if self.is_admin() => Some(ProjectRole::Viewer),
+            None => None,
         }
     }
 
@@ -73,6 +124,30 @@ mod tests {
 
     fn member() -> Actor {
         Actor::new(UserId::new("u1"), SystemRole::Member)
+    }
+
+    fn meta(access: Vec<AccessEntry>) -> ProjectMeta {
+        ProjectMeta {
+            id: crate::model::ProjectId::new("p"),
+            name: "p".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            group_id: None,
+            due_date: None,
+            access,
+            status: None,
+            task_count: 0,
+            member_count: 0,
+        }
+    }
+
+    fn folder(access: Vec<AccessEntry>) -> ProjectGroup {
+        ProjectGroup {
+            id: crate::model::ProjectGroupId::new("folder"),
+            name: "folder".into(),
+            access,
+            created_at: String::new(),
+        }
     }
 
     fn admin() -> Actor {
@@ -117,6 +192,77 @@ mod tests {
         ] {
             assert!(admin().may(permission, None), "{permission:?}");
         }
+    }
+
+    #[test]
+    fn a_grant_to_my_group_reaches_me() {
+        let actor = member().with_groups(vec![UserGroupId::new("team")]);
+        let project = meta(vec![AccessEntry::new(
+            Principal::group("team"),
+            ProjectRole::Editor,
+        )]);
+        assert_eq!(
+            actor.effective_role(&project, None),
+            Some(ProjectRole::Editor)
+        );
+
+        // 所属していなければ届かない。
+        assert_eq!(member().effective_role(&project, None), None);
+    }
+
+    #[test]
+    fn the_strongest_grant_wins() {
+        let actor = member().with_groups(vec![UserGroupId::new("team")]);
+        // 本人には閲覧、グループには編集。強いほうを採る。
+        let project = meta(vec![
+            AccessEntry::new(Principal::user("u1"), ProjectRole::Viewer),
+            AccessEntry::new(Principal::group("team"), ProjectRole::Editor),
+        ]);
+        assert_eq!(
+            actor.effective_role(&project, None),
+            Some(ProjectRole::Editor)
+        );
+    }
+
+    #[test]
+    fn a_grant_on_the_project_group_is_inherited() {
+        let actor = member().with_groups(vec![UserGroupId::new("team")]);
+        let project = meta(Vec::new());
+        let parent = folder(vec![AccessEntry::new(
+            Principal::group("team"),
+            ProjectRole::Owner,
+        )]);
+        assert_eq!(
+            actor.effective_role(&project, Some(&parent)),
+            Some(ProjectRole::Owner)
+        );
+        // 入れ物を外せば届かなくなる。
+        assert_eq!(actor.effective_role(&project, None), None);
+    }
+
+    #[test]
+    fn a_direct_grant_can_be_stronger_than_the_inherited_one() {
+        let actor = member();
+        let project = meta(vec![AccessEntry::new(
+            Principal::user("u1"),
+            ProjectRole::Owner,
+        )]);
+        let parent = folder(vec![AccessEntry::new(
+            Principal::user("u1"),
+            ProjectRole::Viewer,
+        )]);
+        assert_eq!(
+            actor.effective_role(&project, Some(&parent)),
+            Some(ProjectRole::Owner)
+        );
+    }
+
+    #[test]
+    fn an_admin_sees_projects_that_were_never_shared() {
+        assert_eq!(
+            admin().effective_role(&meta(Vec::new()), None),
+            Some(ProjectRole::Viewer)
+        );
     }
 
     #[test]

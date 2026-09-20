@@ -11,17 +11,23 @@
  */
 
 import { apiCall, exportState, importState } from "../wasm.ts";
-import type { ApiClient, NewUserInput, UserPatchInput } from "./client.ts";
+import type { ApiClient, NewUserInput, ProjectPatchInput, UserPatchInput } from "./client.ts";
 import {
   ApiError,
+  type AccessEntry,
   type ApiErrorCode,
+  type Principal,
   type Project,
-  type ProjectAccess,
   type ProjectDocument,
+  type ProjectGroup,
+  type ProjectGroupId,
   type ProjectId,
   type ProjectRole,
+  type ProjectStatus,
   type ProjectSummary,
   type User,
+  type UserGroup,
+  type UserGroupId,
   type UserId,
 } from "./types.ts";
 
@@ -130,6 +136,58 @@ export class LocalApiClient implements ApiClient {
     await this.write({ op: "deleteUser", id });
   }
 
+  listUserGroups(): Promise<UserGroup[]> {
+    return this.read({ op: "listUserGroups" });
+  }
+
+  createUserGroup(id: UserGroupId, name: string): Promise<UserGroup> {
+    return this.write({ op: "createUserGroup", id, name });
+  }
+
+  renameUserGroup(id: UserGroupId, name: string): Promise<UserGroup> {
+    return this.write({ op: "renameUserGroup", id, name });
+  }
+
+  async deleteUserGroup(id: UserGroupId): Promise<void> {
+    await this.write({ op: "deleteUserGroup", id });
+  }
+
+  addGroupMember(id: UserGroupId, userId: UserId): Promise<UserGroup> {
+    return this.write({ op: "addGroupMember", id, userId });
+  }
+
+  removeGroupMember(id: UserGroupId, userId: UserId): Promise<UserGroup> {
+    return this.write({ op: "removeGroupMember", id, userId });
+  }
+
+  listProjectGroups(): Promise<ProjectGroup[]> {
+    return this.read({ op: "listProjectGroups" });
+  }
+
+  createProjectGroup(id: ProjectGroupId, name: string): Promise<ProjectGroup> {
+    return this.write({ op: "createProjectGroup", id, name });
+  }
+
+  renameProjectGroup(id: ProjectGroupId, name: string): Promise<ProjectGroup> {
+    return this.write({ op: "renameProjectGroup", id, name });
+  }
+
+  async deleteProjectGroup(id: ProjectGroupId): Promise<void> {
+    await this.write({ op: "deleteProjectGroup", id });
+  }
+
+  setGroupAccess(
+    id: ProjectGroupId,
+    principal: Principal,
+    role: ProjectRole,
+  ): Promise<ProjectGroup> {
+    return this.write({ op: "setGroupAccess", id, principal, role });
+  }
+
+  removeGroupAccess(id: ProjectGroupId, principal: Principal): Promise<ProjectGroup> {
+    return this.write({ op: "removeGroupAccess", id, principal });
+  }
+
   listProjects(): Promise<ProjectSummary[]> {
     return this.read({ op: "listProjects" });
   }
@@ -142,12 +200,16 @@ export class LocalApiClient implements ApiClient {
     return this.read({ op: "getProject", id });
   }
 
-  saveDocument(id: ProjectId, document: ProjectDocument): Promise<ProjectSummary> {
-    return this.write({ op: "saveDocument", id, document });
+  saveDocument(
+    id: ProjectId,
+    document: ProjectDocument,
+    status?: ProjectStatus,
+  ): Promise<ProjectSummary> {
+    return this.write({ op: "saveDocument", id, document, ...(status ? { status } : {}) });
   }
 
-  renameProject(id: ProjectId, name: string): Promise<ProjectSummary> {
-    return this.write({ op: "renameProject", id, name });
+  updateProject(id: ProjectId, patch: ProjectPatchInput): Promise<ProjectSummary> {
+    return this.write({ op: "updateProject", id, ...patch });
   }
 
   async deleteProject(id: ProjectId): Promise<void> {
@@ -158,15 +220,15 @@ export class LocalApiClient implements ApiClient {
     return this.write({ op: "duplicateProject", id, newId, name });
   }
 
-  listAccess(id: ProjectId): Promise<ProjectAccess[]> {
+  listAccess(id: ProjectId): Promise<AccessEntry[]> {
     return this.read({ op: "listAccess", id });
   }
 
-  setAccess(id: ProjectId, userId: UserId, role: ProjectRole): Promise<ProjectAccess[]> {
-    return this.write({ op: "setAccess", id, userId, role });
+  setAccess(id: ProjectId, principal: Principal, role: ProjectRole): Promise<AccessEntry[]> {
+    return this.write({ op: "setAccess", id, principal, role });
   }
 
-  removeAccess(id: ProjectId, userId: UserId): Promise<ProjectAccess[]> {
-    return this.write({ op: "removeAccess", id, userId });
+  removeAccess(id: ProjectId, principal: Principal): Promise<AccessEntry[]> {
+    return this.write({ op: "removeAccess", id, principal });
   }
 }

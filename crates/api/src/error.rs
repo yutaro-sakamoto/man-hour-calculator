@@ -18,6 +18,8 @@ pub enum ErrorCode {
     Invalid,
     /// すでに存在する、または状態が合わない。
     Conflict,
+    /// 保存先の障害など、こちら側の問題。
+    Internal,
 }
 
 impl ErrorCode {
@@ -29,6 +31,7 @@ impl ErrorCode {
             Self::NotFound => 404,
             Self::Invalid => 422,
             Self::Conflict => 409,
+            Self::Internal => 500,
         }
     }
 }
@@ -63,6 +66,9 @@ impl ApiError {
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Conflict, message)
     }
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Internal, message)
+    }
 
     pub fn http_status(&self) -> u16 {
         self.code.http_status()
@@ -90,6 +96,7 @@ mod tests {
         assert_eq!(ErrorCode::NotFound.http_status(), 404);
         assert_eq!(ErrorCode::Invalid.http_status(), 422);
         assert_eq!(ErrorCode::Conflict.http_status(), 409);
+        assert_eq!(ErrorCode::Internal.http_status(), 500);
     }
 
     #[test]

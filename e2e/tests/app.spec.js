@@ -546,7 +546,7 @@ test("共有した相手は与えた権限の範囲でしか触れない", async
   const addRow = page.locator(".card", { hasText: "このプロジェクトの共有" }).locator(".inline-row");
   await addRow.locator("select").nth(1).selectOption("viewer");
   await addRow.locator('button:text("共有する")').click();
-  await expect(page.locator("tr[data-user]")).toHaveCount(2);
+  await expect(page.locator("tr[data-principal]")).toHaveCount(2);
 
   // その人として操作すると、読み取り専用になる。
   await actAs(page, "鈴木");
@@ -563,10 +563,10 @@ test("所有者がいなくなる操作は拒否される", async ({ page }) => 
   await open(page);
   await openTab(page, "projects");
   // 唯一の所有者である自分の共有を解除しようとする。
-  await page.locator('tr[data-user] button[title*="共有を解除"]').first().click();
+  await page.locator('tr[data-principal] button[title*="共有を解除"]').first().click();
   await expect(page.locator("#status")).toHaveAttribute("data-tone", "error");
   await expect(page.locator("#status")).toContainText("所有者");
-  await expect(page.locator("tr[data-user]")).toHaveCount(1);
+  await expect(page.locator("tr[data-principal]")).toHaveCount(1);
 });
 
 test("一般アカウントはアカウントを管理できない", async ({ page }) => {
