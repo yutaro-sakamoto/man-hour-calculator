@@ -6,7 +6,7 @@
  * 動的に増える行との扱いも二重になるため。
  */
 
-type Child = Node | string | number | null | false | undefined;
+export type Child = Node | string | number | null | false | undefined;
 
 interface Options {
   class?: string;
@@ -204,5 +204,44 @@ export function headerRow(cells: { label: string; class?: string }[]): HTMLTable
     "tr",
     {},
     cells.map((cell) => h("th", { text: cell.label, class: cell.class ?? "" })),
+  );
+}
+
+/**
+ * 畳めるカード。
+ *
+ * 開いているかどうかは**呼び出し側が覚える**。画面は変更のたびに作り直すので、
+ * `<details>` に任せると、中の入力を触った瞬間に畳まれてしまう。
+ */
+export function foldout(
+  options: {
+    id: string;
+    title: string;
+    open: boolean;
+    onToggle: (open: boolean) => void;
+    /** 見出しの右に置く小さな印 (接続先のチップなど)。 */
+    badge?: Child;
+  },
+  children: Child[],
+): HTMLElement {
+  return h(
+    "details",
+    {
+      class: "card foldout",
+      id: options.id,
+      attrs: { open: options.open },
+      on: {
+        toggle: (event) => {
+          options.onToggle((event.target as HTMLDetailsElement).open);
+        },
+      },
+    },
+    [
+      h("summary", {}, [
+        h("span", { class: "foldout-title", text: options.title }),
+        options.badge ?? null,
+      ]),
+      ...children,
+    ],
   );
 }

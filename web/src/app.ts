@@ -1,8 +1,18 @@
 /** 画面が共有する状態と、状態を変えるための入り口。 */
 
 import type { ApiClient } from "./api/client.ts";
-import type { Project, ProjectDocument, ProjectRole, ProjectSummary, User } from "./api/types.ts";
+import type {
+  Project,
+  ProjectDocument,
+  ProjectGroup,
+  ProjectHealth,
+  ProjectRole,
+  ProjectSummary,
+  User,
+  UserGroup,
+} from "./api/types.ts";
 import { roleAtLeast } from "./api/types.ts";
+import type { Connection } from "./model/connection.ts";
 import type { ResolvedMembers } from "./model/members.ts";
 import type { ScheduleModel } from "./model/schedule.ts";
 import type { TreeRow } from "./model/tree.ts";
@@ -37,8 +47,16 @@ export interface AppState {
   me: User;
   /** 共有先を選ぶためのアカウント一覧。 */
   users: User[];
+  /** 共有先に選べるグループ。 */
+  userGroups: UserGroup[];
+  /** プロジェクトの入れ物。 */
+  projectGroups: ProjectGroup[];
   /** 自分が見られるプロジェクトの一覧。 */
   projects: ProjectSummary[];
+  projectFilter: ProjectFilter;
+  projectSort: ProjectSort;
+  /** 畳めるカードのうち、開いているものの id。描き直しても畳まれないように持つ。 */
+  openPanels: Record<string, boolean>;
   /** いま開いているもの。1 件も無ければ null。 */
   open: OpenProject | null;
   /** 編集中の内容。 */
@@ -62,6 +80,22 @@ export interface AppState {
   /** スケジュールタブで確率を見る日。 */
   probeDate: string | null;
 }
+
+/** プロジェクト一覧の絞り込み。空文字は「すべて」。 */
+export interface ProjectFilter {
+  text: string;
+  group: string;
+  health: ProjectHealth | "" | "attention";
+  role: ProjectRole | "";
+}
+
+/**
+ * 並び順。既定は `attention` — **手当てが要るものから**。
+ * 遅れているプロジェクトが下のほうに埋もれないようにするため。
+ */
+export type ProjectSort = "attention" | "due" | "updated" | "name";
+
+export const PROJECT_SORTS: readonly ProjectSort[] = ["attention", "due", "updated", "name"];
 
 /** 書き換えてよいか。閲覧者には編集させない。 */
 export function canWrite(state: AppState): boolean {
@@ -88,5 +122,13 @@ export interface AppActions {
   run: (action: () => Promise<void>) => void;
   /** プロジェクトを開き直す。 */
   openProject: (id: string) => Promise<void>;
+  /**
+   * 控えが古いプロジェクトを計算し直して保存する。更新できた件数を返す。
+   *
+   * 中身を読み込んで手元の WASM で回すので、サーバは何も計算しない。
+   */
+  recomputeStatuses: (ids: readonly string[]) => Promise<number>;
+  /** サーバへの接続先を切り替える。`null` でローカルに戻る。 */
+  connect: (connection: Connection | null) => Promise<void>;
   render: () => void;
 }

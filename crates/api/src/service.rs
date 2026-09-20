@@ -503,9 +503,14 @@ impl<S: Store> Service<S> {
 
         project.document = document;
         project.meta.updated_at = now.to_string();
-        // 控えは、いま保存する内容に対応していなければ捨てる。
-        // 古い数字を新しい内容のものとして見せないため。
-        project.meta.status = status.filter(|snapshot| snapshot.based_on == now);
+        // 控えは、いま保存する内容から計算されたもの。だから「何に基づくか」は
+        // クライアントに書かせず、ここで保存時刻を刻む。
+        // (サーバ経由のときクライアントはサーバの時計を知らないので、
+        //  クライアントに書かせると必ず食い違う。)
+        project.meta.status = status.map(|mut snapshot| {
+            snapshot.based_on = now.to_string();
+            snapshot
+        });
         project.refresh_counts();
         self.store.put_project(project.clone())?;
         self.summarize(&project.meta, actor, now)
@@ -541,7 +546,8 @@ impl<S: Store> Service<S> {
             }
             project.meta.due_date = due_date;
         }
-        project.meta.updated_at = now.to_string();
+        // `updated_at` は**中身**が変わった時刻。見出しの付け替えでは動かさない。
+        // ここで動かすと、計算し直す必要が無いのに控えが「古い」ことになってしまう。
         self.store.put_project(project.clone())?;
         self.summarize(&project.meta, actor, now)
     }
@@ -581,7 +587,6 @@ impl<S: Store> Service<S> {
         &mut self,
         actor: &Actor,
         id: &ProjectId,
-        now: &str,
         principal: &Principal,
         role: Option<ProjectRole>,
     ) -> ApiResult<Vec<AccessEntry>> {
@@ -611,7 +616,6 @@ impl<S: Store> Service<S> {
             ));
         }
 
-        project.meta.updated_at = now.to_string();
         self.store.put_project(project.clone())?;
         Ok(project.meta.access)
     }
@@ -824,7 +828,7 @@ mod tests {
     ) {
         let who = actor(service, by);
         service
-            .set_access(&who, &ProjectId::new(id), LATER, &to, Some(role))
+            .set_access(&who, &ProjectId::new(id), &to, Some(role))
             .expect("配れるはず");
     }
 
@@ -975,7 +979,6 @@ mod tests {
                 .set_access(
                     &alice,
                     &ProjectId::new("p1"),
-                    LATER,
                     &principal,
                     Some(ProjectRole::Viewer),
                 )
@@ -1241,7 +1244,6 @@ mod tests {
                 .set_access(
                     &alice,
                     &ProjectId::new("p1"),
-                    LATER,
                     &Principal::user("alice"),
                     None,
                 )
@@ -1254,7 +1256,6 @@ mod tests {
                 .set_access(
                     &alice,
                     &ProjectId::new("p1"),
-                    LATER,
                     &Principal::user("alice"),
                     Some(ProjectRole::Viewer),
                 )
@@ -1290,7 +1291,6 @@ mod tests {
                 .set_access(
                     &alice,
                     &ProjectId::new("p1"),
-                    LATER,
                     &Principal::user("alice"),
                     None,
                 )
@@ -1309,7 +1309,6 @@ mod tests {
             .set_access(
                 &alice,
                 &ProjectId::new("p1"),
-                LATER,
                 &Principal::user("alice"),
                 None,
             )
@@ -1341,7 +1340,6 @@ mod tests {
             .set_access(
                 &alice,
                 &ProjectId::new("p1"),
-                LATER,
                 &Principal::user("alice"),
                 None,
             )
@@ -1574,13 +1572,17 @@ mod tests {
     /* ===== 一覧と状態 ===== */
 
     #[test]
-    fn a_stale_snapshot_is_dropped_on_save() {
+    fn a_snapshot_is_stamped_with_the_time_it_was_saved() {
+        // サーバ経由だとクライアントはサーバの時計を知らない。だから
+        // 「何に基づく控えか」はクライアントに書かせず、保存時に刻む。
         let mut service = setup();
         make_project(&mut service, "alice", "p1");
         let alice = actor(&service, "alice");
 
-        let stale = ProjectStatus {
-            based_on: "べつの時刻".into(),
+        let sent = ProjectStatus {
+            based_on: "クライアントが勝手に入れた値".into(),
+            computed_at: LATER.into(),
+            task_count: 1,
             ..ProjectStatus::default()
         };
         let summary = service
@@ -1588,28 +1590,76 @@ mod tests {
                 &alice,
                 &ProjectId::new("p1"),
                 LATER,
-                Document::default(),
-                Some(stale),
+                Document {
+                    tasks: vec![task("t1")],
+                    ..Document::default()
+                },
+                Some(sent),
             )
             .unwrap();
-        assert!(summary.status.is_none(), "内容と対応しない控えは残さない");
 
-        let fresh = ProjectStatus {
-            based_on: LATER.into(),
-            computed_at: LATER.into(),
-            ..ProjectStatus::default()
+        let status = summary.status.expect("控えが残る");
+        assert_eq!(status.based_on, LATER, "保存時刻が刻まれる");
+        assert_eq!(status.computed_at, LATER, "計算した時刻はそのまま");
+        assert_ne!(summary.health, ProjectHealth::Unknown);
+    }
+
+    #[test]
+    fn a_snapshot_goes_stale_only_when_the_content_changes() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let document = Document {
+            tasks: vec![task("t1")],
+            ..Document::default()
         };
+
+        let alice = actor(&service, "alice");
+        service
+            .save_document(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                document.clone(),
+                Some(ProjectStatus {
+                    task_count: 1,
+                    ..ProjectStatus::default()
+                }),
+            )
+            .unwrap();
+
+        // 改名や期限の付け替えでは、計算し直す必要は無い。
+        let alice = actor(&service, "alice");
+        let summary = service
+            .update_project(
+                &alice,
+                &ProjectId::new("p1"),
+                "2026-09-22T09:00:00Z",
+                ProjectPatch {
+                    name: Some("改名".into()),
+                    ..ProjectPatch::default()
+                },
+            )
+            .unwrap();
+        assert_ne!(
+            summary.health,
+            ProjectHealth::Unknown,
+            "見出しを変えただけで控えが古くなってはいけない"
+        );
+        assert_eq!(summary.updated_at, LATER, "中身は触っていない");
+
+        // 中身を控え無しで保存すると、そこで初めて古くなる。
         let alice = actor(&service, "alice");
         let summary = service
             .save_document(
                 &alice,
                 &ProjectId::new("p1"),
-                LATER,
-                Document::default(),
-                Some(fresh),
+                "2026-09-23T09:00:00Z",
+                document,
+                None,
             )
             .unwrap();
-        assert!(summary.status.is_some());
+        assert_eq!(summary.health, ProjectHealth::Unknown);
+        assert!(summary.status.is_none());
     }
 
     #[test]

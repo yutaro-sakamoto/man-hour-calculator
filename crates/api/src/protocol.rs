@@ -495,9 +495,9 @@ fn run<S: Store>(service: &mut Service<S>, envelope: Envelope) -> crate::error::
             id,
             principal,
             role,
-        } => Reply::Access(service.set_access(&actor, &id, now, &principal, Some(role))?),
+        } => Reply::Access(service.set_access(&actor, &id, &principal, Some(role))?),
         Request::RemoveAccess { id, principal } => {
-            Reply::Access(service.set_access(&actor, &id, now, &principal, None)?)
+            Reply::Access(service.set_access(&actor, &id, &principal, None)?)
         }
     })
 }
