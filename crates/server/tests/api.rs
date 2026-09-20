@@ -604,23 +604,29 @@ async fn postgres_behaves_the_same_as_sqlite() {
         return;
     };
 
-    // 前の走行の残りを消してから始める。
-    let mut clean = PostgresConn::connect(&url).expect("繋がる");
-    for table in [
-        "schema_version",
-        "api_tokens",
-        "project_access",
-        "projects",
-        "project_group_access",
-        "project_groups",
-        "user_group_members",
-        "user_groups",
-        "users",
-    ] {
-        let _ = clean.execute(&format!("DROP TABLE IF EXISTS {table}"), &[]);
-    }
-
-    let server = Harness::new(PostgresConn::connect(&url).expect("繋がる"), Auth::Token);
+    // `postgres` クレートは自前の実行器を持っていて、繋ぐときにそれを回す。
+    // 非同期の文脈から直に呼ぶと「実行器の中で実行器は起こせない」と落ちるので、
+    // ここも本番と同じく `spawn_blocking` の中で組み立てる。
+    let server = tokio::task::spawn_blocking(move || {
+        // 前の走行の残りを消してから始める。
+        let mut clean = PostgresConn::connect(&url).expect("繋がる");
+        for table in [
+            "schema_version",
+            "api_tokens",
+            "project_access",
+            "projects",
+            "project_group_access",
+            "project_groups",
+            "user_group_members",
+            "user_groups",
+            "users",
+        ] {
+            let _ = clean.execute(&format!("DROP TABLE IF EXISTS {table}"), &[]);
+        }
+        Harness::new(PostgresConn::connect(&url).expect("繋がる"), Auth::Token)
+    })
+    .await
+    .expect("組み立てられる");
 
     server
         .ok(

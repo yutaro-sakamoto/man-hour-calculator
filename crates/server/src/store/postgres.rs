@@ -16,6 +16,12 @@ pub struct PostgresConn {
 }
 
 impl PostgresConn {
+    /// 繋ぐ。
+    ///
+    /// `postgres` クレートは自前の実行器を持っていて、繋ぐときも文を流すときも
+    /// それを回す。**非同期の文脈から直に呼んではいけない** (「実行器の中で
+    /// 実行器は起こせない」と落ちる)。サーバは繋ぐのを実行器を起こす前に、
+    /// 文を流すのを `spawn_blocking` の中で行うので、どちらにも当たらない。
     pub fn connect(url: &str) -> ApiResult<Self> {
         let client = Client::connect(url, NoTls)
             .map_err(|e| ApiError::internal(format!("PostgreSQL に繋げません: {e}")))?;
