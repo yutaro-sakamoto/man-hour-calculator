@@ -1,0 +1,591 @@
+openapi: 3.1.0
+info:
+  title: 工数見積もり API
+  version: "1"
+  description: |
+    クライアントとサーバが共有する API。
+
+    実装は `crates/api` にあり、**ローカルでもサーバでも同じコードが動く**。
+    ローカルでは WASM の `api_call` から、サーバでは HTTP のハンドラから
+    同じ `Service` を呼ぶため、権限の判定や不変条件が食い違うことがない。
+
+    - 操作とルートの対応は `mhc_api::protocol::Request::route` が持っている。
+      この文書はそれを人間向けに書き下したもので、両者が一致することは
+      テストで確かめている。
+    - 見積もりの計算 (`compute`) はこの API には含まれない。計算コアは
+      クライアントに同梱された WASM がその場で回すので、サーバはデータの
+      置き場所と権限だけを見る。
+  license:
+    name: MIT
+
+servers:
+  - url: /
+    description: 同一オリジン
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: me
+    description: 自分の情報
+  - name: users
+    description: アカウントの管理
+  - name: projects
+    description: プロジェクト
+  - name: access
+    description: プロジェクトごとの権限
+
+paths:
+  /v1/me:
+    get:
+      tags: [me]
+      summary: 自分の情報
+      operationId: me
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/users:
+    get:
+      tags: [users]
+      summary: アカウント一覧
+      description: 共有先を選ぶために、管理者でなくても名前は見える。
+      operationId: listUsers
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [users]
+      summary: アカウントを作る
+      description: システム管理者のみ。
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, name, systemRole]
+              properties:
+                id: { type: string }
+                name: { type: string, minLength: 1 }
+                email: { type: [string, "null"], format: email }
+                systemRole: { $ref: "#/components/schemas/SystemRole" }
+      responses:
+        "201":
+          description: 作成した
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /v1/users/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/userId"
+    patch:
+      tags: [users]
+      summary: アカウントを更新する
+      description: |
+        システム管理者、または本人。本人は自分の役割を変えられない。
+        `clearEmail` を `true` にするとメールアドレスを空にする。
+      operationId: updateUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1 }
+                email: { type: string, format: email }
+                clearEmail: { type: boolean, default: false }
+                systemRole: { $ref: "#/components/schemas/SystemRole" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422": { $ref: "#/components/responses/Invalid" }
+    delete:
+      tags: [users]
+      summary: アカウントを削除する
+      description: |
+        システム管理者のみ。最後の管理者は消せない。
+        どこかのプロジェクトの唯一の所有者である場合も、
+        先に所有者を移すまで消せない (所有者のいないプロジェクトを作らないため)。
+      operationId: deleteUser
+      responses:
+        "204": { description: 削除した }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/projects:
+    get:
+      tags: [projects]
+      summary: 自分が見られるプロジェクトの一覧
+      description: 更新が新しい順。`role` は呼び出した本人の役割。
+      operationId: listProjects
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProjectSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [projects]
+      summary: プロジェクトを作る
+      description: 作った人が所有者になる。
+      operationId: createProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, name]
+              properties:
+                id: { type: string }
+                name: { type: string, minLength: 1 }
+                document: { $ref: "#/components/schemas/Document" }
+      responses:
+        "201":
+          description: 作成した
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Invalid" }
+
+  /v1/projects/{projectId}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      tags: [projects]
+      summary: プロジェクトを取得する
+      description: 閲覧以上の権限が要る。
+      operationId: getProject
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [projects]
+      summary: プロジェクトを改名する
+      description: 所有者のみ。
+      operationId: renameProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Invalid" }
+    delete:
+      tags: [projects]
+      summary: プロジェクトを削除する
+      description: 所有者のみ。
+      operationId: deleteProject
+      responses:
+        "204": { description: 削除した }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/projects/{projectId}/document:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    put:
+      tags: [projects]
+      summary: 内容を保存する
+      description: 編集以上の権限が要る。全体を置き換える。
+      operationId: saveDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Document" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/projects/{projectId}/duplicate:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    post:
+      tags: [projects]
+      summary: プロジェクトを複製する
+      description: |
+        閲覧できれば複製できる。複製した本人が新しい所有者になり、
+        元の共有設定は引き継がない。
+      operationId: duplicateProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newId, name]
+              properties:
+                newId: { type: string }
+                name: { type: string, minLength: 1 }
+      responses:
+        "201":
+          description: 複製した
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/projects/{projectId}/access:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      tags: [access]
+      summary: 権限の一覧
+      operationId: listAccess
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProjectAccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/projects/{projectId}/access/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/userId"
+    put:
+      tags: [access]
+      summary: 権限を与える・変更する
+      description: |
+        所有者のみ。所有者が 1 人もいなくなる変更は 409 で拒否する。
+      operationId: setAccess
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { $ref: "#/components/schemas/ProjectRole" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProjectAccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      tags: [access]
+      summary: 権限を取り消す
+      description: 所有者のみ。最後の所有者は取り消せない。
+      operationId: removeAccess
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProjectAccess" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        サーバ運用時のみ。ローカル (単一 HTML) では呼び出し元が常に
+        そのブラウザの持ち主なので、認証は行われない。
+
+  parameters:
+    userId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string }
+    projectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: 呼び出し元が特定できない
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Forbidden:
+      description: 権限が足りない
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    NotFound:
+      description: 対象が無い
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Conflict:
+      description: 状態が合わない (最後の所有者を外そうとした、など)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+    Invalid:
+      description: 入力が不正
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiError" }
+
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [unauthorized, forbidden, notFound, invalid, conflict]
+        message: { type: string }
+
+    SystemRole:
+      type: string
+      enum: [admin, member]
+      description: |
+        `admin` は全プロジェクトとアカウントを管理できる。
+        `member` は自分に共有されたプロジェクトだけを扱える。
+
+    ProjectRole:
+      type: string
+      enum: [viewer, editor, owner]
+      description: |
+        強い順に owner > editor > viewer。
+        viewer は読み取り、editor は内容の書き換え、
+        owner は改名・削除・権限の付け替えまでできる。
+
+    User:
+      type: object
+      required: [id, name, systemRole, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        email: { type: string, format: email }
+        systemRole: { $ref: "#/components/schemas/SystemRole" }
+        createdAt: { type: string, format: date-time }
+
+    ProjectAccess:
+      type: object
+      required: [userId, role]
+      properties:
+        userId: { type: string }
+        role: { $ref: "#/components/schemas/ProjectRole" }
+
+    ProjectSummary:
+      type: object
+      required:
+        [id, name, createdAt, updatedAt, role, ownerName, taskCount, memberCount]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        role:
+          allOf: [{ $ref: "#/components/schemas/ProjectRole" }]
+          description: 一覧を求めた本人の役割
+        ownerName: { type: string }
+        taskCount: { type: integer, minimum: 0 }
+        memberCount:
+          type: integer
+          minimum: 0
+          description: 人員 (稼働資源) の数。アカウント数ではない
+
+    Project:
+      type: object
+      required: [id, name, createdAt, updatedAt, access, document]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        access:
+          type: array
+          items: { $ref: "#/components/schemas/ProjectAccess" }
+        document: { $ref: "#/components/schemas/Document" }
+
+    Document:
+      type: object
+      description: 画面が編集する内容そのもの。
+      required: [tasks, calendar, settings]
+      properties:
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+        calendar: { $ref: "#/components/schemas/CalendarSettings" }
+        settings: { $ref: "#/components/schemas/ComputeSettings" }
+
+    Task:
+      type: object
+      required:
+        [id, name, parentId, group, priority, enabled, min, likely, max, progress]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        parentId:
+          type: [string, "null"]
+          description: 親タスクの id。深さ優先の並びを保つこと
+        group: { type: string }
+        priority: { type: string, enum: [high, normal, low] }
+        enabled: { type: boolean, description: 計算に含めるか }
+        min: { type: string, description: 3 点見積もりの最小 (数値の文字列) }
+        likely: { type: string }
+        max: { type: string }
+        startDate: { type: [string, "null"], format: date }
+        progress: { type: number, minimum: 0, maximum: 100 }
+        endDate: { type: [string, "null"], format: date }
+        assigneeId:
+          type: [string, "null"]
+          description: 担当する人員の id。null なら未割当
+
+    Member:
+      type: object
+      description: 人員 (稼働資源)。アカウントとは別物。
+      required: [id, name, workdays, breakMinutes]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        workdays:
+          type: array
+          minItems: 7
+          maxItems: 7
+          description: 日曜から土曜まで。start と end が同じ曜日は休み
+          items: { $ref: "#/components/schemas/WorkWindow" }
+        breakMinutes: { type: number, minimum: 0 }
+        userId:
+          type: [string, "null"]
+          description: 対応するアカウント。紐づいていなければ null
+
+    WorkWindow:
+      type: object
+      required: [start, end]
+      properties:
+        start: { type: string, pattern: "^\\d{2}:\\d{2}$" }
+        end: { type: string, pattern: "^\\d{2}:\\d{2}$" }
+
+    CalendarEvent:
+      type: object
+      required: [id, name, startDate, endDate, repeatWeeks, memberIds]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        startTime:
+          type: [string, "null"]
+          description: null なら終日。5 分単位で指定できる
+        endTime: { type: [string, "null"] }
+        repeatWeeks:
+          type: integer
+          minimum: 0
+          description: 0 = 繰り返さない、1 = 毎週、2 = 隔週
+        until: { type: [string, "null"], format: date }
+        memberIds:
+          type: array
+          items: { type: string }
+          description: 参加する人員。空なら全員
+
+    CalendarSettings:
+      type: object
+      required:
+        [startDate, hoursPerPersonDay, useJapaneseHolidays, horizonDays, members, events, forcedWorkdays, today]
+      properties:
+        startDate: { type: string, format: date }
+        hoursPerPersonDay: { type: number, exclusiveMinimum: 0 }
+        useJapaneseHolidays: { type: boolean }
+        horizonDays: { type: integer, minimum: 1, maximum: 1830 }
+        members:
+          type: array
+          items: { $ref: "#/components/schemas/Member" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/CalendarEvent" }
+        forcedWorkdays:
+          type: array
+          items: { type: string, format: date }
+        today: { type: string, format: date }
+
+    ComputeSettings:
+      type: object
+      required: [engine, dist, lambda, iterations, seed, bins, gridPoints]
+      properties:
+        engine: { type: integer, enum: [0, 1], description: 0 = モンテカルロ、1 = 畳み込み }
+        dist: { type: integer, enum: [0, 1], description: 0 = PERT、1 = 三角分布 }
+        lambda: { type: number, minimum: 0, maximum: 100 }
+        iterations: { type: integer, minimum: 1, maximum: 2000000 }
+        seed: { type: integer, minimum: 0 }
+        bins: { type: integer, minimum: 4, maximum: 512 }
+        gridPoints: { type: integer, minimum: 16, maximum: 16384 }

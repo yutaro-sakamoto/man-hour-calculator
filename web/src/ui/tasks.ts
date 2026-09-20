@@ -96,7 +96,7 @@ function columnsFor(mode: ColumnMode): { estimate: boolean; actual: boolean } {
 }
 
 function renderFilterBar(state: AppState, actions: AppActions, shown: number): HTMLElement {
-  const groups = collectGroups(state.project.tasks);
+  const groups = collectGroups(state.document.tasks);
   const clear = (): void => {
     actions.patch((s) => {
       s.filter = { text: "", group: "", priority: "", state: "", assignee: "" };
@@ -163,7 +163,7 @@ function renderFilterBar(state: AppState, actions: AppActions, shown: number): H
       state.filter.assignee,
       [
         { value: "", label: `${t("filter.assignee")}: ${t("filter.all")}` },
-        ...state.project.calendar.members.map((member, index) => ({
+        ...state.document.calendar.members.map((member, index) => ({
           value: member.id,
           label: memberLabel(member, index),
         })),
@@ -208,8 +208,8 @@ function renderRow(
   const label = task.name.trim() === "" ? t("tasks.untitled") : task.name;
   const index = row.index;
   const setTask = (change: Partial<Task>): void => {
-    actions.mutate((project) => {
-      const target = project.tasks[index];
+    actions.mutate((document) => {
+      const target = document.tasks[index];
       if (target) Object.assign(target, change);
     });
   };
@@ -381,7 +381,7 @@ function renderRow(
             task.assigneeId ?? "",
             [
               { value: "", label: t("members.unassigned") },
-              ...state.project.calendar.members.map((member, memberIndex) => ({
+              ...state.document.calendar.members.map((member, memberIndex) => ({
                 value: member.id,
                 label: memberLabel(member, memberIndex),
               })),
@@ -421,8 +421,8 @@ function renderRow(
         "↑",
         t("tasks.up"),
         () => {
-          actions.mutate((project) => {
-            project.tasks = moveSubtree(project.tasks, index, -1);
+          actions.mutate((document) => {
+            document.tasks = moveSubtree(document.tasks, index, -1);
           });
         },
         position.first,
@@ -431,39 +431,39 @@ function renderRow(
         "↓",
         t("tasks.down"),
         () => {
-          actions.mutate((project) => {
-            project.tasks = moveSubtree(project.tasks, index, 1);
+          actions.mutate((document) => {
+            document.tasks = moveSubtree(document.tasks, index, 1);
           });
         },
         position.last,
       ),
       iconButton("→", t("tasks.indent"), () => {
-        actions.mutate((project) => {
-          project.tasks = indentTask(project.tasks, index);
+        actions.mutate((document) => {
+          document.tasks = indentTask(document.tasks, index);
         });
       }),
       iconButton(
         "←",
         t("tasks.outdent"),
         () => {
-          actions.mutate((project) => {
-            project.tasks = outdentTask(project.tasks, index);
+          actions.mutate((document) => {
+            document.tasks = outdentTask(document.tasks, index);
           });
         },
         task.parentId === null,
       ),
       iconButton("+", t("tasks.addChild"), () => {
-        actions.mutate((project) => {
-          project.tasks = insertAfterSubtree(
-            project.tasks,
+        actions.mutate((document) => {
+          document.tasks = insertAfterSubtree(
+            document.tasks,
             index,
             createTask({ parentId: task.id, group: task.group }),
           );
         });
       }),
       iconButton("×", t("tasks.removeRow", { name: label }), () => {
-        actions.mutate((project) => {
-          project.tasks = removeSubtree(project.tasks, index);
+        actions.mutate((document) => {
+          document.tasks = removeSubtree(document.tasks, index);
         });
       }),
     ]),
@@ -485,7 +485,7 @@ function renderRow(
 export function renderTasksTab(state: AppState, actions: AppActions): HTMLElement {
   const shown = visibleRows(state);
   const columns = columnsFor(state.columnMode);
-  const groups = collectGroups(state.project.tasks);
+  const groups = collectGroups(state.document.tasks);
 
   const header: { label: string; class?: string }[] = [
     { label: t("col.use") },
@@ -548,22 +548,22 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
       button(
         t("tasks.add"),
         () => {
-          actions.mutate((project) => {
-            project.tasks.push(createTask());
+          actions.mutate((document) => {
+            document.tasks.push(createTask());
           });
         },
-        { class: "primary" },
+        { id: "add-row", class: "primary" },
       ),
       button(t("tasks.enableShown"), () => {
         const ids = new Set(shown.map((row) => row.task.id));
-        actions.mutate((project) => {
-          for (const task of project.tasks) if (ids.has(task.id)) task.enabled = true;
+        actions.mutate((document) => {
+          for (const task of document.tasks) if (ids.has(task.id)) task.enabled = true;
         });
       }),
       button(t("tasks.disableShown"), () => {
         const ids = new Set(shown.map((row) => row.task.id));
-        actions.mutate((project) => {
-          for (const task of project.tasks) if (ids.has(task.id)) task.enabled = false;
+        actions.mutate((document) => {
+          for (const task of document.tasks) if (ids.has(task.id)) task.enabled = false;
         });
       }),
     ]),

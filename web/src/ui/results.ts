@@ -209,13 +209,13 @@ function renderSensitivity(state: AppState, result: ComputeResult): HTMLElement 
 }
 
 function renderSettings(state: AppState, actions: AppActions): HTMLElement {
-  const settings = state.project.settings;
+  const settings = state.document.settings;
   const isMonteCarlo = settings.engine === 0;
   const setNumber =
     (key: "lambda" | "iterations" | "seed" | "bins" | "gridPoints") => (value: string) => {
-      actions.mutate((project) => {
+      actions.mutate((document) => {
         const parsed = Number(value);
-        if (Number.isFinite(parsed)) project.settings[key] = parsed;
+        if (Number.isFinite(parsed)) document.settings[key] = parsed;
       });
     };
 
@@ -230,8 +230,8 @@ function renderSettings(state: AppState, actions: AppActions): HTMLElement {
             { value: "1", label: t("settings.dist.tri") },
           ],
           (value) => {
-            actions.mutate((project) => {
-              project.settings.dist = value === "1" ? 1 : 0;
+            actions.mutate((document) => {
+              document.settings.dist = value === "1" ? 1 : 0;
             });
           },
           { id: "dist" },
@@ -253,8 +253,8 @@ function renderSettings(state: AppState, actions: AppActions): HTMLElement {
             { value: "1", label: t("settings.engine.conv") },
           ],
           (value) => {
-            actions.mutate((project) => {
-              project.settings.engine = value === "1" ? 1 : 0;
+            actions.mutate((document) => {
+              document.settings.engine = value === "1" ? 1 : 0;
             });
           },
           { id: "engine" },

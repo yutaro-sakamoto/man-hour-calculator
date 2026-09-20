@@ -1,8 +1,16 @@
-//! `mhc-core` を WebAssembly から呼び出すための薄い FFI 層。
+//! Rust のロジックを WebAssembly から呼び出すための薄い FFI 層。
 //!
-//! このクレートだけが `unsafe` を使う。中身の計算ロジックは
-//! `#![forbid(unsafe_code)]` な [`mhc_core`] にあり、ここは
-//! 「線形メモリ上のバッファを Rust のスライスに読み替える」だけを担当する。
+//! このクレートだけが `unsafe` を使う。中身のロジックは
+//! `#![forbid(unsafe_code)]` な [`mhc_core`] と [`mhc_api`] にあり、
+//! ここは「線形メモリ上のバッファを Rust のスライスに読み替える」だけを担当する。
+//!
+//! 入口は 2 系統ある。
+//!
+//! - **計算** … `compute` / `last_response_len`。`f64` の平坦なバッファで
+//!   やり取りする速い経路。1 打鍵ごとに走るのでここは JSON を通さない。
+//! - **API** … `api_call` / `import_state` / `export_state`。JSON でやり取りし、
+//!   プロジェクト・アカウント・権限を扱う。サーバを建てたときに HTTP へ
+//!   差し替わるのはこちらで、[`mhc_api`] の同じコードが動く。
 //!
 //! # JavaScript から見た使い方
 //!
@@ -21,6 +29,9 @@
 use std::alloc::Layout;
 use std::cell::RefCell;
 
+use mhc_api::protocol::{dispatch, Envelope, Outcome};
+use mhc_api::{ApiError, MemoryStore, Service};
+
 /// `f64` バッファのアラインメント。
 const ALIGN: usize = 8;
 
@@ -29,9 +40,18 @@ const ALIGN: usize = 8;
 const MAX_ALLOC: usize = 64 * 1024 * 1024;
 
 thread_local! {
-    /// 直近のレスポンス。JS がコピーし終えるまで生かしておく必要があるので、
+    /// 直近の計算結果。JS がコピーし終えるまで生かしておく必要があるので、
     /// ここで所有を保持する。次の `compute` で置き換わる。
     static RESPONSE: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+
+    /// 直近の API 応答 (UTF-8 の JSON)。同じく次の呼び出しまで有効。
+    static TEXT: RefCell<String> = const { RefCell::new(String::new()) };
+
+    /// ワークスペース。サーバで言えばデータベースにあたるものを、
+    /// ローカルではここに丸ごと持つ。JS が `export_state` で取り出して保存し、
+    /// 起動時に `import_state` で戻す。
+    static WORKSPACE: RefCell<Service<MemoryStore>> =
+        RefCell::new(Service::new(MemoryStore::new()));
 }
 
 /// JS が書き込むための領域を確保する。失敗したら null を返す。
@@ -103,6 +123,115 @@ pub extern "C" fn last_response_len() -> usize {
 #[no_mangle]
 pub extern "C" fn abi_version() -> u32 {
     mhc_core::abi::VERSION as u32
+}
+
+/// API のバージョン。HTTP では `/v1` として現れるものと同じ。
+#[no_mangle]
+pub extern "C" fn api_version() -> u32 {
+    mhc_api::API_VERSION.parse().unwrap_or(0)
+}
+
+/* ===== API 層 ===============================================
+文字列は UTF-8 のバイト列としてやり取りする。JS 側は
+TextEncoder / TextDecoder で変換する。                      */
+
+/// 直近の文字列応答の長さ (バイト数)。
+#[no_mangle]
+pub extern "C" fn last_text_len() -> usize {
+    TEXT.with(|cell| cell.borrow().len())
+}
+
+/// 応答を保持して、その先頭を返す。
+fn emit(text: String) -> *const u8 {
+    TEXT.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        *slot = text;
+        slot.as_ptr()
+    })
+}
+
+/// 渡されたバイト列を UTF-8 として読む。
+///
+/// # Safety
+///
+/// `ptr` は `len` バイトが読み出せる領域を指していなければならない。
+unsafe fn read_utf8<'a>(ptr: *const u8, len: usize) -> Result<&'a str, ApiError> {
+    if ptr.is_null() || len == 0 {
+        return Ok("");
+    }
+    // SAFETY: 呼び出し側の契約により、ptr..ptr+len は有効。
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    std::str::from_utf8(bytes).map_err(|e| ApiError::invalid(format!("UTF-8 ではありません: {e}")))
+}
+
+/// 失敗を、成功時と同じ形の JSON に包む。
+fn failure(error: ApiError) -> String {
+    let status = error.http_status();
+    serde_json::to_string(&Outcome::Err { error, status })
+        .unwrap_or_else(|_| r#"{"ok":"false","status":500}"#.to_string())
+}
+
+/// API を 1 回呼ぶ。入力も出力も JSON。
+///
+/// 長さは [`last_text_len`] で取得する。
+///
+/// # Safety
+///
+/// `ptr` は `len` バイトの UTF-8 を指していなければならない。
+#[no_mangle]
+pub unsafe extern "C" fn api_call(ptr: *const u8, len: usize) -> *const u8 {
+    // SAFETY: 呼び出し側の契約をそのまま引き継ぐ。
+    let text = match unsafe { read_utf8(ptr, len) } {
+        Ok(text) => text,
+        Err(error) => return emit(failure(error)),
+    };
+    let envelope: Envelope = match serde_json::from_str(text) {
+        Ok(envelope) => envelope,
+        Err(e) => {
+            return emit(failure(ApiError::invalid(format!(
+                "リクエストを読めません: {e}"
+            ))))
+        }
+    };
+
+    let outcome = WORKSPACE.with(|cell| dispatch(&mut cell.borrow_mut(), envelope));
+    emit(
+        serde_json::to_string(&outcome)
+            .unwrap_or_else(|_| failure(ApiError::invalid("応答を作れません"))),
+    )
+}
+
+/// 保存しておいたワークスペースを読み込む。
+///
+/// # Safety
+///
+/// `ptr` は `len` バイトの UTF-8 を指していなければならない。
+#[no_mangle]
+pub unsafe extern "C" fn import_state(ptr: *const u8, len: usize) -> *const u8 {
+    // SAFETY: 呼び出し側の契約をそのまま引き継ぐ。
+    let text = match unsafe { read_utf8(ptr, len) } {
+        Ok(text) => text,
+        Err(error) => return emit(failure(error)),
+    };
+    match MemoryStore::from_json(text) {
+        Ok(store) => {
+            WORKSPACE.with(|cell| *cell.borrow_mut() = Service::new(store));
+            emit(
+                serde_json::to_string(&Outcome::Ok {
+                    reply: mhc_api::protocol::Reply::Empty,
+                })
+                .unwrap_or_else(|_| r#"{"ok":"true","reply":{"kind":"empty"}}"#.to_string()),
+            )
+        }
+        Err(error) => emit(failure(error)),
+    }
+}
+
+/// いまのワークスペースを JSON で取り出す。JS 側はこれを保存する。
+#[no_mangle]
+pub extern "C" fn export_state() -> *const u8 {
+    let text = WORKSPACE.with(|cell| cell.borrow().store().to_json());
+    emit(text)
 }
 
 #[cfg(test)]
@@ -197,5 +326,123 @@ mod tests {
     #[test]
     fn the_abi_version_matches_the_core() {
         assert_eq!(abi_version(), mhc_core::abi::VERSION as u32);
+        assert_eq!(api_version(), 1);
+    }
+
+    /* ===== API 層 ===== */
+
+    /// JS 側がやる手順をそのままネイティブで再現する。
+    fn call_api(json: &str) -> String {
+        // SAFETY: 渡すのは有効な UTF-8 のスライス。
+        unsafe {
+            let ptr = api_call(json.as_ptr(), json.len());
+            let bytes = std::slice::from_raw_parts(ptr, last_text_len());
+            String::from_utf8(bytes.to_vec()).expect("UTF-8 のはず")
+        }
+    }
+
+    fn load_state(json: &str) -> String {
+        // SAFETY: 渡すのは有効な UTF-8 のスライス。
+        unsafe {
+            let ptr = import_state(json.as_ptr(), json.len());
+            let bytes = std::slice::from_raw_parts(ptr, last_text_len());
+            String::from_utf8(bytes.to_vec()).expect("UTF-8 のはず")
+        }
+    }
+
+    fn dump_state() -> String {
+        // SAFETY: export_state は保持した文字列の先頭を返す。
+        unsafe {
+            let ptr = export_state();
+            let bytes = std::slice::from_raw_parts(ptr, last_text_len());
+            String::from_utf8(bytes.to_vec()).expect("UTF-8 のはず")
+        }
+    }
+
+    const SEED_STATE: &str = r#"{
+        "version": 1,
+        "users": [
+            {"id":"me","name":"わたし","systemRole":"admin","createdAt":"2026-09-20T00:00:00Z"}
+        ],
+        "projects": []
+    }"#;
+
+    /// 成功の応答は `{"ok":"true","reply":{"kind":...,"value":...}}` の形。
+    /// JS 側はこの形に合わせて読むので、ずれたら気づけるようにしておく。
+    #[test]
+    fn a_successful_reply_has_the_shape_the_client_expects() {
+        load_state(SEED_STATE);
+        let listed = call_api(
+            r#"{"actor":"me","now":"2026-09-20T10:00:00Z","request":{"op":"listProjects"}}"#,
+        );
+        assert!(listed.contains(r#""ok":"true""#), "{listed}");
+        assert!(
+            listed.contains(r#""reply":{"kind":"projects","value":[]}"#),
+            "{listed}"
+        );
+
+        // 状態の読み込みも同じ形で返る。
+        assert!(load_state(SEED_STATE).contains(r#""reply":{"kind":"empty"}"#));
+    }
+
+    #[test]
+    fn the_api_works_end_to_end_through_the_bridge() {
+        assert!(load_state(SEED_STATE).contains(r#""ok":"true""#));
+
+        let created = call_api(
+            r#"{"actor":"me","now":"2026-09-20T10:00:00Z","request":{"op":"createProject","id":"p1","name":"新規案件"}}"#,
+        );
+        assert!(created.contains(r#""ok":"true""#), "{created}");
+        assert!(created.contains("新規案件"), "{created}");
+
+        let listed = call_api(
+            r#"{"actor":"me","now":"2026-09-20T10:00:00Z","request":{"op":"listProjects"}}"#,
+        );
+        assert!(listed.contains("新規案件"), "{listed}");
+
+        // 取り出した状態を読み直しても同じものが残る。
+        let saved = dump_state();
+        assert!(load_state(&saved).contains(r#""ok":"true""#));
+        assert!(call_api(
+            r#"{"actor":"me","now":"2026-09-20T10:00:00Z","request":{"op":"listProjects"}}"#
+        )
+        .contains("新規案件"));
+    }
+
+    #[test]
+    fn an_unknown_caller_is_refused_with_401() {
+        load_state(SEED_STATE);
+        let outcome = call_api(
+            r#"{"actor":"侵入者","now":"2026-09-20T10:00:00Z","request":{"op":"listProjects"}}"#,
+        );
+        assert!(outcome.contains(r#""ok":"false""#), "{outcome}");
+        assert!(outcome.contains(r#""status":401"#), "{outcome}");
+    }
+
+    #[test]
+    fn malformed_json_comes_back_as_an_error_not_a_crash() {
+        for bad in ["", "{", "これは JSON ではない", r#"{"actor":"me"}"#] {
+            let outcome = call_api(bad);
+            assert!(outcome.contains(r#""ok":"false""#), "{bad} → {outcome}");
+        }
+    }
+
+    #[test]
+    fn a_broken_saved_state_is_refused_without_wiping_what_is_loaded() {
+        load_state(SEED_STATE);
+        call_api(
+            r#"{"actor":"me","now":"2026-09-20T10:00:00Z","request":{"op":"createProject","id":"p1","name":"残るはず"}}"#,
+        );
+
+        let outcome = load_state("壊れたデータ");
+        assert!(outcome.contains(r#""ok":"false""#), "{outcome}");
+        // 読み込みに失敗しても、いま持っているものは消さない。
+        assert!(dump_state().contains("残るはず"));
+    }
+
+    #[test]
+    fn a_state_from_a_newer_version_is_refused() {
+        let outcome = load_state(r#"{"version":999,"users":[],"projects":[]}"#);
+        assert!(outcome.contains(r#""ok":"false""#), "{outcome}");
     }
 }

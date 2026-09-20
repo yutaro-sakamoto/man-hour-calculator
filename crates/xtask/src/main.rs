@@ -17,8 +17,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// 生成する HTML の上限サイズ。オフライン配布物として現実的な大きさに保つための歯止め。
-const SIZE_BUDGET_BYTES: usize = 400 * 1024;
+/// 生成する HTML の上限サイズ。青天井に膨らんでいないかを見る歯止め。
+///
+/// API 層 (プロジェクト・アカウント・権限) を Rust に置き、JSON でやり取りする
+/// ようにした時点で、serde_json のぶんだけ WASM が 75 KiB から 330 KiB に増えた。
+/// 権限の判定と不変条件をローカルとサーバで 1 つの実装に保つための代償で、
+/// 二重実装にして食い違わせるよりは良いと判断している。
+/// HTTP 配信では gzip で 1/4 ほどに縮み、`file://` では単なる 1 ファイル。
+const SIZE_BUDGET_BYTES: usize = 768 * 1024;
 
 /// テンプレート中の差し込み位置と、対応する `web/` 配下のビルド成果物。
 const PARTS: [(&str, &str); 2] = [

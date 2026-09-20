@@ -25,8 +25,8 @@ function weekdayCell(
 ): HTMLElement {
   const window = member.workdays[weekday] ?? OFF;
   const patch = (next: WorkWindow): void => {
-    actions.mutate((project) => {
-      const target = project.calendar.members[index];
+    actions.mutate((document) => {
+      const target = document.calendar.members[index];
       if (target) target.workdays[weekday] = next;
     });
   };
@@ -87,7 +87,7 @@ function renderMember(
 ): HTMLElement {
   const labels = weekdayLabels(lang());
   const name = memberLabel(member, index);
-  const assigned = state.project.tasks.filter((task) => task.assigneeId === member.id).length;
+  const assigned = state.document.tasks.filter((task) => task.assigneeId === member.id).length;
   const weekly = weeklyMinutes(member);
 
   return h("div", { class: "member-card", dataset: { member: member.id } }, [
@@ -95,8 +95,8 @@ function renderMember(
       textInput(
         member.name,
         (value) => {
-          actions.mutate((project) => {
-            const target = project.calendar.members[index];
+          actions.mutate((document) => {
+            const target = document.calendar.members[index];
             if (target) target.name = value;
           });
         },
@@ -111,8 +111,8 @@ function renderMember(
         numberInput(
           member.breakMinutes,
           (value) => {
-            actions.mutate((project) => {
-              const target = project.calendar.members[index];
+            actions.mutate((document) => {
+              const target = document.calendar.members[index];
               if (target) target.breakMinutes = Math.max(0, Number(value) || 0);
             });
           },
@@ -128,13 +128,13 @@ function renderMember(
       }),
       h("span", { class: "chip muted", text: t("members.tasks", { count: assigned }) }),
       iconButton("×", t("members.remove", { name }), () => {
-        actions.mutate((project) => {
-          project.calendar.members.splice(index, 1);
+        actions.mutate((document) => {
+          document.calendar.members.splice(index, 1);
           // 担当が消えたタスクは未割当に戻す。
-          for (const task of project.tasks) {
+          for (const task of document.tasks) {
             if (task.assigneeId === member.id) task.assigneeId = null;
           }
-          for (const event of project.calendar.events) {
+          for (const event of document.calendar.events) {
             event.memberIds = event.memberIds.filter((id) => id !== member.id);
           }
         });
@@ -149,7 +149,7 @@ function renderMember(
 }
 
 export function renderMembersTab(state: AppState, actions: AppActions): HTMLElement {
-  const members = state.project.calendar.members;
+  const members = state.document.calendar.members;
   const someoneIdle = members.some((member) => weeklyMinutes(member) === 0);
 
   return card(t("members.heading"), [
@@ -166,9 +166,9 @@ export function renderMembersTab(state: AppState, actions: AppActions): HTMLElem
       button(
         t("members.add"),
         () => {
-          actions.mutate((project) => {
-            const first = project.calendar.members[0];
-            project.calendar.members.push(
+          actions.mutate((document) => {
+            const first = document.calendar.members[0];
+            document.calendar.members.push(
               createMember(
                 "",
                 first

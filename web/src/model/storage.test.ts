@@ -2,12 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { at } from "../testing.ts";
-import { emptyProject, normalizeProject, sampleProject } from "./project.ts";
+import {
+  emptyDocument,
+  normalizeDocument,
+  readProjectFile,
+  sampleDocument,
+  toFile,
+} from "./project.ts";
 import { csvToTasks, projectToCsv } from "./storage.ts";
 import { buildRows } from "./tree.ts";
 
 test("CSV に書き出して読み直すと階層と値が戻る", () => {
-  const project = sampleProject("ja");
+  const project = sampleDocument("ja");
   const csv = projectToCsv(buildRows(project.tasks));
   const restored = csvToTasks(csv);
 
@@ -25,7 +31,7 @@ test("CSV に書き出して読み直すと階層と値が戻る", () => {
 });
 
 test("カンマや引用符を含む名前も壊れない", () => {
-  const project = emptyProject("test");
+  const project = emptyDocument();
   const tricky = '設計, 調査 "第1回"';
   project.tasks = csvToTasks(
     `level,name,group,priority,enabled,min,likely,max,startDate,progress,endDate\n` +
@@ -53,16 +59,40 @@ test("空行や末尾の改行を読み飛ばす", () => {
 });
 
 test("スキーマが違うファイルは受け付けない", () => {
-  assert.equal(normalizeProject({ schema: "something-else" }), null);
-  assert.equal(normalizeProject(null), null);
-  assert.equal(normalizeProject("文字列"), null);
-  assert.equal(normalizeProject([]), null);
+  assert.equal(readProjectFile({ schema: "something-else" }), null);
+  assert.equal(readProjectFile(null), null);
+  assert.equal(readProjectFile("文字列"), null);
+  assert.equal(readProjectFile([]), null);
+});
+
+test("書き出したファイルをそのまま読み戻せる", () => {
+  const document = sampleDocument("ja");
+  const loaded = readProjectFile(JSON.parse(JSON.stringify(toFile("案件A", document))));
+  assert.ok(loaded);
+  assert.equal(loaded.name, "案件A");
+  assert.equal(loaded.document.tasks.length, document.tasks.length);
+  assert.equal(loaded.document.calendar.members.length, 2);
+});
+
+test("内容がトップレベルに並んだ古い形式も読める", () => {
+  // 以前の版が書き出したファイルを開けなくしない。
+  const old = {
+    schema: "man-hour-calculator",
+    version: 1,
+    name: "旧形式",
+    tasks: [{ id: "t1", name: "調査", min: "1", likely: "2", max: "3" }],
+    calendar: {},
+    settings: {},
+  };
+  const loaded = readProjectFile(old);
+  assert.ok(loaded);
+  assert.equal(loaded.name, "旧形式");
+  assert.equal(loaded.document.tasks.length, 1);
+  assert.equal(at(loaded.document.tasks, 0).name, "調査");
 });
 
 test("壊れた項目は既定値に落として読み込む", () => {
-  const project = normalizeProject({
-    schema: "man-hour-calculator",
-    name: 123,
+  const project = normalizeDocument({
     tasks: [
       { id: "a", name: "親", parentId: "存在しない" },
       { id: "b", name: "子", parentId: "a", min: "x", likely: 5, max: null, progress: 500 },
@@ -78,8 +108,6 @@ test("壊れた項目は既定値に落として読み込む", () => {
     settings: { engine: 42, bins: -1 },
   });
 
-  assert.ok(project);
-  assert.equal(project.name, "project", "名前が文字列でなければ既定値");
   // 見つからない親はトップレベルに戻す。
   assert.equal(at(project.tasks, 0).parentId, null);
   assert.equal(at(project.tasks, 1).parentId, "a");
@@ -103,7 +131,7 @@ test("壊れた項目は既定値に落として読み込む", () => {
 
 test("サンプルは一貫している", () => {
   for (const language of ["ja", "en"] as const) {
-    const project = sampleProject(language);
+    const project = sampleDocument(language);
     const rows = buildRows(project.tasks);
     assert.ok(
       rows.some((row) => row.hasChildren),

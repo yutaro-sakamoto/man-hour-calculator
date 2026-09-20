@@ -1,0 +1,12 @@
+[package]
+name = "mhc-api"
+description = "クライアントとサーバが共有する API の型・権限・振る舞い"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

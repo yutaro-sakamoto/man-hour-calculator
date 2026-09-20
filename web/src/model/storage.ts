@@ -10,40 +10,15 @@
  * ダウンロードとファイル選択で通している。
  */
 
-import type { Project, Task } from "../types.ts";
-import { createTask, normalizeProject } from "./project.ts";
+import type { ProjectDocument } from "../api/types.ts";
+import type { Task } from "../types.ts";
+import { createTask, readProjectFile, toFile, type LoadedFile } from "./project.ts";
 import type { TreeRow } from "./tree.ts";
 
-const STORAGE_KEY = "mhc.project.v1";
-
-/** 控えを localStorage に書く。書けなくても失敗させない。 */
-export function saveLocal(project: Project): boolean {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
-    return true;
-  } catch {
-    // プライベートモードや容量超過。控えが取れないだけで動作は続ける。
-    return false;
-  }
-}
-
-export function loadLocal(): Project | null {
-  try {
-    const text = localStorage.getItem(STORAGE_KEY);
-    if (text === null) return null;
-    return normalizeProject(JSON.parse(text));
-  } catch {
-    return null;
-  }
-}
-
-export function clearLocal(): void {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* 消せなくても困らない */
-  }
-}
+/**
+ * ワークスペース (アカウント・プロジェクト・権限) の保存は
+ * `api/local.ts` が受け持つ。ここにあるのは**ファイルとのやり取り**だけ。
+ */
 
 /** ファイル名に使えない文字を落とす。 */
 function safeFileName(name: string): string {
@@ -66,18 +41,17 @@ export function downloadText(filename: string, text: string, mime: string): void
   }, 1000);
 }
 
-export function downloadProject(project: Project): void {
-  const saved: Project = { ...project, savedAt: new Date().toISOString() };
+export function downloadProject(name: string, document: ProjectDocument): void {
   downloadText(
-    `${safeFileName(project.name)}.mhc.json`,
-    JSON.stringify(saved, null, 2),
+    `${safeFileName(name)}.mhc.json`,
+    JSON.stringify(toFile(name, document), null, 2),
     "application/json",
   );
 }
 
-export async function readProjectFile(file: File): Promise<Project | null> {
+export async function readFile(file: File): Promise<LoadedFile | null> {
   try {
-    return normalizeProject(JSON.parse(await file.text()));
+    return readProjectFile(JSON.parse(await file.text()));
   } catch {
     return null;
   }

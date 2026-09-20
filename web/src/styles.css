@@ -190,6 +190,50 @@ header h1 {
   margin-left: auto;
 }
 
+/* ===== プロジェクトと権限 ===== */
+.project-picker {
+  flex: 1 1 180px;
+  min-width: 140px;
+  max-width: 320px;
+}
+.inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.act-as {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--grid);
+}
+.act-as .inline-row {
+  margin-top: 4px;
+}
+tr[data-open="true"] td {
+  background: var(--series-soft);
+}
+tr[data-open="true"] td:first-child input {
+  font-weight: 620;
+}
+.share-table td:first-child,
+.account-table td:first-child,
+.share-table th:first-child,
+.account-table th:first-child {
+  width: 100%;
+}
+
+/* 閲覧のみのときは、まとめて操作を止める。 */
+fieldset.readonly {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+fieldset.readonly .card {
+  background: color-mix(in srgb, var(--surface-sunken) 60%, var(--surface));
+}
+
 /* ===== サマリバー (常に見えている答え) ===== */
 .summary-bar {
   display: grid;

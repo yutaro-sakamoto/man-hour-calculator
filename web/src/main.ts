@@ -1,5 +1,14 @@
 /**
- * アプリの入り口。状態を持ち、変更を受けて再計算し、画面を組み立てる。
+ * アプリの入り口。
+ *
+ * 画面は {@link ApiClient} しか知らない。その後ろがローカルの WASM でも
+ * 社内サーバでも、通る道は同じ。ここでは
+ *
+ * 1. 接続先を決めて起動する
+ * 2. プロジェクトを開いて内容を編集する
+ * 3. 変更を API に保存し、計算し直して描き直す
+ *
+ * の 3 つをつないでいる。
  *
  * 画面は変更のたびに作り直す。差分更新を避けるかわりに、入力中の
  * フォーカスとカーソル位置だけは明示的に持ち越している (`captureFocus`)。
@@ -8,27 +17,23 @@
 import "./styles.css";
 
 import { P80_INDEX } from "./abi.ts";
-import { TABS, type AppActions, type AppState, type AppWidgets } from "./app.ts";
+import { LocalApiClient } from "./api/local.ts";
+import { ApiError, type ProjectDocument, type User } from "./api/types.ts";
+import { TABS, canWrite, type AppActions, type AppState, type AppWidgets } from "./app.ts";
 import { createDistributionChart } from "./charts/distribution.ts";
 import { createScheduleChart } from "./charts/schedule.ts";
 import { dayFromIso, formatDayShort, formatNumber, formatPercent, todayIso } from "./format.ts";
 import { lang, setLang, t } from "./i18n.ts";
 import { memberLabel, resolveMembers } from "./model/members.ts";
-import { emptyProject, sampleProject } from "./model/project.ts";
+import { emptyDocument, newId, sampleDocument, sampleName } from "./model/project.ts";
 import { buildScheduleModel } from "./model/schedule.ts";
+import { downloadCsv, downloadProject, projectToCsv, readFile } from "./model/storage.ts";
+import { csvToTasks } from "./model/storage.ts";
 import { buildRows, invalidRows } from "./model/tree.ts";
-import {
-  csvToTasks,
-  downloadCsv,
-  downloadProject,
-  loadLocal,
-  projectToCsv,
-  readProjectFile,
-  saveLocal,
-} from "./model/storage.ts";
-import { button, h, clear } from "./ui/dom.ts";
 import { renderCalendarTab } from "./ui/calendar.ts";
+import { button, clear, h } from "./ui/dom.ts";
 import { renderMembersTab } from "./ui/members.ts";
+import { renderProjectsTab } from "./ui/projects.ts";
 import { renderDistributionTab } from "./ui/results.ts";
 import { renderScheduleTab } from "./ui/schedule.ts";
 import { renderTasksTab } from "./ui/tasks.ts";
@@ -36,13 +41,27 @@ import { ComputeError, boot, buildRequest, compute, leafInputFromTask } from "./
 
 const PREFIX_BINS = 256;
 const COMPUTE_DELAY_MS = 220;
-const AUTOSAVE_DELAY_MS = 900;
+const SAVE_DELAY_MS = 700;
+/** ローカルで使う、ただ 1 人の持ち主のアカウント id。 */
+const LOCAL_OWNER = "local-owner";
 
 const today = todayIso();
 const startMonth = new Date(`${today}T00:00:00Z`);
 
+const placeholderUser: User = {
+  id: LOCAL_OWNER,
+  name: "",
+  systemRole: "admin",
+  createdAt: new Date().toISOString(),
+};
+
 const state: AppState = {
-  project: emptyProject("project"),
+  client: new LocalApiClient(LOCAL_OWNER),
+  me: placeholderUser,
+  users: [],
+  projects: [],
+  open: null,
+  document: emptyDocument(),
   rows: [],
   result: null,
   schedule: null,
@@ -101,20 +120,21 @@ const scheduleChart = createScheduleChart(scheduleHost.canvas, scheduleHost.tool
 /* ===== 計算 ================================================= */
 
 let computeTimer: number | undefined;
-let autosaveTimer: number | undefined;
+let saveTimer: number | undefined;
+let runCount = 0;
 
 function setStatus(text: string, tone: "info" | "error" = "info"): void {
   state.status = { text, tone };
 }
 
 function recompute(): void {
-  state.rows = buildRows(state.project.tasks);
+  state.rows = buildRows(state.document.tasks);
   const leaves = state.rows.filter((row) => row.leafIndex !== null);
   const broken = invalidRows(state.rows);
 
   // 担当者のいないタスクは「未割当」という仮の人員にまとめる。
   state.members = resolveMembers(
-    state.project.calendar.members,
+    state.document.calendar.members,
     leaves.map((row) => row.task),
   );
   if (state.calendarMember !== null && state.calendarMember >= state.members.all.length) {
@@ -138,9 +158,9 @@ function recompute(): void {
   try {
     const request = buildRequest(
       leaves.map((row) => leafInputFromTask(row.task, state.members)),
-      state.project.calendar,
+      state.document.calendar,
       state.members,
-      state.project.settings,
+      state.document.settings,
       PREFIX_BINS,
     );
     state.result = compute(request);
@@ -163,25 +183,45 @@ function recompute(): void {
   state.schedule = buildScheduleModel(
     state.result,
     state.rows,
-    dayFromIso(state.project.calendar.today) ?? state.result.calendarStartDay,
+    dayFromIso(state.document.calendar.today) ?? state.result.calendarStartDay,
     t("tasks.untitled"),
     state.members.all.map(memberLabel),
   );
   setStatus(
     t("status.done", {
       engine: t(
-        state.project.settings.engine === 0 ? "settings.engine.mc" : "settings.engine.conv",
+        state.document.settings.engine === 0 ? "settings.engine.mc" : "settings.engine.conv",
       ),
       ms: Math.round(performance.now() - started),
     }),
   );
 }
 
-function scheduleAutosave(): void {
-  window.clearTimeout(autosaveTimer);
-  autosaveTimer = window.setTimeout(() => {
-    saveLocal(state.project);
-  }, AUTOSAVE_DELAY_MS);
+/** 変更を API に保存する。閲覧権限しか無いときは何もしない。 */
+function scheduleSave(): void {
+  const open = state.open;
+  if (open === null || !canWrite(state)) return;
+  window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    void state.client
+      .saveDocument(open.id, state.document)
+      .then((summary) => {
+        state.projects = state.projects.map((item) => (item.id === summary.id ? summary : item));
+        if (state.open) state.open.updatedAt = summary.updatedAt;
+      })
+      .catch((error: unknown) => {
+        reportError(error);
+        render();
+      });
+  }, SAVE_DELAY_MS);
+}
+
+function reportError(error: unknown): void {
+  if (error instanceof ApiError) {
+    setStatus(t(`api.${error.code}`, { message: error.message }), "error");
+  } else {
+    setStatus(String(error), "error");
+  }
 }
 
 /* ===== フォーカスの持ち越し ================================== */
@@ -265,15 +305,15 @@ const fileInput = h("input", {
       const file = input.files?.[0];
       input.value = "";
       if (!file) return;
-      void readProjectFile(file).then((project) => {
-        if (project === null) {
+      actions.run(async () => {
+        const loaded = await readFile(file);
+        if (loaded === null) {
           setStatus(t("file.badFile"), "error");
-          render();
           return;
         }
-        state.project = project;
+        // 読み込んだ内容は、いまのプロジェクトを潰さずに新しい 1 件として足す。
+        await openProject(await state.client.createProject(newId(), loaded.name, loaded.document));
         setStatus(t("file.imported", { name: file.name }));
-        refreshAll();
       });
     },
   },
@@ -288,14 +328,13 @@ const csvInput = h("input", {
       const file = input.files?.[0];
       input.value = "";
       if (!file) return;
-      void file.text().then((text) => {
-        const tasks = csvToTasks(text);
+      actions.run(async () => {
+        const tasks = csvToTasks(await file.text());
         if (tasks.length === 0) {
           setStatus(t("file.badFile"), "error");
-          render();
           return;
         }
-        state.project.tasks = tasks;
+        state.document.tasks = tasks;
         setStatus(t("file.imported", { name: file.name }));
         refreshAll();
       });
@@ -308,7 +347,7 @@ function fileMenu(): HTMLElement {
     h("summary", { text: t("file.menu") }),
     h("div", { class: "menu-panel" }, [
       button(t("file.save"), () => {
-        downloadProject(state.project);
+        downloadProject(state.open?.name ?? "project", state.document);
         setStatus(t("file.saved"));
         render();
       }),
@@ -317,51 +356,67 @@ function fileMenu(): HTMLElement {
       }),
       h("hr"),
       button(t("file.exportCsv"), () => {
-        downloadCsv(state.project.name, projectToCsv(state.rows));
+        downloadCsv(state.open?.name ?? "project", projectToCsv(state.rows));
       }),
-      button(t("file.importCsv"), () => {
-        csvInput.click();
-      }),
-      h("hr"),
-      button(t("file.sample"), () => {
-        state.project = sampleProject(lang());
-        refreshAll();
-      }),
-      button(t("file.new"), () => {
-        if (state.project.tasks.length > 0 && !confirm(t("file.confirmNew"))) return;
-        state.project = emptyProject("project");
-        refreshAll();
-      }),
+      button(
+        t("file.importCsv"),
+        () => {
+          csvInput.click();
+        },
+        { attrs: { disabled: !canWrite(state) } },
+      ),
     ]),
   ]);
-  // 項目を選んだら閉じる。
   menu.addEventListener("click", (event) => {
     if ((event.target as HTMLElement).tagName === "BUTTON") menu.open = false;
   });
   return menu;
 }
 
+/** プロジェクトの切り替え。 */
+function projectPicker(): HTMLElement {
+  if (state.projects.length === 0) {
+    return h("span", { class: "chip muted", text: t("projects.none") });
+  }
+  const select = h(
+    "select",
+    {
+      class: "project-picker",
+      dataset: { focus: "project:picker" },
+      attrs: { "aria-label": t("projects.switch") },
+      on: {
+        change: (event) => {
+          const id = (event.target as HTMLSelectElement).value;
+          actions.run(async () => {
+            await openProject(await state.client.getProject(id));
+          });
+        },
+      },
+    },
+    state.projects.map((project) =>
+      h("option", {
+        text: `${project.name}${project.role === "owner" ? "" : ` (${t(`role.${project.role}`)})`}`,
+        attrs: { value: project.id, selected: project.id === state.open?.id },
+      }),
+    ),
+  );
+  select.value = state.open?.id ?? "";
+  return select;
+}
+
 function header(): HTMLElement {
   return h("header", {}, [
     h("div", { class: "title-row" }, [
       h("h1", { text: t("app.title") }),
-      h("input", {
-        class: "project-name",
-        attrs: {
-          type: "text",
-          value: state.project.name,
-          "aria-label": t("file.projectName"),
-          placeholder: t("file.projectName"),
-        },
-        dataset: { focus: "project:name" },
-        on: {
-          input: (event) => {
-            state.project.name = (event.target as HTMLInputElement).value;
-            scheduleAutosave();
-          },
-        },
-      }),
+      projectPicker(),
       fileMenu(),
+      h("span", {
+        class: `chip${state.client.remote ? "" : " muted"}`,
+        title: t("api.connectionHint"),
+        text: state.client.remote
+          ? t("api.connectedTo", { target: state.client.label })
+          : t("api.local"),
+      }),
       h("div", { class: "lang-toggle", attrs: { role: "group", "aria-label": "Language" } }, [
         ...(["ja", "en"] as const).map((code) =>
           button(
@@ -402,8 +457,10 @@ function tabBar(): HTMLElement {
   );
 }
 
-function tabContent(actions: AppActions): HTMLElement {
+function tabContent(): HTMLElement {
   switch (state.activeTab) {
+    case "projects":
+      return renderProjectsTab(state, actions);
     case "tasks":
       return renderTasksTab(state, actions);
     case "members":
@@ -423,6 +480,16 @@ function render(): void {
   document.documentElement.lang = lang();
   const focus = captureFocus();
   clear(root);
+
+  const editable = canWrite(state) || state.activeTab === "projects";
+  const panel = h("div", { class: "tab-panel", attrs: { role: "tabpanel" } }, [
+    // 閲覧権限しか無いときは、まとめて操作を止める。個々の入力に
+    // disabled を配るより取りこぼしが無い。
+    editable
+      ? tabContent()
+      : h("fieldset", { class: "readonly", attrs: { disabled: true } }, [tabContent()]),
+  ]);
+
   root.append(
     header(),
     tabBar(),
@@ -432,17 +499,19 @@ function render(): void {
       text: state.status.text,
       dataset: { tone: state.status.tone, run: String(runCount) },
     }),
-    h("div", { class: "tab-panel", attrs: { role: "tabpanel" } }, [tabContent(actions)]),
+    editable
+      ? panel
+      : h("div", {}, [
+          h("p", { id: "readonly-banner", class: "hint warn", text: t("role.readOnly") }),
+          panel,
+        ]),
     h("footer", {}, [h("p", { text: t("footer.offline") }), h("p", { text: t("footer.engine") })]),
   );
   restoreFocus(focus);
 
-  // グラフは DOM に載ってから描く (大きさが決まらないと解像度を合わせられない)。
   if (state.activeTab === "distribution") distributionChart.redraw();
   if (state.activeTab === "schedule") scheduleChart.redraw();
 }
-
-let runCount = 0;
 
 function refreshAll(): void {
   recompute();
@@ -460,26 +529,101 @@ function refreshAll(): void {
   );
   scheduleChart.setData(state.schedule);
   render();
-  scheduleAutosave();
+  scheduleSave();
 }
 
 const actions: AppActions = {
   mutate(change) {
-    change(state.project);
+    change(state.document);
     window.clearTimeout(computeTimer);
     computeTimer = window.setTimeout(refreshAll, COMPUTE_DELAY_MS);
     // 構造の変化はすぐ画面に出す。数字の更新だけ少し遅れて追いつく。
-    state.rows = buildRows(state.project.tasks);
+    state.rows = buildRows(state.document.tasks);
     render();
   },
   patch(change) {
     change(state);
     render();
   },
+  openProject(id) {
+    return reopen(id);
+  },
+  run(action) {
+    void action()
+      .catch((error: unknown) => {
+        reportError(error);
+      })
+      .finally(() => {
+        render();
+      });
+  },
   render,
 };
 
+/* ===== プロジェクトの開閉 =================================== */
+
+async function reloadProjects(): Promise<void> {
+  state.projects = await state.client.listProjects();
+  state.users = await state.client.listUsers();
+}
+
+async function openProject(project: {
+  id: string;
+  name: string;
+  access: AppState["open"] extends null ? never : NonNullable<AppState["open"]>["access"];
+  updatedAt: string;
+  document: ProjectDocument;
+}): Promise<void> {
+  const role =
+    project.access.find((entry) => entry.userId === state.me.id)?.role ??
+    (state.me.systemRole === "admin" ? "viewer" : "viewer");
+  state.open = {
+    id: project.id,
+    name: project.name,
+    role,
+    access: project.access,
+    updatedAt: project.updatedAt,
+  };
+  state.document = project.document;
+  // 基準日は開いた日に合わせる。保存された日付のまま進捗を測らない。
+  if (state.document.calendar.today !== today) state.document.calendar.today = today;
+  await reloadProjects();
+  refreshAll();
+}
+
+async function reopen(id: string): Promise<void> {
+  await openProject(await state.client.getProject(id));
+}
+
 /* ===== 起動 ================================================= */
+
+/** まっさらなときの初期化。持ち主のアカウントと見本のプロジェクトを作る。 */
+async function seed(): Promise<void> {
+  const client = state.client;
+  // 自分がいなければ作る。ローカルではこの 1 人が管理者。
+  try {
+    await client.me();
+  } catch {
+    LocalApiClient.replace(
+      JSON.stringify({
+        version: 1,
+        users: [
+          {
+            id: LOCAL_OWNER,
+            name: t("members.you"),
+            systemRole: "admin",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        projects: [],
+      }),
+    );
+    LocalApiClient.persist();
+  }
+  if ((await client.listProjects()).length === 0) {
+    await client.createProject(newId(), sampleName(lang()), sampleDocument(lang()));
+  }
+}
 
 async function main(): Promise<void> {
   document.body.append(root, fileInput, csvInput);
@@ -497,9 +641,21 @@ async function main(): Promise<void> {
     return;
   }
 
-  state.project = loadLocal() ?? sampleProject(lang());
-  if (state.project.calendar.today !== today) state.project.calendar.today = today;
-  refreshAll();
+  try {
+    LocalApiClient.restore();
+    await seed();
+    state.me = await state.client.me();
+    await reloadProjects();
+    const first = state.projects[0];
+    if (first) {
+      await openProject(await state.client.getProject(first.id));
+    } else {
+      refreshAll();
+    }
+  } catch (error) {
+    reportError(error);
+    render();
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {

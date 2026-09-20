@@ -11,4 +11,6 @@ repository.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+mhc-api = { path = "../api" }
 mhc-core = { path = "../core" }
+serde_json = "1"

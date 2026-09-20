@@ -37,13 +37,13 @@ const REPEAT_CHOICES = [
 ] as const;
 
 function renderBasics(state: AppState, actions: AppActions): HTMLElement {
-  const calendar = state.project.calendar;
+  const calendar = state.document.calendar;
   const setNumber =
     (key: "hoursPerPersonDay" | "horizonDays") =>
     (value: string): void => {
-      actions.mutate((project) => {
+      actions.mutate((document) => {
         const parsed = Number(value);
-        if (Number.isFinite(parsed)) project.calendar[key] = Math.max(0.1, parsed);
+        if (Number.isFinite(parsed)) document.calendar[key] = Math.max(0.1, parsed);
       });
     };
 
@@ -57,16 +57,16 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
       field(
         t("cal.start"),
         dateInput(calendar.startDate, (value) => {
-          actions.mutate((project) => {
-            if (value !== null) project.calendar.startDate = value;
+          actions.mutate((document) => {
+            if (value !== null) document.calendar.startDate = value;
           });
         }),
       ),
       field(
         t("cal.today"),
         dateInput(calendar.today, (value) => {
-          actions.mutate((project) => {
-            if (value !== null) project.calendar.today = value;
+          actions.mutate((document) => {
+            if (value !== null) document.calendar.today = value;
           });
         }),
       ),
@@ -85,8 +85,8 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
     ]),
     h("label", { class: "toggle" }, [
       checkbox(calendar.useJapaneseHolidays, (checked) => {
-        actions.mutate((project) => {
-          project.calendar.useJapaneseHolidays = checked;
+        actions.mutate((document) => {
+          document.calendar.useJapaneseHolidays = checked;
         });
       }),
       h("span", { text: t("cal.useHolidays") }),
@@ -112,13 +112,13 @@ function renderEvent(
   index: number,
 ): HTMLElement {
   const patch = (change: Partial<CalendarEventItem>): void => {
-    actions.mutate((project) => {
-      const target = project.calendar.events[index];
+    actions.mutate((document) => {
+      const target = document.calendar.events[index];
       if (target) Object.assign(target, change);
     });
   };
   const allDay = event.startTime === null || event.endTime === null;
-  const members = state.project.calendar.members;
+  const members = state.document.calendar.members;
 
   const timeInput = (value: string, which: "startTime" | "endTime") =>
     h("input", {
@@ -150,8 +150,8 @@ function renderEvent(
         },
       ),
       iconButton("×", t("cal.removeEvent"), () => {
-        actions.mutate((project) => {
-          project.calendar.events.splice(index, 1);
+        actions.mutate((document) => {
+          document.calendar.events.splice(index, 1);
         });
       }),
     ]),
@@ -233,7 +233,7 @@ function renderEvent(
 }
 
 function renderEvents(state: AppState, actions: AppActions): HTMLElement {
-  const events = state.project.calendar.events;
+  const events = state.document.calendar.events;
   return card(t("cal.events"), [
     h("p", { class: "hint", text: t("cal.eventHint") }),
     events.length === 0
@@ -247,9 +247,9 @@ function renderEvents(state: AppState, actions: AppActions): HTMLElement {
       button(
         t("cal.addEvent"),
         () => {
-          actions.mutate((project) => {
-            const today = project.calendar.today;
-            project.calendar.events.push({
+          actions.mutate((document) => {
+            const today = document.calendar.today;
+            document.calendar.events.push({
               id: newId(),
               name: "",
               startDate: today,
@@ -258,7 +258,7 @@ function renderEvents(state: AppState, actions: AppActions): HTMLElement {
               endTime: "11:00",
               repeatWeeks: 0,
               until: null,
-              memberIds: project.calendar.members.map((member) => member.id),
+              memberIds: document.calendar.members.map((member) => member.id),
             });
           });
         },
@@ -312,7 +312,7 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
     if ((flags & DAY_FLAG.holiday) !== 0) classes.push("holiday");
     if ((flags & DAY_FLAG.event) !== 0) classes.push("has-event");
     if ((flags & DAY_FLAG.forcedWorkday) !== 0) classes.push("forced");
-    if (state.project.calendar.today === iso) classes.push("today");
+    if (state.document.calendar.today === iso) classes.push("today");
 
     cells.push(
       h(
@@ -328,8 +328,8 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
           },
           on: {
             click: () => {
-              actions.mutate((project) => {
-                const list = project.calendar.forcedWorkdays;
+              actions.mutate((document) => {
+                const list = document.calendar.forcedWorkdays;
                 const at = list.indexOf(iso);
                 if (at >= 0) list.splice(at, 1);
                 else list.push(iso);
@@ -372,7 +372,7 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
       button(
         t("cal.thisMonth"),
         () => {
-          const today = dayFromIso(state.project.calendar.today);
+          const today = dayFromIso(state.document.calendar.today);
           if (today === null) return;
           const date = new Date(today * 86_400_000);
           actions.patch((s) => {

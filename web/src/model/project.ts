@@ -1,13 +1,13 @@
 /** プロジェクト (保存・読み込みの単位) の生成と検証。 */
 
 import { nextWeekday, todayIso } from "../format.ts";
+import type { ProjectDocument } from "../api/types.ts";
 import type {
   CalendarEventItem,
   CalendarSettings,
   ComputeSettings,
   Member,
   Priority,
-  Project,
   Task,
   WorkWindow,
 } from "../types.ts";
@@ -86,22 +86,37 @@ export function defaultSettings(): ComputeSettings {
   };
 }
 
-export function emptyProject(name: string): Project {
+export function emptyDocument(): ProjectDocument {
   return {
-    schema: SCHEMA,
-    version: SCHEMA_VERSION,
-    savedAt: new Date().toISOString(),
-    name,
     tasks: [],
     calendar: defaultCalendar(),
     settings: defaultSettings(),
   };
 }
 
+/** ファイルに書き出すときの包み。中身は API の `document` と同じ。 */
+export interface ProjectFile {
+  schema: typeof SCHEMA;
+  version: typeof SCHEMA_VERSION;
+  savedAt: string;
+  name: string;
+  document: ProjectDocument;
+}
+
+export function toFile(name: string, document: ProjectDocument): ProjectFile {
+  return {
+    schema: SCHEMA,
+    version: SCHEMA_VERSION,
+    savedAt: new Date().toISOString(),
+    name,
+    document,
+  };
+}
+
 /** 機能をひととおり触れる見本データ。 */
-export function sampleProject(lang: "ja" | "en"): Project {
+export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
   const label = (ja: string, en: string): string => (lang === "ja" ? ja : en);
-  const project = emptyProject(label("サンプル案件", "Sample project"));
+  const project = emptyDocument();
 
   const alice = createMember(label("佐藤", "Alice"));
   const bob = createMember(label("鈴木", "Bob"), {
@@ -208,6 +223,11 @@ export function sampleProject(lang: "ja" | "en"): Project {
     }),
   ];
   return project;
+}
+
+/** 見本データの既定の名前。 */
+export function sampleName(lang: "ja" | "en"): string {
+  return lang === "ja" ? "サンプル案件" : "Sample project";
 }
 
 /* ===== 読み込んだ JSON の検証 ================================
@@ -368,15 +388,12 @@ function normalizeSettings(raw: unknown): ComputeSettings {
 }
 
 /**
- * 読み込んだ JSON をプロジェクトに整える。
+ * 読み込んだ JSON を内容に整える。
  *
  * 形が違うものは例外を投げず、項目ごとに既定値へ落とす。
- * ただしスキーマ名が違う場合だけは、別物のファイルとみなして `null` を返す。
  */
-export function normalizeProject(raw: unknown): Project | null {
+export function normalizeDocument(raw: unknown): ProjectDocument {
   const record = asRecord(raw);
-  if (asString(record.schema) !== SCHEMA) return null;
-
   const rawTasks = Array.isArray(record.tasks) ? record.tasks : [];
   const knownIds = new Set<string>(
     rawTasks.map((task) => asString(asRecord(task).id)).filter((id) => id !== ""),
@@ -384,12 +401,30 @@ export function normalizeProject(raw: unknown): Project | null {
   const calendar = normalizeCalendar(record.calendar);
   const memberIds = new Set(calendar.members.map((member) => member.id));
   return {
-    schema: SCHEMA,
-    version: SCHEMA_VERSION,
-    savedAt: asString(record.savedAt, new Date().toISOString()),
-    name: asString(record.name, "project"),
     tasks: rawTasks.map((task) => normalizeTask(task, knownIds, memberIds)),
     calendar,
     settings: normalizeSettings(record.settings),
+  };
+}
+
+/** 読み込んだファイルの中身。スキーマ名が違うものは受け付けない。 */
+export interface LoadedFile {
+  name: string;
+  document: ProjectDocument;
+}
+
+/**
+ * ファイルから読み込む。
+ *
+ * 古い形式 (内容がトップレベルに並んでいるもの) も読めるようにしてある。
+ * 保存したファイルが次のバージョンで開けなくなるのは避けたい。
+ */
+export function readProjectFile(raw: unknown): LoadedFile | null {
+  const record = asRecord(raw);
+  if (asString(record.schema) !== SCHEMA) return null;
+  const nested = record.document;
+  return {
+    name: asString(record.name, "project"),
+    document: normalizeDocument(nested === undefined ? record : nested),
   };
 }

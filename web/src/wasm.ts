@@ -20,9 +20,16 @@ interface WasmExports {
   memory: WebAssembly.Memory;
   alloc: (bytes: number) => number;
   dealloc: (ptr: number, bytes: number) => void;
+  /** 計算 (f64 の平坦なバッファ)。 */
   compute: (ptr: number, length: number) => number;
   last_response_len: () => number;
   abi_version: () => number;
+  /** API 層 (UTF-8 の JSON)。 */
+  api_call: (ptr: number, length: number) => number;
+  import_state: (ptr: number, length: number) => number;
+  export_state: () => number;
+  last_text_len: () => number;
+  api_version: () => number;
 }
 
 let exports: WasmExports | null = null;
@@ -55,6 +62,51 @@ export async function boot(): Promise<void> {
 
 export function isReady(): boolean {
   return exports !== null;
+}
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/** WASM に文字列を渡し、返ってきた文字列を読む。 */
+function callWithText(
+  run: (api: WasmExports, ptr: number, length: number) => number,
+  text: string,
+): string {
+  const api = exports;
+  if (!api) throw new Error("wasm is not ready");
+
+  const bytes = encoder.encode(text);
+  const ptr = bytes.length === 0 ? 0 : api.alloc(bytes.length);
+  if (bytes.length > 0 && ptr === 0) throw new Error("wasm alloc failed");
+  try {
+    if (bytes.length > 0) {
+      new Uint8Array(api.memory.buffer, ptr, bytes.length).set(bytes);
+    }
+    const outPtr = run(api, ptr, bytes.length);
+    const outLen = api.last_text_len();
+    // 呼び出しのなかでメモリが伸びている可能性があるので、読む直前に取り直す。
+    return decoder.decode(new Uint8Array(api.memory.buffer, outPtr, outLen).slice());
+  } finally {
+    if (bytes.length > 0) api.dealloc(ptr, bytes.length);
+  }
+}
+
+/** API を 1 回呼ぶ。入力も出力も JSON 文字列。 */
+export function apiCall(request: string): string {
+  return callWithText((api, ptr, length) => api.api_call(ptr, length), request);
+}
+
+/** 保存しておいたワークスペースを読み込む。 */
+export function importState(state: string): string {
+  return callWithText((api, ptr, length) => api.import_state(ptr, length), state);
+}
+
+/** いまのワークスペースを JSON で取り出す。 */
+export function exportState(): string {
+  const api = exports;
+  if (!api) throw new Error("wasm is not ready");
+  const ptr = api.export_state();
+  return decoder.decode(new Uint8Array(api.memory.buffer, ptr, api.last_text_len()).slice());
 }
 
 /** 計算に渡す 1 タスク。階層を解決したあとの葉だけが入る。 */
