@@ -4,7 +4,9 @@ const os = require("os");
 const { pathToFileURL } = require("url");
 const { test, expect } = require("@playwright/test");
 
-const PAGE_URL = pathToFileURL(path.resolve(__dirname, "../../dist/index.html")).href;
+const PAGE_URL = pathToFileURL(
+  path.resolve(__dirname, "../../dist/index.html"),
+).href;
 
 /**
  * ページを開き、外部への通信もページ内の例外も起きていないことを保証する。
@@ -33,13 +35,18 @@ async function open(page, { lang = "ja" } = {}) {
 async function recompute(page, action) {
   const before = await page.locator("#status").getAttribute("data-run");
   await action();
-  await expect(page.locator("#status")).not.toHaveAttribute("data-run", before ?? "");
+  await expect(page.locator("#status")).not.toHaveAttribute(
+    "data-run",
+    before ?? "",
+  );
 }
 
 const summary = (page, key) =>
   page.locator(`.summary-item[data-key="${key}"]`).getAttribute("data-value");
 const tile = async (page, key) =>
-  Number(await page.locator(`.tile[data-key="${key}"]`).getAttribute("data-value"));
+  Number(
+    await page.locator(`.tile[data-key="${key}"]`).getAttribute("data-value"),
+  );
 
 const openTab = (page, tab) => page.click(`.tabs button[data-tab="${tab}"]`);
 
@@ -61,7 +68,9 @@ async function fileMenu(page, label) {
 }
 const rows = (page) => page.locator(".task-table tbody tr");
 
-test("単一 HTML を file:// から開くだけで動き、外部通信が発生しない", async ({ page }) => {
+test("単一 HTML を file:// から開くだけで動き、外部通信が発生しない", async ({
+  page,
+}) => {
   const { external, errors } = await open(page);
   expect(external, "外部へのリクエストが発生した").toEqual([]);
   expect(errors, "ページ内で例外が発生した").toEqual([]);
@@ -94,7 +103,9 @@ test("親タスクは配下の合計を表示し、直接は編集できない",
   await expect(parent.locator('td.num input[type="number"]')).toHaveCount(0);
 
   // 子は自分の見積もりを持つ。
-  await expect(rows(page).nth(1).locator('td.num input[type="number"]')).toHaveCount(3);
+  await expect(
+    rows(page).nth(1).locator('td.num input[type="number"]'),
+  ).toHaveCount(3);
 });
 
 test("階層の上げ下げと並べ替えができる", async ({ page }) => {
@@ -103,28 +114,40 @@ test("階層の上げ下げと並べ替えができる", async ({ page }) => {
     rows(page).nth(index).locator('input[type="text"]').first().inputValue();
 
   // 「テストとリリース」を 1 つ上げると「実装フェーズ」の直前に来る。
-  await recompute(page, () => rows(page).nth(7).locator("button[title]").nth(0).click());
+  await recompute(page, () =>
+    rows(page).nth(7).locator("button[title]").nth(0).click(),
+  );
   expect(await cellText(3)).toBe("テストとリリース");
 
   // 階層を下げると「設計フェーズ」の子になる。
-  await recompute(page, () => rows(page).nth(3).locator("button[title]").nth(2).click());
+  await recompute(page, () =>
+    rows(page).nth(3).locator("button[title]").nth(2).click(),
+  );
   await expect(rows(page).nth(3)).toHaveAttribute("data-parent", "false");
   // 親の集計に取り込まれる (8 + 3 = 11 人日が最小)。
   await expect(rows(page).first().locator("td.num").nth(0)).toHaveText("11.0");
 
   // 階層を上げると元に戻る。
-  await recompute(page, () => rows(page).nth(3).locator("button[title]").nth(3).click());
+  await recompute(page, () =>
+    rows(page).nth(3).locator("button[title]").nth(3).click(),
+  );
   await expect(rows(page).first().locator("td.num").nth(0)).toHaveText("8.0");
 });
 
-test("子タスクを追加すると親になり、削除は部分木ごと消える", async ({ page }) => {
+test("子タスクを追加すると親になり、削除は部分木ごと消える", async ({
+  page,
+}) => {
   await open(page);
-  await recompute(page, () => rows(page).nth(1).locator("button[title]").nth(4).click());
+  await recompute(page, () =>
+    rows(page).nth(1).locator("button[title]").nth(4).click(),
+  );
   await expect(rows(page)).toHaveCount(9);
   await expect(rows(page).nth(1)).toHaveAttribute("data-parent", "true");
 
   // 「設計フェーズ」を消すと配下 3 件ごと消える。
-  await recompute(page, () => rows(page).first().locator("button[title]").nth(5).click());
+  await recompute(page, () =>
+    rows(page).first().locator("button[title]").nth(5).click(),
+  );
   await expect(rows(page)).toHaveCount(5);
 });
 
@@ -181,9 +204,10 @@ test("モンテカルロと畳み込みの結果がほぼ一致する", async ({
   await recompute(page, () => page.selectOption("#engine", "1"));
   await expect(page.locator("#status")).toContainText(/畳み込み|convolution/i);
   for (const key of ["p50", "p80", "p90"]) {
-    expect(Math.abs((await tile(page, key)) - monteCarlo[key]), `${key} が一致しない`).toBeLessThan(
-      0.8,
-    );
+    expect(
+      Math.abs((await tile(page, key)) - monteCarlo[key]),
+      `${key} が一致しない`,
+    ).toBeLessThan(0.8);
   }
 });
 
@@ -248,7 +272,9 @@ test("祝日と休日出勤がカレンダーに反映される", async ({ page 
 
   // クリックで休日出勤に切り替わる。
   await recompute(page, () => holiday.click());
-  await expect(page.locator('.day[aria-label*="2026-09-21"]')).toHaveClass(/forced/);
+  await expect(page.locator('.day[aria-label*="2026-09-21"]')).toHaveClass(
+    /forced/,
+  );
 });
 
 test("人員ごとに稼働時間が違い、月表示を切り替えられる", async ({ page }) => {
@@ -289,9 +315,9 @@ test("人員を増やして担当を分けると完了日が早まる", async ({
     }
   });
   const serial = await summary(page, "finishP80");
-  expect(new Date(`2026/${serial.replace(/\(.+\)/, "")}`).getTime()).toBeGreaterThan(
-    new Date(`2026/${before.replace(/\(.+\)/, "")}`).getTime(),
-  );
+  expect(
+    new Date(`2026/${serial.replace(/\(.+\)/, "")}`).getTime(),
+  ).toBeGreaterThan(new Date(`2026/${before.replace(/\(.+\)/, "")}`).getTime());
 });
 
 test("共有した予定は参加者全員の稼働を削る", async ({ page }) => {
@@ -311,7 +337,10 @@ test("共有した予定は参加者全員の稼働を削る", async ({ page }) 
   await openTab(page, "calendar");
   const firstEvent = page.locator(".event-card").first();
   await recompute(page, () =>
-    firstEvent.locator('.participant-list input[type="checkbox"]').first().uncheck(),
+    firstEvent
+      .locator('.participant-list input[type="checkbox"]')
+      .first()
+      .uncheck(),
   );
   expect(await capacityFor("0")).toBeGreaterThan(before);
 });
@@ -325,14 +354,18 @@ test("隔週の予定は 1 週おきにしか効かない", async ({ page }) => 
   await expect(events.nth(1).locator("select").first()).toHaveValue("2");
 
   const capacityOn = async (date) => {
-    const label = await page.locator(`.day[aria-label*="${date}"]`).getAttribute("aria-label");
+    const label = await page
+      .locator(`.day[aria-label*="${date}"]`)
+      .getAttribute("aria-label");
     return Number(label.match(/: ([\d.]+)/)[1]);
   };
   await page.selectOption('select[aria-label="表示する人員"]', "0");
   // 開始日が日曜なので、隔週の予定は日曜にしか当たらない (= 稼働日には影響しない)。
   // 毎週の定例だけが平日の稼働を削っていることを、繰り返しを切って確かめる。
   const before = await capacityOn("2026-09-28");
-  await recompute(page, () => events.first().locator("select").first().selectOption("0"));
+  await recompute(page, () =>
+    events.first().locator("select").first().selectOption("0"),
+  );
   expect(await capacityOn("2026-09-28")).toBeGreaterThan(before);
 });
 
@@ -341,7 +374,9 @@ test("予定の時刻は 5 分単位で効く", async ({ page }) => {
   await openTab(page, "calendar");
   await page.selectOption('select[aria-label="表示する人員"]', "0");
   const capacityOn = async (date) => {
-    const label = await page.locator(`.day[aria-label*="${date}"]`).getAttribute("aria-label");
+    const label = await page
+      .locator(`.day[aria-label*="${date}"]`)
+      .getAttribute("aria-label");
     return Number(label.match(/: ([\d.]+)/)[1]);
   };
   const before = await capacityOn("2026-09-28");
@@ -370,7 +405,9 @@ test("担当者で絞り込める", async ({ page }) => {
 test("担当者のいないタスクは未割当としてまとめられる", async ({ page }) => {
   await open(page);
   await openTab(page, "tasks");
-  await recompute(page, () => page.locator("select.assignee").first().selectOption(""));
+  await recompute(page, () =>
+    page.locator("select.assignee").first().selectOption(""),
+  );
   await openTab(page, "schedule");
   // 人員ごとの表に「未割当」が現れる。
   await expect(page.locator(".member-summary")).toContainText("未割当");
@@ -380,10 +417,16 @@ test("祝日を使わない設定にすると稼働量が増える", async ({ pa
   await open(page);
   await openTab(page, "calendar");
   const total = async () =>
-    Number((await page.locator(".card .status").first().innerText()).match(/で ([\d.]+) 人日/)[1]);
+    Number(
+      (await page.locator(".card .status").first().innerText()).match(
+        /で ([\d.]+) 人日/,
+      )[1],
+    );
   const before = await total();
 
-  await recompute(page, () => page.uncheck('.card .toggle input[type="checkbox"]'));
+  await recompute(page, () =>
+    page.uncheck('.card .toggle input[type="checkbox"]'),
+  );
   expect(await total()).toBeGreaterThan(before);
 });
 
@@ -410,7 +453,9 @@ test("スケジュールにタスクごとの完了予測と確率が出る", as
   const early = await page.$$eval(".probe-table .bar-value", (cells) =>
     cells.map((cell) => Number(cell.textContent.replace("%", ""))),
   );
-  expect(early[early.length - 1]).toBeLessThanOrEqual(values[values.length - 1]);
+  expect(early[early.length - 1]).toBeLessThanOrEqual(
+    values[values.length - 1],
+  );
 });
 
 test("サマリバーが工数と完了日を常に示す", async ({ page }) => {
@@ -420,9 +465,13 @@ test("サマリバーが工数と完了日を常に示す", async ({ page }) => 
   expect(await summary(page, "progress")).toBe("0%");
 });
 
-test("ファイルに保存して読み込み直すと新しいプロジェクトになる", async ({ page }) => {
+test("ファイルに保存して読み込み直すと新しいプロジェクトになる", async ({
+  page,
+}) => {
   await open(page);
-  await recompute(page, () => rows(page).nth(1).locator('input[type="number"]').first().fill("7"));
+  await recompute(page, () =>
+    rows(page).nth(1).locator('input[type="number"]').first().fill("7"),
+  );
 
   const [download] = await Promise.all([
     page.waitForEvent("download"),
@@ -469,9 +518,9 @@ test("入力内容が保存され、開き直しても残る", async ({ page }) 
 
   await page.reload();
   await expect(page.locator(".summary-bar")).toBeVisible();
-  await expect(rows(page).nth(1).locator('input[type="text"]').first()).toHaveValue(
-    "保存されるはず",
-  );
+  await expect(
+    rows(page).nth(1).locator('input[type="text"]').first(),
+  ).toHaveValue("保存されるはず");
 });
 
 /* ===== プロジェクトと権限 ===== */
@@ -484,7 +533,9 @@ test("プロジェクトを増やして切り替えられる", async ({ page }) 
   await page.click('button:text("新しいプロジェクト")');
   await expect(page.locator("tr[data-project]")).toHaveCount(2);
   // 新しいほうが開いている。空なので計算するものが無い。
-  await expect(page.locator("#status")).toContainText("計算するタスクがありません");
+  await expect(page.locator("#status")).toContainText(
+    "計算するタスクがありません",
+  );
 
   // ヘッダの切り替えで元に戻れる。
   await page.selectOption(".project-picker", { label: "サンプル案件" });
@@ -514,20 +565,28 @@ test("プロジェクトを改名・複製・削除できる", async ({ page }) 
   const nameInput = page.locator("tr[data-project] input").first();
   await nameInput.fill("名前を変えた案件");
   await nameInput.blur();
-  await expect(page.locator(".project-picker option").first()).toHaveText(/名前を変えた案件/);
-
-  await page.click('button:text("複製する")');
-  await expect(page.locator("tr[data-project]")).toHaveCount(2);
-  await expect(page.locator('tr[data-project][data-open="true"] input').first()).toHaveValue(
-    /のコピー/,
+  await expect(page.locator(".project-picker option").first()).toHaveText(
+    /名前を変えた案件/,
   );
+
+  await page
+    .locator('tr[data-project] button[title*="を複製する"]')
+    .first()
+    .click();
+  await expect(page.locator("tr[data-project]")).toHaveCount(2);
+  await expect(
+    page.locator('tr[data-project][data-open="true"] input').first(),
+  ).toHaveValue(/のコピー/);
   // 複製した中身も引き継がれる。
   await openTab(page, "tasks");
   await expect(rows(page)).toHaveCount(8);
 
   await openTab(page, "projects");
   page.once("dialog", (dialog) => dialog.accept());
-  await page.locator('tr[data-project] button[title="削除する"]').first().click();
+  await page
+    .locator('tr[data-project] button[title*="を削除する"]')
+    .first()
+    .click();
   await expect(page.locator("tr[data-project]")).toHaveCount(1);
 });
 
@@ -538,12 +597,18 @@ test("共有した相手は与えた権限の範囲でしか触れない", async
   // 相手のアカウントを作る。
   await page.click('button:text("アカウントを追加")');
   await expect(page.locator("tr[data-account]")).toHaveCount(2);
-  const otherName = page.locator("tr[data-account]").nth(1).locator("input").first();
+  const otherName = page
+    .locator("tr[data-account]")
+    .nth(1)
+    .locator("input")
+    .first();
   await otherName.fill("鈴木");
   await otherName.blur();
 
   // 閲覧者として共有する。
-  const addRow = page.locator(".card", { hasText: "このプロジェクトの共有" }).locator(".inline-row");
+  const addRow = page
+    .locator(".card", { hasText: "このプロジェクトの共有" })
+    .locator(".inline-row");
   await addRow.locator("select").nth(1).selectOption("viewer");
   await addRow.locator('button:text("共有する")').click();
   await expect(page.locator("tr[data-principal]")).toHaveCount(2);
@@ -553,7 +618,9 @@ test("共有した相手は与えた権限の範囲でしか触れない", async
   await openTab(page, "tasks");
   await expect(page.locator("#readonly-banner")).toContainText("閲覧のみ");
   await expect(page.locator("fieldset.readonly")).toBeVisible();
-  await expect(rows(page).first().locator('input[type="text"]').first()).toBeDisabled();
+  await expect(
+    rows(page).first().locator('input[type="text"]').first(),
+  ).toBeDisabled();
   // 計算結果は見える (見るだけならできる)。
   await openTab(page, "distribution");
   await expect(page.locator('.tile[data-key="p80"]')).toBeVisible();
@@ -563,7 +630,10 @@ test("所有者がいなくなる操作は拒否される", async ({ page }) => 
   await open(page);
   await openTab(page, "projects");
   // 唯一の所有者である自分の共有を解除しようとする。
-  await page.locator('tr[data-principal] button[title*="共有を解除"]').first().click();
+  await page
+    .locator('tr[data-principal] button[title*="共有を解除"]')
+    .first()
+    .click();
   await expect(page.locator("#status")).toHaveAttribute("data-tone", "error");
   await expect(page.locator("#status")).toContainText("所有者");
   await expect(page.locator("tr[data-principal]")).toHaveCount(1);
@@ -593,7 +663,9 @@ test("日英を切り替えても結果が保たれる", async ({ page }) => {
   await page.click('.lang-toggle button[data-lang="en"]');
   await expect(page.locator("h1")).toHaveText("Effort Estimator");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
-  await expect(page.locator('.tabs button[data-tab="schedule"]')).toHaveText("Schedule");
+  await expect(page.locator('.tabs button[data-tab="schedule"]')).toHaveText(
+    "Schedule",
+  );
   await expect(rows(page)).toHaveCount(8);
 
   await page.click('.lang-toggle button[data-lang="ja"]');
@@ -604,10 +676,18 @@ test("未置換の i18n プレースホルダが画面に残らない", async ({
   await open(page);
   for (const language of ["en", "ja"]) {
     await page.click(`.lang-toggle button[data-lang="${language}"]`);
-    for (const tab of ["tasks", "members", "calendar", "distribution", "schedule"]) {
+    for (const tab of [
+      "tasks",
+      "members",
+      "calendar",
+      "distribution",
+      "schedule",
+    ]) {
       await openTab(page, tab);
       const text = await page.locator("body").innerText();
-      expect(text, `${language}/${tab} に差し込み漏れがある`).not.toMatch(/\{[a-z]+\}/);
+      expect(text, `${language}/${tab} に差し込み漏れがある`).not.toMatch(
+        /\{[a-z]+\}/,
+      );
     }
   }
 });
@@ -647,5 +727,246 @@ test("グラフが実際に描画され、キーボードでも読める", async
 
   await page.locator("#chart").focus();
   await page.keyboard.press("ArrowRight");
-  await expect(page.locator("#chart-tooltip")).toHaveAttribute("data-visible", "true");
+  await expect(page.locator("#chart-tooltip")).toHaveAttribute(
+    "data-visible",
+    "true",
+  );
+});
+
+/* ===== プロジェクト一覧 ===== */
+
+/** 一覧に新しいプロジェクトを 1 件作り、名前と期限を入れる。 */
+async function addProject(page, name, due) {
+  await page.click('button:text("新しいプロジェクト")');
+  await openTab(page, "projects");
+  const row = page.locator('tr[data-project][data-open="true"]');
+  await row.locator("input[type=text]").fill(name);
+  await row.locator("input[type=text]").blur();
+  await expect(
+    page.locator(`tr[data-project] input[value="${name}"]`),
+  ).toHaveCount(1);
+  if (due) {
+    await page
+      .locator('tr[data-project][data-open="true"] input[type=date]')
+      .fill(due);
+    await expect(
+      page.locator(`tr[data-project] input[value="${due}"]`),
+    ).toHaveCount(1);
+  }
+}
+
+/**
+ * 畳んであるカードを開く。開閉は状態として覚えられているので、
+ * 開いているものをもう一度押すと閉じてしまう。
+ */
+async function openPanel(page, title) {
+  const panel = page
+    .locator("details.foldout")
+    .filter({ hasText: title })
+    .first();
+  if (!(await panel.evaluate((element) => element.open))) {
+    await panel.locator("summary").click();
+  }
+  await expect(panel).toHaveAttribute("open", "");
+}
+
+const listRow = (page, name) =>
+  page
+    .locator("tr[data-project]")
+    .filter({ has: page.locator(`input[value="${name}"]`) });
+
+test("一覧に状態が出て、遅れているものが先頭に来る", async ({ page }) => {
+  await open(page);
+  await openTab(page, "projects");
+
+  // 見本には期限が入っているので、状態が「—」ではなく判定として出る。
+  const sample = listRow(page, "サンプル案件");
+  await expect(sample).toHaveAttribute(
+    "data-health",
+    /atRisk|late|onTrack|behindPace|inProgress/,
+  );
+
+  // 中身のないプロジェクトを足すと「タスクなし」になり、一覧の最後に回る。
+  await addProject(page, "空の案件", "");
+  const last = page.locator("tr[data-project]").last();
+  await expect(last).toHaveAttribute("data-health", "noTasks");
+
+  // 手当てが要るものは data-attention と行の強調が付き、先頭に来る。
+  const attention = page.locator('tr[data-project][data-attention="true"]');
+  if ((await attention.count()) > 0) {
+    await expect(page.locator("tr[data-project]").first()).toHaveAttribute(
+      "data-attention",
+      "true",
+    );
+  }
+});
+
+test("状態は色だけでなく記号と言葉でも示される", async ({ page }) => {
+  await open(page);
+  await openTab(page, "projects");
+
+  const badge = page.locator("tr[data-project] .badge").first();
+  // 記号と言葉が必ず揃っている (色が見分けられなくても伝わるように)。
+  await expect(badge.locator(".badge-icon")).toHaveCount(1);
+  await expect(badge.locator(".badge-label")).not.toBeEmpty();
+});
+
+test("一覧を名前・状態・権限で絞り込める", async ({ page }) => {
+  await open(page);
+  await openTab(page, "projects");
+  await addProject(page, "別の案件", "");
+
+  const count = page.locator(".filter-count");
+  await expect(count).toHaveAttribute("data-total", "2");
+
+  await page.fill('input[aria-label="名前で絞り込む"]', "別の");
+  await expect(count).toHaveAttribute("data-shown", "1");
+  await expect(listRow(page, "別の案件")).toHaveCount(1);
+
+  await page.fill('input[aria-label="名前で絞り込む"]', "");
+  await expect(count).toHaveAttribute("data-shown", "2");
+
+  // 「タスクなし」で絞ると、中身のないものだけが残る。
+  await page.selectOption('select[aria-label="状態"]', "noTasks");
+  await expect(count).toHaveAttribute("data-shown", "1");
+  await expect(
+    page.locator('tr[data-project][data-health="noTasks"]'),
+  ).toHaveCount(1);
+
+  // 条件に合わないときは、黙って空にせず理由を出す。
+  await page.selectOption('select[aria-label="状態"]', "done");
+  await expect(page.locator(".empty").first()).toContainText("条件に合う");
+});
+
+test("並び順を変えられる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "projects");
+  await addProject(page, "あああ案件", "");
+
+  await page.selectOption('select[aria-label="並び順"]', "name");
+  const names = await page
+    .locator("tr[data-project] input[type=text]")
+    .evaluateAll((inputs) => inputs.map((input) => input.value));
+  expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+});
+
+test("期限とグループは一覧から直せる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "projects");
+
+  // グループを作ってから割り当てる。
+  await openPanel(page, "プロジェクトのグループ");
+  await page.click('button:text("グループを作る") >> nth=-1');
+  const group = page.locator("[data-project-group]").first();
+  await group.locator('input[aria-label="グループ名"]').fill("第一部");
+  await group.locator('input[aria-label="グループ名"]').blur();
+  await expect(
+    page.locator('[data-project-group] input[value="第一部"]'),
+  ).toHaveCount(1);
+
+  const row = listRow(page, "サンプル案件");
+  await row
+    .locator('select[aria-label="グループ"]')
+    .selectOption({ label: "第一部" });
+  await expect(row.locator('select[aria-label="グループ"]')).toHaveValue(/.+/);
+
+  await row.locator('input[aria-label="期限"]').fill("2027-03-31");
+  await expect(row.locator('input[aria-label="期限"]')).toHaveValue(
+    "2027-03-31",
+  );
+  // 期限を先に延ばせば、間に合う見込みになる。
+  await expect(row).toHaveAttribute("data-health", "onTrack");
+});
+
+test("グループに配った権限はメンバー全員に効く", async ({ page }) => {
+  await open(page);
+  await openTab(page, "projects");
+
+  // 2 人目のアカウントを作る。
+  await page.click('button:text("アカウントを追加")');
+  const second = page.locator("tr[data-account]").nth(1);
+  await second.locator("input").fill("鈴木");
+  await second.locator("input").blur();
+  await expect(
+    page.locator('tr[data-account] input[value="鈴木"]'),
+  ).toHaveCount(1);
+
+  // チームを作って鈴木を入れる。
+  await openPanel(page, "アカウントのグループ");
+  await page.click('button:text("グループを作る") >> nth=0');
+  const team = page.locator("[data-user-group]").first();
+  await team.locator('input[aria-label="グループ名"]').fill("開発チーム");
+  await team.locator('input[aria-label="グループ名"]').blur();
+  await expect(
+    page.locator('[data-user-group] input[value="開発チーム"]'),
+  ).toHaveCount(1);
+  await page
+    .locator("[data-user-group] .member-pick")
+    .filter({ hasText: "鈴木" })
+    .locator("input")
+    .check();
+
+  // そのチームに閲覧権限を配る。
+  const addShare = page.locator('[data-add="share"]');
+  await addShare
+    .locator('select[aria-label="相手"]')
+    .selectOption({ label: "開発チーム (グループ)" });
+  await addShare
+    .locator('select[aria-label="権限"]')
+    .selectOption({ label: "閲覧者" });
+  await addShare.locator('button:text("共有する")').click();
+  await expect(page.locator('tr[data-principal^="group:"]')).toHaveCount(1);
+
+  // 鈴木として操作すると、チーム経由で見えて、編集はできない。
+  await actAs(page, "鈴木");
+  await expect(page.locator("tr[data-project]")).toHaveCount(1);
+  // 与えたのは閲覧だけ。内容のタブに移ると編集できないと分かる。
+  await openTab(page, "tasks");
+  await expect(page.locator("#readonly-banner")).toBeVisible();
+
+  // チームから外すと、一覧からも消える。
+  await openTab(page, "projects");
+  await actAs(page, "あなた");
+  await openPanel(page, "アカウントのグループ");
+  await page
+    .locator("[data-user-group] .member-pick")
+    .filter({ hasText: "鈴木" })
+    .locator("input")
+    .uncheck();
+  await actAs(page, "鈴木");
+  await expect(page.locator("tr[data-project]")).toHaveCount(0);
+});
+
+test("計算し直していないプロジェクトは数字を伏せて知らせる", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "projects");
+  // 中身が空のものは「タスクなし」で、計算し直しの対象にはならない。
+  await addProject(page, "空の案件", "");
+  await expect(page.locator("#stale-note")).toHaveCount(0);
+
+  // 控えのない状態を作るため、内容だけを入れて保存を待つ。
+  await openTab(page, "tasks");
+  await recompute(page, () => page.click('button:text("行を追加")'));
+  await openTab(page, "projects");
+  // 控えが付けば数字が出る。伏せたままにはならない。
+  await expect(listRow(page, "空の案件")).not.toHaveAttribute(
+    "data-health",
+    "unknown",
+  );
+});
+
+test("接続先を入れ違えると理由が出て、ローカルのまま続けられる", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "projects");
+  await openPanel(page, "サーバへの接続先");
+
+  await page.fill('input[aria-label="サーバの URL"]', "ftp://だめ");
+  await page.click('button[data-action="connect"]');
+  await expect(page.locator("#status")).toContainText("URL");
+  // ローカルのまま動き続ける。
+  await expect(page.locator("tr[data-project]")).toHaveCount(1);
 });

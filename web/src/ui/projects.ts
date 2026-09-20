@@ -1,29 +1,32 @@
 /**
- * プロジェクトタブ。
+ * プロジェクト一覧。
  *
  * ここだけは「いま開いている見積もり」ではなく、**その外側**を扱う。
- * どのプロジェクトがあり、誰がどの権限で触れて、どのアカウントで操作しているか。
- * サーバに繋いだときに効いてくるのはこの層の設定。
+ * どのプロジェクトがあり、どれが遅れていて、誰がどの権限で触れるか。
+ *
+ * 一覧に出るのは**自分が見られるものだけ**。実効的な役割の解決は API が
+ * 行うので、画面は返ってきたものを並べるだけでよい。
+ *
+ * 既定の並びは「手当てが要るものから」。遅れているプロジェクトが下のほうに
+ * 埋もれないようにするため。
  */
 
 import type { ApiClient } from "../api/client.ts";
-import type { Principal, ProjectRole, ProjectSummary, SystemRole, User } from "../api/types.ts";
-import { PROJECT_ROLES, principalKey, principalUser } from "../api/types.ts";
-import { canManage, type AppActions, type AppState } from "../app.ts";
+import type { ProjectRole, ProjectSummary } from "../api/types.ts";
+import { PROJECT_ROLES } from "../api/types.ts";
+import { PROJECT_SORTS, type AppActions, type AppState, type ProjectSort } from "../app.ts";
+import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { LocalApiClient } from "../api/local.ts";
 import { emptyDocument, newId } from "../model/project.ts";
-import { button, card, h, iconButton, select, textInput } from "./dom.ts";
+import { slackDays } from "../model/status.ts";
+import { renderAccounts } from "./accounts.ts";
+import { renderConnection } from "./connection.ts";
+import { button, card, dateInput, h, iconButton, select, textInput } from "./dom.ts";
+import { renderGroups } from "./groups.ts";
+import { healthBadge, healthSeverity, needsAttention } from "./health.ts";
+import { renderSharing } from "./sharing.ts";
 
-const ROLE_CHOICES = (): { value: ProjectRole; label: string }[] =>
-  [...PROJECT_ROLES].reverse().map((role) => ({ value: role, label: t(`role.${role}`) }));
-
-const SYSTEM_ROLE_CHOICES = (): { value: SystemRole; label: string }[] =>
-  (["member", "admin"] as const).map((role) => ({
-    value: role,
-    label: t(`systemRole.${role}`),
-  }));
-
+/** 日時を「いつ更新されたか」として短く出す。 */
 function formatMoment(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -33,18 +36,205 @@ function formatMoment(value: string): string {
   }).format(date);
 }
 
-function userName(state: AppState, id: string): string {
-  return state.users.find((user) => user.id === id)?.name ?? id;
+/* ===== 絞り込みと並べ替え ===== */
+
+function matches(state: AppState, project: ProjectSummary): boolean {
+  const filter = state.projectFilter;
+  const text = filter.text.trim().toLowerCase();
+  if (text !== "" && !project.name.toLowerCase().includes(text)) return false;
+  if (filter.group !== "") {
+    // `-` は「どのグループにも属さない」。
+    const group = project.groupId ?? "-";
+    if (group !== filter.group) return false;
+  }
+  if (filter.role !== "" && project.role !== filter.role) return false;
+  if (filter.health === "attention") return needsAttention(project.health);
+  if (filter.health !== "" && project.health !== filter.health) return false;
+  return true;
 }
 
-/** 権限を配った相手の表示名。グループは名前を持っていないので id を出す。 */
-function principalName(state: AppState, principal: Principal): string {
-  return principal.kind === "user" ? userName(state, principal.id) : principal.id;
+/** 空の値を最後に回して比べる (期限が無いものを先頭に出さない)。 */
+function compareOptional(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a < b ? -1 : 1;
 }
 
-/* ===== プロジェクト一覧 ===== */
+function sorted(projects: ProjectSummary[], order: ProjectSort): ProjectSummary[] {
+  const list = [...projects];
+  switch (order) {
+    case "attention":
+      // 重いものから。同じ重さなら、期限が近いほうを先に。
+      list.sort(
+        (a, b) =>
+          healthSeverity(a.health) - healthSeverity(b.health) ||
+          compareOptional(a.dueDate, b.dueDate) ||
+          a.name.localeCompare(b.name),
+      );
+      break;
+    case "due":
+      list.sort((a, b) => compareOptional(a.dueDate, b.dueDate) || a.name.localeCompare(b.name));
+      break;
+    case "updated":
+      list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      break;
+    case "name":
+      list.sort((a, b) => a.name.localeCompare(b.name));
+      break;
+  }
+  return list;
+}
 
-function renderProjectRow(
+function filterBar(state: AppState, actions: AppActions, shown: number): HTMLElement {
+  const filter = state.projectFilter;
+  const groupChoices = [
+    { value: "", label: t("projects.allGroups") },
+    ...state.projectGroups.map((group) => ({ value: group.id, label: group.name })),
+    { value: "-", label: t("projects.noGroup") },
+  ];
+  const healthChoices = [
+    { value: "", label: t("projects.allHealth") },
+    { value: "attention", label: t("projects.needsAttention") },
+    ...(
+      [
+        "late",
+        "behindPace",
+        "atRisk",
+        "unknown",
+        "inProgress",
+        "onTrack",
+        "done",
+        "noTasks",
+      ] as const
+    ).map((health) => ({ value: health, label: t(`health.${health}`) })),
+  ];
+  const roleChoices = [
+    { value: "", label: t("projects.allRoles") },
+    ...[...PROJECT_ROLES].reverse().map((role) => ({ value: role, label: t(`role.${role}`) })),
+  ];
+
+  return h("div", { class: "filter-bar" }, [
+    textInput(
+      filter.text,
+      (value) => {
+        actions.patch((draft) => {
+          draft.projectFilter.text = value;
+        });
+      },
+      {
+        class: "filter-text",
+        dataset: { focus: "projects:filter:text" },
+        attrs: {
+          type: "search",
+          placeholder: t("projects.search"),
+          "aria-label": t("projects.search"),
+        },
+      },
+    ),
+    select(
+      filter.group,
+      groupChoices,
+      (value) => {
+        actions.patch((draft) => {
+          draft.projectFilter.group = value;
+        });
+      },
+      { dataset: { focus: "projects:filter:group" }, attrs: { "aria-label": t("projects.group") } },
+    ),
+    select(
+      filter.health,
+      healthChoices,
+      (value) => {
+        actions.patch((draft) => {
+          draft.projectFilter.health = value as AppState["projectFilter"]["health"];
+        });
+      },
+      {
+        dataset: { focus: "projects:filter:health" },
+        attrs: { "aria-label": t("projects.status") },
+      },
+    ),
+    select(
+      filter.role,
+      roleChoices,
+      (value) => {
+        actions.patch((draft) => {
+          draft.projectFilter.role = value as ProjectRole | "";
+        });
+      },
+      { dataset: { focus: "projects:filter:role" }, attrs: { "aria-label": t("projects.myRole") } },
+    ),
+    select(
+      state.projectSort,
+      PROJECT_SORTS.map((order) => ({ value: order, label: t(`projects.sort.${order}`) })),
+      (value) => {
+        actions.patch((draft) => {
+          draft.projectSort = value;
+        });
+      },
+      { dataset: { focus: "projects:sort" }, attrs: { "aria-label": t("projects.sortBy") } },
+    ),
+    h("span", {
+      class: "filter-count",
+      dataset: { shown: String(shown), total: String(state.projects.length) },
+      text: t("projects.count", { shown, total: state.projects.length }),
+    }),
+  ]);
+}
+
+/* ===== 1 行 ===== */
+
+/**
+ * 完了見込みと、期限までの余裕。
+ *
+ * 余裕は完了日の下に小さく添える。列を 1 つ増やすより、「いつ終わるか」と
+ * 「間に合うか」が並んでいるほうが読みやすい。
+ */
+function finishCell(project: ProjectSummary): HTMLElement {
+  const finish = project.status?.finishP80 ?? null;
+  const slack = slackDays(project);
+  return h("td", { class: "finish" }, [
+    h("div", { class: "stack" }, [
+      finish === null
+        ? h("span", { class: "muted", text: "—" })
+        : h("span", { text: formatDayShort(finish, lang()) }),
+      slack === null
+        ? null
+        : h("span", {
+            class: `stack-sub${slack < 0 ? " short" : ""}`,
+            dataset: { slack: String(slack) },
+            title:
+              slack < 0
+                ? t("projects.slackShort", { days: -slack })
+                : t("projects.slackSpare", { days: slack }),
+            text: t("projects.slackDays", { days: slack }),
+          }),
+    ]),
+  ]);
+}
+
+function progressCell(project: ProjectSummary): HTMLElement {
+  const status = project.status;
+  if (status === null) return h("td", { class: "muted", text: "—" });
+  const ratio = Math.min(1, Math.max(0, status.progress));
+  return h("td", { class: "progress-cell" }, [
+    h(
+      "div",
+      {
+        class: "progress-track",
+        attrs: {
+          role: "img",
+          "aria-label": `${t("projects.progress")} ${formatPercent(ratio, lang(), 0)}`,
+        },
+      },
+      [h("div", { class: "progress-fill", style: { width: `${String(ratio * 100)}%` } })],
+    ),
+    h("span", { class: "progress-text", text: formatPercent(ratio, lang(), 0) }),
+  ]);
+}
+
+function renderRow(
   state: AppState,
   actions: AppActions,
   project: ProjectSummary,
@@ -52,97 +242,225 @@ function renderProjectRow(
   const open = state.open?.id === project.id;
   const client: ApiClient = state.client;
   const manage = project.role === "owner" || state.me.systemRole === "admin";
+  const status = project.status;
 
-  return h("tr", { dataset: { project: project.id, open: String(open) } }, [
-    h("td", {}, [
-      manage
-        ? textInput(
-            project.name,
-            (value) => {
-              const name = value.trim();
-              if (name === "" || name === project.name) return;
-              actions.run(async () => {
-                await client.updateProject(project.id, { name });
-                state.projects = await client.listProjects();
-                if (state.open?.id === project.id) state.open.name = name;
-              });
-            },
-            {
-              dataset: { focus: `project:${project.id}:name` },
-              attrs: { "aria-label": t("projects.name") },
-            },
-          )
-        : h("span", { text: project.name }),
-    ]),
-    h("td", { text: t(`role.${project.role}`) }),
-    h("td", { text: project.ownerNames.join("、") || "—" }),
-    h("td", { class: "num", text: String(project.taskCount) }),
-    h("td", { class: "num", text: String(project.memberCount) }),
-    h("td", { text: formatMoment(project.updatedAt) }),
-    h("td", { class: "actions" }, [
-      open
-        ? h("span", { class: "chip", text: t("projects.opened") })
-        : button(t("projects.open"), () => {
-            actions.run(async () => {
-              await actions.openProject(project.id);
-            });
+  const reload = async (): Promise<void> => {
+    state.projects = await client.listProjects();
+  };
+
+  const rename = (value: string): void => {
+    const name = value.trim();
+    if (name === "" || name === project.name) return;
+    actions.run(async () => {
+      await client.updateProject(project.id, { name });
+      await reload();
+      if (state.open?.id === project.id) state.open.name = name;
+    });
+  };
+
+  return h(
+    "tr",
+    {
+      class: needsAttention(project.health) ? "attention" : "",
+      dataset: {
+        project: project.id,
+        open: String(open),
+        health: project.health,
+        attention: String(needsAttention(project.health)),
+      },
+    },
+    [
+      h("td", {}, [healthBadge(project.health)]),
+      // 名前と「いつ更新されたか」は 1 つの話。2 行にして列を増やさない。
+      h("td", { class: "name-cell" }, [
+        h("div", { class: "stack" }, [
+          manage
+            ? textInput(project.name, rename, {
+                dataset: { focus: `project:${project.id}:name` },
+                attrs: { "aria-label": t("projects.name") },
+              })
+            : h("span", { text: project.name }),
+          h("span", {
+            class: "stack-sub",
+            text: t("projects.updatedAt", { at: formatMoment(project.updatedAt) }),
           }),
-      button(t("projects.duplicate"), () => {
-        actions.run(async () => {
-          const copy = await client.duplicateProject(
-            project.id,
-            newId(),
-            t("projects.copyOf", { name: project.name }),
-          );
-          state.projects = await client.listProjects();
-          await actions.openProject(copy.id);
-        });
-      }),
-      iconButton(
-        "×",
-        t("projects.delete"),
-        () => {
-          if (!confirm(t("projects.confirmDelete", { name: project.name }))) return;
-          actions.run(async () => {
-            await client.deleteProject(project.id);
-            state.projects = await client.listProjects();
-            const next = state.projects[0];
-            if (state.open?.id === project.id) {
-              if (next) await actions.openProject(next.id);
-              else state.open = null;
-            }
-          });
-        },
-        !manage,
-      ),
-    ]),
-  ]);
+        ]),
+      ]),
+      h("td", {}, [
+        manage
+          ? select(
+              project.groupId ?? "",
+              [
+                { value: "", label: t("projects.noGroup") },
+                ...state.projectGroups.map((group) => ({ value: group.id, label: group.name })),
+              ],
+              (value) => {
+                actions.run(async () => {
+                  await client.updateProject(
+                    project.id,
+                    value === "" ? { clearGroup: true } : { groupId: value },
+                  );
+                  await reload();
+                });
+              },
+              {
+                dataset: { focus: `project:${project.id}:group` },
+                attrs: { "aria-label": t("projects.group") },
+              },
+            )
+          : h("span", {
+              class: project.groupName === null ? "muted" : "",
+              text: project.groupName ?? "—",
+            }),
+      ]),
+      h("td", {}, [
+        manage
+          ? dateInput(
+              project.dueDate,
+              (value) => {
+                actions.run(async () => {
+                  await client.updateProject(
+                    project.id,
+                    value === null ? { clearDueDate: true } : { dueDate: value },
+                  );
+                  await reload();
+                });
+              },
+              {
+                dataset: { focus: `project:${project.id}:due` },
+                attrs: { "aria-label": t("projects.due") },
+              },
+            )
+          : h("span", {
+              class: project.dueDate === null ? "muted" : "",
+              text: project.dueDate ?? "—",
+            }),
+      ]),
+      finishCell(project),
+      progressCell(project),
+      h("td", { class: "num" }, [
+        status === null
+          ? h("span", { class: "muted", text: "—" })
+          : h("span", { text: formatNumber(status.effortP80, lang()) }),
+      ]),
+      // 所有者と自分の権限は「誰のものか」という 1 つの話なので、まとめる。
+      h("td", {}, [
+        h("div", { class: "stack" }, [
+          h("span", { text: project.ownerNames.join("、") || "—" }),
+          h("span", { class: "stack-sub", text: t(`role.${project.role}`) }),
+        ]),
+      ]),
+      h("td", { class: "actions" }, [
+        open
+          ? h("span", { class: "chip", text: t("projects.opened") })
+          : button(t("projects.open"), () => {
+              actions.run(async () => {
+                await actions.openProject(project.id);
+              });
+            }),
+        // 主な操作は「開く」。複製は短い言葉、削除は記号にして幅を詰める。
+        // 複製に記号を当てないのは、どの環境でも確実に出る形が無いため
+        // (豆腐になると何のボタンか分からなくなる)。
+        button(
+          t("projects.duplicateShort"),
+          () => {
+            actions.run(async () => {
+              const copy = await client.duplicateProject(
+                project.id,
+                newId(),
+                t("projects.copyOf", { name: project.name }),
+              );
+              await reload();
+              await actions.openProject(copy.id);
+            });
+          },
+          { class: "icon-text", title: t("projects.duplicate", { name: project.name }) },
+        ),
+        iconButton(
+          "×",
+          t("projects.delete", { name: project.name }),
+          () => {
+            if (!confirm(t("projects.confirmDelete", { name: project.name }))) return;
+            actions.run(async () => {
+              await client.deleteProject(project.id);
+              await reload();
+              const next = state.projects[0];
+              if (state.open?.id === project.id) {
+                if (next) await actions.openProject(next.id);
+                else state.open = null;
+              }
+            });
+          },
+          !manage,
+        ),
+      ]),
+    ],
+  );
 }
 
+/* ===== 一覧 ===== */
+
+const COLUMNS = (): { label: string; class?: string }[] => [
+  { label: t("projects.status") },
+  { label: t("projects.name") },
+  { label: t("projects.group") },
+  { label: t("projects.due") },
+  { label: t("projects.finishP80") },
+  { label: t("projects.progress") },
+  { label: `${t("projects.effortP80")} (${t("unit.days")})`, class: "num" },
+  { label: t("projects.owner") },
+  { label: t("col.actions") },
+];
+
 function renderProjectList(state: AppState, actions: AppActions): HTMLElement {
+  const shown = sorted(
+    state.projects.filter((project) => matches(state, project)),
+    state.projectSort,
+  );
+  const stale = state.projects.filter(
+    (project) => project.health === "unknown" && project.role !== "viewer",
+  );
+
   return card(t("projects.heading"), [
     h("p", { class: "hint", text: t("projects.hint") }),
+    filterBar(state, actions, shown.length),
     state.projects.length === 0
       ? h("p", { class: "empty", text: t("projects.empty") })
-      : h("div", { class: "table-scroll" }, [
-          h("table", {}, [
-            h("thead", {}, [
-              h("tr", {}, [
-                h("th", { text: t("projects.name") }),
-                h("th", { text: t("projects.myRole") }),
-                h("th", { text: t("projects.owner") }),
-                h("th", { class: "num", text: t("projects.tasks") }),
-                h("th", { class: "num", text: t("projects.members") }),
-                h("th", { text: t("projects.updated") }),
-                h("th", { text: t("col.actions") }),
+      : shown.length === 0
+        ? h("p", { class: "empty", text: t("projects.noMatch") })
+        : h("div", { class: "table-scroll" }, [
+            h("table", { class: "project-table" }, [
+              h("thead", {}, [
+                h(
+                  "tr",
+                  {},
+                  COLUMNS().map((column) =>
+                    h("th", { text: column.label, class: column.class ?? "" }),
+                  ),
+                ),
               ]),
+              h(
+                "tbody",
+                {},
+                shown.map((project) => renderRow(state, actions, project)),
+              ),
             ]),
-            h(
-              "tbody",
-              {},
-              state.projects.map((project) => renderProjectRow(state, actions, project)),
-            ),
           ]),
+    // 控えが内容と対応していないものは、数字を見せずに「再計算が必要」と出す。
+    // 古い数字を新しい内容のものとして見せないため。
+    stale.length === 0
+      ? null
+      : h("p", { class: "hint warn", id: "stale-note" }, [
+          `${t("projects.staleNote", { count: stale.length })} `,
+          button(
+            t("projects.recomputeAll"),
+            () => {
+              actions.run(async () => {
+                await actions.recomputeStatuses(stale.map((project) => project.id));
+              });
+            },
+            { dataset: { action: "recompute-all" } },
+          ),
         ]),
     h("div", { class: "row-actions" }, [
       button(
@@ -163,257 +481,13 @@ function renderProjectList(state: AppState, actions: AppActions): HTMLElement {
   ]);
 }
 
-/* ===== 共有 ===== */
-
-function renderSharing(state: AppState, actions: AppActions): HTMLElement {
-  const open = state.open;
-  if (open === null) {
-    return card(t("share.heading"), [h("p", { class: "empty", text: t("share.needProject") })]);
-  }
-  const manage = canManage(state) || state.me.systemRole === "admin";
-  const shared = new Set(open.access.map((entry) => principalKey(entry.principal)));
-  const candidates = state.users.filter(
-    (user) => !shared.has(principalKey(principalUser(user.id))),
-  );
-
-  const refresh = async (): Promise<void> => {
-    const access = await state.client.listAccess(open.id);
-    if (state.open) state.open.access = access;
-    state.projects = await state.client.listProjects();
-  };
-
-  return card(t("share.heading"), [
-    h("p", { class: "hint", text: t("share.hint") }),
-    state.client.remote ? null : h("p", { class: "hint", text: t("share.localHint") }),
-    open.access.length === 0
-      ? h("p", { class: "empty", text: t("share.notShared") })
-      : h("table", { class: "share-table" }, [
-          h("thead", {}, [
-            h("tr", {}, [
-              h("th", { text: t("share.user") }),
-              h("th", { text: t("share.role") }),
-              h("th", { text: t("col.actions") }),
-            ]),
-          ]),
-          h(
-            "tbody",
-            {},
-            open.access.map((entry) =>
-              h("tr", { dataset: { principal: principalKey(entry.principal) } }, [
-                h("td", {}, [
-                  principalName(state, entry.principal),
-                  entry.principal.kind === "group"
-                    ? h("span", { class: "muted", text: ` ${t("share.group")}` })
-                    : null,
-                  entry.principal.kind === "user" && entry.principal.id === state.me.id
-                    ? h("span", { class: "muted", text: ` ${t("accounts.you")}` })
-                    : null,
-                ]),
-                h("td", {}, [
-                  select(
-                    entry.role,
-                    ROLE_CHOICES(),
-                    (role) => {
-                      actions.run(async () => {
-                        await state.client.setAccess(open.id, entry.principal, role);
-                        await refresh();
-                      });
-                    },
-                    {
-                      dataset: { focus: `access:${principalKey(entry.principal)}` },
-                      attrs: { disabled: !manage, "aria-label": t("share.role") },
-                    },
-                  ),
-                ]),
-                h("td", { class: "actions" }, [
-                  iconButton(
-                    "×",
-                    t("share.remove", { name: principalName(state, entry.principal) }),
-                    () => {
-                      actions.run(async () => {
-                        await state.client.removeAccess(open.id, entry.principal);
-                        await refresh();
-                      });
-                    },
-                    !manage,
-                  ),
-                ]),
-              ]),
-            ),
-          ),
-        ]),
-    manage && candidates.length > 0
-      ? h("div", { class: "row-actions" }, [
-          (() => {
-            let pick = candidates[0]?.id ?? "";
-            let role: ProjectRole = "editor";
-            const userSelect = select(
-              pick,
-              candidates.map((user) => ({ value: user.id, label: user.name })),
-              (value) => {
-                pick = value;
-              },
-              { attrs: { "aria-label": t("share.user") } },
-            );
-            const roleSelect = select(
-              role,
-              ROLE_CHOICES(),
-              (value) => {
-                role = value;
-              },
-              { attrs: { "aria-label": t("share.role") } },
-            );
-            return h("div", { class: "inline-row" }, [
-              userSelect,
-              roleSelect,
-              button(
-                t("share.add"),
-                () => {
-                  actions.run(async () => {
-                    await state.client.setAccess(open.id, principalUser(pick), role);
-                    await refresh();
-                  });
-                },
-                { class: "primary" },
-              ),
-            ]);
-          })(),
-        ])
-      : null,
-  ]);
-}
-
-/* ===== アカウント ===== */
-
-function renderAccountRow(state: AppState, actions: AppActions, user: User): HTMLTableRowElement {
-  const admin = state.me.systemRole === "admin";
-  const isMe = user.id === state.me.id;
-
-  return h("tr", { dataset: { account: user.id } }, [
-    h("td", {}, [
-      admin || isMe
-        ? textInput(
-            user.name,
-            (value) => {
-              const name = value.trim();
-              if (name === "" || name === user.name) return;
-              actions.run(async () => {
-                await state.client.updateUser(user.id, { name });
-                state.users = await state.client.listUsers();
-                if (isMe) state.me = await state.client.me();
-              });
-            },
-            {
-              dataset: { focus: `account:${user.id}:name` },
-              attrs: { "aria-label": t("accounts.name") },
-            },
-          )
-        : h("span", { text: user.name }),
-      isMe ? h("span", { class: "muted", text: ` ${t("accounts.you")}` }) : null,
-    ]),
-    h("td", {}, [
-      select(
-        user.systemRole,
-        SYSTEM_ROLE_CHOICES(),
-        (systemRole) => {
-          actions.run(async () => {
-            await state.client.updateUser(user.id, { systemRole });
-            state.users = await state.client.listUsers();
-            if (isMe) state.me = await state.client.me();
-          });
-        },
-        {
-          dataset: { focus: `account:${user.id}:role` },
-          attrs: { disabled: !admin, "aria-label": t("accounts.systemRole") },
-        },
-      ),
-    ]),
-    h("td", { class: "actions" }, [
-      iconButton(
-        "×",
-        t("accounts.remove", { name: user.name }),
-        () => {
-          actions.run(async () => {
-            await state.client.deleteUser(user.id);
-            state.users = await state.client.listUsers();
-            state.projects = await state.client.listProjects();
-          });
-        },
-        !admin || isMe,
-      ),
-    ]),
-  ]);
-}
-
-function renderAccounts(state: AppState, actions: AppActions): HTMLElement {
-  const admin = state.me.systemRole === "admin";
-  const local = state.client instanceof LocalApiClient ? state.client : null;
-
-  return card(t("accounts.heading"), [
-    h("p", { class: "hint", text: t("accounts.hint") }),
-    h("table", { class: "account-table" }, [
-      h("thead", {}, [
-        h("tr", {}, [
-          h("th", { text: t("accounts.name") }),
-          h("th", { text: t("accounts.systemRole") }),
-          h("th", { text: t("col.actions") }),
-        ]),
-      ]),
-      h(
-        "tbody",
-        {},
-        state.users.map((user) => renderAccountRow(state, actions, user)),
-      ),
-    ]),
-    admin
-      ? h("div", { class: "row-actions" }, [
-          button(t("accounts.add"), () => {
-            actions.run(async () => {
-              await state.client.createUser({
-                id: newId(),
-                name: t("accounts.name"),
-                systemRole: "member",
-              });
-              state.users = await state.client.listUsers();
-            });
-          }),
-        ])
-      : null,
-    // ローカルにはログインが無い。権限の効き方を確かめられるようにしておく。
-    local === null
-      ? null
-      : h("div", { class: "act-as" }, [
-          h("span", { class: "field-label", text: t("accounts.actAs") }),
-          h("div", { class: "inline-row" }, [
-            select(
-              state.me.id,
-              state.users.map((user) => ({
-                value: user.id,
-                label: `${user.name} (${t(`systemRole.${user.systemRole}`)})`,
-              })),
-              (value) => {
-                actions.run(async () => {
-                  local.actAs(value);
-                  state.me = await state.client.me();
-                  state.projects = await state.client.listProjects();
-                  const still = state.projects.find((item) => item.id === state.open?.id);
-                  if (still) await actions.openProject(still.id);
-                  else if (state.projects[0]) await actions.openProject(state.projects[0].id);
-                  else state.open = null;
-                });
-              },
-              { attrs: { "aria-label": t("accounts.actAs") } },
-            ),
-          ]),
-          h("p", { class: "hint", text: t("accounts.actAsHint") }),
-        ]),
-  ]);
-}
-
 export function renderProjectsTab(state: AppState, actions: AppActions): HTMLElement {
   return h("div", {}, [
     renderProjectList(state, actions),
     renderSharing(state, actions),
+    // 一覧を主役にしたいので、管理まわりは畳んでおく。
+    renderGroups(state, actions),
     renderAccounts(state, actions),
+    renderConnection(state, actions),
   ]);
 }

@@ -21,7 +21,10 @@
   --offday: rgba(11, 11, 11, 0.035);
   --critical: #d03b3b;
   --warning: #fab219;
+  --serious: #ec835a;
   --good: #006300;
+  /* 状態バッジの緑。本文の緑より明るく、面で使うためのもの。 */
+  --good-fill: #0ca30c;
 
   --radius: 10px;
   --gap: 16px;
@@ -48,7 +51,9 @@
     --band-marker: #86b6ef;
     --offday: rgba(255, 255, 255, 0.045);
     --critical: #e66767;
+    --serious: #ec835a;
     --good: #0ca30c;
+    --good-fill: #0ca30c;
   }
 }
 
@@ -1060,5 +1065,236 @@ footer p {
   }
   .day {
     min-height: 40px;
+  }
+}
+
+/* ===== プロジェクト一覧 ===== */
+
+/*
+ * 状態は「記号 + 言葉 + 色」の 3 つで表す。色は状態専用の 4 色で、
+ * 系列の色とは別に取ってある。色が見分けられなくても、白黒で印刷しても、
+ * 同じことが伝わるようにするため、**色だけに意味を持たせない**。
+ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px 2px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.badge-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+.badge-critical {
+  background: color-mix(in srgb, var(--critical) 16%, transparent);
+  border-color: color-mix(in srgb, var(--critical) 45%, transparent);
+  color: var(--critical);
+  font-weight: 650;
+}
+.badge-serious {
+  background: color-mix(in srgb, var(--serious) 20%, transparent);
+  border-color: color-mix(in srgb, var(--serious) 50%, transparent);
+  color: var(--ink);
+  font-weight: 620;
+}
+.badge-warning {
+  background: color-mix(in srgb, var(--warning) 24%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+  color: var(--ink);
+}
+.badge-good {
+  background: color-mix(in srgb, var(--good-fill) 14%, transparent);
+  border-color: color-mix(in srgb, var(--good-fill) 40%, transparent);
+  color: var(--good);
+}
+.badge-neutral {
+  background: color-mix(in srgb, var(--series) 14%, transparent);
+  border-color: color-mix(in srgb, var(--series) 38%, transparent);
+  color: var(--series);
+}
+.badge-muted {
+  background: var(--surface-sunken);
+  border-color: var(--grid);
+  color: var(--ink-muted);
+}
+
+/*
+ * 9 列ぶんが素直に収まる幅を宣言しておく。これを書かないと、狭いときに
+ * 横スクロールにならず、列が潰れて右端が読めなくなる。
+ */
+.project-table {
+  min-width: 1040px;
+}
+/* 見出しは 2 行になってよい。横に伸ばすと、その列だけで紙幅を食ってしまう。
+   ただし数字の列は中身が短いので、見出しが 1 字ずつ折れないよう下限を置く。 */
+.project-table th {
+  white-space: normal;
+  line-height: 1.35;
+}
+.project-table th.num {
+  min-width: 86px;
+}
+.project-table td.actions,
+.project-table td:nth-child(8) {
+  white-space: nowrap;
+}
+.project-table td:nth-child(8) {
+  min-width: 96px;
+}
+/* 「いつ終わるか」と「間に合うか」、「名前」と「いつ更新されたか」のように、
+   1 つの話を 2 行にして列の数を抑える。 */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.stack-sub {
+  font-size: 11px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.stack-sub.short {
+  color: var(--critical);
+  font-weight: 650;
+}
+.project-table td {
+  vertical-align: middle;
+}
+.project-table .name-cell input {
+  min-width: 120px;
+}
+/* 9 列を既定の紙幅に収める。入力欄は放っておくと広がるので、ここで詰める。 */
+.project-table input[type="date"] {
+  width: 146px;
+}
+.project-table select {
+  max-width: 126px;
+}
+/* 記号の代わりに短い言葉を置くボタン。 */
+.icon-text {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+/* 手当てが要る行は、左端の帯でひと目で分かるようにする。
+   色だけでなく、行のなかのバッジにも記号と言葉が出ている。 */
+.project-table tr.attention > td:first-child {
+  box-shadow: inset 3px 0 0 var(--critical);
+}
+.project-table tr[data-health="behindPace"].attention > td:first-child,
+.project-table tr[data-health="atRisk"].attention > td:first-child {
+  box-shadow: inset 3px 0 0 var(--serious);
+}
+.project-table tr[data-open="true"] {
+  background: var(--surface-sunken);
+}
+td.num.short {
+  color: var(--critical);
+  font-weight: 650;
+}
+
+.progress-cell {
+  min-width: 110px;
+}
+.progress-track {
+  display: inline-block;
+  vertical-align: middle;
+  width: 64px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--grid);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--series);
+}
+.progress-text {
+  margin-left: 7px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-secondary);
+}
+
+/* ===== 畳んであるカード ===== */
+.foldout > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  list-style: none;
+  margin: -2px 0 0;
+}
+.foldout > summary::-webkit-details-marker {
+  display: none;
+}
+.foldout > summary::after {
+  content: "▾";
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+.foldout[open] > summary::after {
+  content: "▴";
+}
+.foldout-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+}
+.foldout > summary + .hint {
+  margin-top: 12px;
+}
+
+/* ===== グループ ===== */
+.group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.group-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px 12px;
+  background: var(--surface-sunken);
+}
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.group-name {
+  flex: 1 1 160px;
+  font-weight: 600;
+}
+.member-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.member-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+}
+.group-card .share-table {
+  background: var(--surface);
+  border-radius: 6px;
+}
+
+@media (max-width: 720px) {
+  .project-table {
+    min-width: 1060px;
+  }
+  .foldout-title {
+    font-size: 13px;
   }
 }

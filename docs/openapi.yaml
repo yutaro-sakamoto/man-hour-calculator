@@ -451,6 +451,9 @@ paths:
         所有者のみ。省略した項目は据え置き。`clearGroup` / `clearDueDate` を
         立てると、その項目を空に戻す (JSON の `null` と「省略」を区別しなくて
         済むようにするため)。
+
+        `updatedAt` は動かない。あれは**中身**が最後に変わった時刻で、
+        見出しの付け替えでは計算し直す必要が無いため。
       operationId: updateProject
       requestBody:
         required: true
@@ -496,8 +499,12 @@ paths:
 
         `status` を添えると、一覧に出す見通しの控えとして保存する。
         計算はクライアントが手元の WASM で行い、その結果をここに載せる
-        (サーバは中身を計算しない)。`status.basedOn` が保存時刻と食い違う
-        場合は、古い数字を新しい内容のものとして見せないために捨てる。
+        (サーバは中身を計算しない)。**添えた控えは、いま送っている内容から
+        計算されたものとして扱う**ので、`status.basedOn` はサーバが保存時刻で
+        上書きする (クライアントはサーバの時計を知らないため)。
+
+        控えを添えずに保存すると、控えは消える。中身が変わったのに数字が
+        古いままになるより、「再計算が必要」と出したほうが正直なため。
       operationId: saveDocument
       requestBody:
         required: true
@@ -793,7 +800,10 @@ components:
         basedOn:
           type: string
           format: date-time
-          description: 計算の元にした内容の updatedAt
+          readOnly: true
+          description: |
+            計算の元にした内容の updatedAt。**サーバが書く**ので、
+            送るときは空文字でよい。
         effortP50: { type: number, description: 総工数の中央値 (人日) }
         effortP80: { type: number, description: 総工数の 80 パーセンタイル }
         finishP50:
@@ -856,7 +866,10 @@ components:
         id: { type: string }
         name: { type: string }
         createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
+        updatedAt:
+          type: string
+          format: date-time
+          description: 中身が最後に保存された時刻 (見出しの変更では動かない)
         role:
           allOf: [{ $ref: "#/components/schemas/ProjectRole" }]
           description: 一覧を求めた本人の実効的な役割 (グループ経由を含む)

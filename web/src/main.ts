@@ -17,19 +17,32 @@
 import "./styles.css";
 
 import { P80_INDEX } from "./abi.ts";
+import type { ApiClient } from "./api/client.ts";
+import { HttpApiClient } from "./api/http.ts";
 import { LocalApiClient } from "./api/local.ts";
-import { ApiError, type ProjectDocument, type User } from "./api/types.ts";
+import { ApiError, type ProjectDocument, type ProjectStatus, type User } from "./api/types.ts";
 import { TABS, canWrite, type AppActions, type AppState, type AppWidgets } from "./app.ts";
 import { createDistributionChart } from "./charts/distribution.ts";
 import { createScheduleChart } from "./charts/schedule.ts";
-import { dayFromIso, formatDayShort, formatNumber, formatPercent, todayIso } from "./format.ts";
+import {
+  addDays,
+  dayFromIso,
+  formatDayShort,
+  formatNumber,
+  formatPercent,
+  todayIso,
+} from "./format.ts";
 import { lang, setLang, t } from "./i18n.ts";
+import { loadConnection, saveConnection, type Connection } from "./model/connection.ts";
 import { memberLabel, resolveMembers } from "./model/members.ts";
 import { emptyDocument, newId, sampleDocument, sampleName } from "./model/project.ts";
 import { buildScheduleModel } from "./model/schedule.ts";
+import { buildStatus } from "./model/status.ts";
 import { downloadCsv, downloadProject, projectToCsv, readFile } from "./model/storage.ts";
 import { csvToTasks } from "./model/storage.ts";
-import { buildRows, invalidRows } from "./model/tree.ts";
+import type { ResolvedMembers } from "./model/members.ts";
+import type { ScheduleModel } from "./model/schedule.ts";
+import { buildRows, invalidRows, type TreeRow } from "./model/tree.ts";
 import { renderCalendarTab } from "./ui/calendar.ts";
 import { button, clear, h } from "./ui/dom.ts";
 import { renderMembersTab } from "./ui/members.ts";
@@ -37,7 +50,14 @@ import { renderProjectsTab } from "./ui/projects.ts";
 import { renderDistributionTab } from "./ui/results.ts";
 import { renderScheduleTab } from "./ui/schedule.ts";
 import { renderTasksTab } from "./ui/tasks.ts";
-import { ComputeError, boot, buildRequest, compute, leafInputFromTask } from "./wasm.ts";
+import {
+  ComputeError,
+  boot,
+  buildRequest,
+  compute,
+  leafInputFromTask,
+  type ComputeResult,
+} from "./wasm.ts";
 
 const PREFIX_BINS = 256;
 const COMPUTE_DELAY_MS = 220;
@@ -59,7 +79,12 @@ const state: AppState = {
   client: new LocalApiClient(LOCAL_OWNER),
   me: placeholderUser,
   users: [],
+  userGroups: [],
+  projectGroups: [],
   projects: [],
+  projectFilter: { text: "", group: "", health: "", role: "" },
+  projectSort: "attention",
+  openPanels: {},
   open: null,
   document: emptyDocument(),
   rows: [],
@@ -127,47 +152,75 @@ function setStatus(text: string, tone: "info" | "error" = "info"): void {
   state.status = { text, tone };
 }
 
-function recompute(): void {
-  state.rows = buildRows(state.document.tasks);
-  const leaves = state.rows.filter((row) => row.leafIndex !== null);
-  const broken = invalidRows(state.rows);
+/** 1 回ぶんの計算結果。 */
+interface Computed {
+  rows: TreeRow[];
+  members: ResolvedMembers;
+  result: ComputeResult;
+  schedule: ScheduleModel;
+}
+
+/**
+ * 内容を 1 つ受け取って計算する。状態は触らない。
+ *
+ * 「いま開いているもの」と「一覧から計算し直すもの」で同じ道を通すために
+ * 切り出してある。失敗は投げるので、呼び出し側が事情に合わせて扱う。
+ */
+function runEngine(document: ProjectDocument): Computed {
+  const rows = buildRows(document.tasks);
+  const leaves = rows.filter((row) => row.leafIndex !== null);
+  const broken = invalidRows(rows);
+  if (broken.length > 0)
+    throw new EngineUnavailable(t("error.invalidRows", { count: broken.length }));
+  if (leaves.length === 0) throw new EngineUnavailable(t("status.noTasks"));
 
   // 担当者のいないタスクは「未割当」という仮の人員にまとめる。
-  state.members = resolveMembers(
-    state.document.calendar.members,
+  const members = resolveMembers(
+    document.calendar.members,
     leaves.map((row) => row.task),
   );
-  if (state.calendarMember !== null && state.calendarMember >= state.members.all.length) {
-    state.calendarMember = null;
-  }
-
-  if (broken.length > 0) {
-    state.result = null;
-    state.schedule = null;
-    setStatus(t("error.invalidRows", { count: broken.length }), "error");
-    return;
-  }
-  if (leaves.length === 0) {
-    state.result = null;
-    state.schedule = null;
-    setStatus(t("status.noTasks"), "error");
-    return;
-  }
-
-  const started = performance.now();
-  try {
-    const request = buildRequest(
-      leaves.map((row) => leafInputFromTask(row.task, state.members)),
-      state.document.calendar,
-      state.members,
-      state.document.settings,
+  const result = compute(
+    buildRequest(
+      leaves.map((row) => leafInputFromTask(row.task, members)),
+      document.calendar,
+      members,
+      document.settings,
       PREFIX_BINS,
-    );
-    state.result = compute(request);
+    ),
+  );
+  const schedule = buildScheduleModel(
+    result,
+    rows,
+    dayFromIso(document.calendar.today) ?? result.calendarStartDay,
+    t("tasks.untitled"),
+    members.all.map(memberLabel),
+  );
+  return { rows, members, result, schedule };
+}
+
+/** 計算できる状態にない、というだけの失敗。異常ではない。 */
+class EngineUnavailable extends Error {}
+
+function recompute(): void {
+  const started = performance.now();
+  let computed: Computed;
+  try {
+    computed = runEngine(state.document);
   } catch (error) {
+    // 途中まで分かっていることは残す。人員一覧は画面が使う。
+    state.rows = buildRows(state.document.tasks);
+    state.members = resolveMembers(
+      state.document.calendar.members,
+      state.rows.filter((row) => row.leafIndex !== null).map((row) => row.task),
+    );
     state.result = null;
     state.schedule = null;
-    if (error instanceof ComputeError) {
+    if (state.calendarMember !== null && state.calendarMember >= state.members.all.length) {
+      state.calendarMember = null;
+    }
+    if (error instanceof EngineUnavailable) {
+      setStatus(error.message, "error");
+    } else if (error instanceof ComputeError) {
       const key = `error.${error.status}` as `error.${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}`;
       const known = [1, 2, 3, 4, 5, 6, 7, 8].includes(error.status);
       setStatus(
@@ -180,13 +233,13 @@ function recompute(): void {
     return;
   }
 
-  state.schedule = buildScheduleModel(
-    state.result,
-    state.rows,
-    dayFromIso(state.document.calendar.today) ?? state.result.calendarStartDay,
-    t("tasks.untitled"),
-    state.members.all.map(memberLabel),
-  );
+  state.rows = computed.rows;
+  state.members = computed.members;
+  state.result = computed.result;
+  state.schedule = computed.schedule;
+  if (state.calendarMember !== null && state.calendarMember >= state.members.all.length) {
+    state.calendarMember = null;
+  }
   setStatus(
     t("status.done", {
       engine: t(
@@ -197,23 +250,67 @@ function recompute(): void {
   );
 }
 
+/**
+ * いまの計算結果から、一覧に出す控えを作る。
+ *
+ * 計算できていないとき (見積もりが不正、タスクが無い) は `undefined`。
+ * そのときは控え無しで保存され、一覧には「再計算が必要」と出る。
+ * 古い数字を新しい内容のものとして見せないため。
+ */
+function currentStatus(): ProjectStatus | undefined {
+  if (state.result === null) return undefined;
+  return buildStatus(
+    state.document,
+    state.rows,
+    state.result,
+    state.schedule,
+    new Date().toISOString(),
+  );
+}
+
+/**
+ * 保存待ち。プロジェクトを切り替える前に必ず流し切る。
+ *
+ * これが無いと、直前の編集が保存される前に切り替えが走って消えてしまう。
+ */
+let pendingSave: (() => Promise<void>) | null = null;
+
 /** 変更を API に保存する。閲覧権限しか無いときは何もしない。 */
 function scheduleSave(): void {
   const open = state.open;
   if (open === null || !canWrite(state)) return;
+
+  // いま画面にある内容と、その内容から計算した控えを捕まえておく。
+  // 送るころに state が別のプロジェクトを指していても取り違えない。
+  const id = open.id;
+  const document = state.document;
+  const status = currentStatus();
+
+  const save = async (): Promise<void> => {
+    pendingSave = null;
+    const summary = await state.client.saveDocument(id, document, status);
+    state.projects = state.projects.map((item) => (item.id === summary.id ? summary : item));
+    if (state.open?.id === id) state.open.updatedAt = summary.updatedAt;
+    // 保存で状態の判定が変わる。描き直さないと一覧が古いままになる。
+    render();
+  };
+
   window.clearTimeout(saveTimer);
+  pendingSave = save;
   saveTimer = window.setTimeout(() => {
-    void state.client
-      .saveDocument(open.id, state.document)
-      .then((summary) => {
-        state.projects = state.projects.map((item) => (item.id === summary.id ? summary : item));
-        if (state.open) state.open.updatedAt = summary.updatedAt;
-      })
-      .catch((error: unknown) => {
-        reportError(error);
-        render();
-      });
+    void save().catch((error: unknown) => {
+      reportError(error);
+      render();
+    });
   }, SAVE_DELAY_MS);
+}
+
+/** 保存待ちがあれば先に済ませる。 */
+async function flushSave(): Promise<void> {
+  const save = pendingSave;
+  if (save === null) return;
+  window.clearTimeout(saveTimer);
+  await save();
 }
 
 function reportError(error: unknown): void {
@@ -548,8 +645,17 @@ const actions: AppActions = {
   openProject(id) {
     return reopen(id);
   },
+  recomputeStatuses(ids) {
+    return recomputeStatuses(ids);
+  },
+  connect(connection) {
+    return connect(connection);
+  },
   run(action) {
-    void action()
+    // 何かを呼ぶ前に、溜まっている編集を先に送る。複製や切り替えが
+    // 直前の入力を取りこぼさないようにするため。
+    void flushSave()
+      .then(action)
       .catch((error: unknown) => {
         reportError(error);
       })
@@ -565,6 +671,8 @@ const actions: AppActions = {
 async function reloadProjects(): Promise<void> {
   state.projects = await state.client.listProjects();
   state.users = await state.client.listUsers();
+  state.userGroups = await state.client.listUserGroups();
+  state.projectGroups = await state.client.listProjectGroups();
 }
 
 async function openProject(project: {
@@ -598,6 +706,78 @@ async function reopen(id: string): Promise<void> {
   await openProject(await state.client.getProject(id));
 }
 
+/**
+ * 控えが古いプロジェクトを計算し直して保存する。
+ *
+ * 中身を読み込んで**手元の WASM で**回すので、サーバは何も計算しない。
+ * 計算できないもの (見積もりが不正など) は数字を伏せたまま残す。
+ * 勝手に何かを埋めるより、「再計算が必要」と出しつづけるほうが正直。
+ */
+async function recomputeStatuses(ids: readonly string[]): Promise<number> {
+  let updated = 0;
+  for (const id of ids) {
+    const project = await state.client.getProject(id);
+    let status: ProjectStatus | undefined;
+    try {
+      const computed = runEngine(project.document);
+      status = buildStatus(
+        project.document,
+        computed.rows,
+        computed.result,
+        computed.schedule,
+        new Date().toISOString(),
+      );
+    } catch {
+      continue;
+    }
+    await state.client.saveDocument(id, project.document, status);
+    updated += 1;
+  }
+  state.projects = await state.client.listProjects();
+  setStatus(t("projects.recomputed", { count: updated }));
+  return updated;
+}
+
+/* ===== 接続先 ============================================== */
+
+function makeClient(connection: Connection | null): ApiClient {
+  if (connection === null) return new LocalApiClient(LOCAL_OWNER);
+  return new HttpApiClient(
+    connection.token === ""
+      ? { baseUrl: connection.baseUrl }
+      : { baseUrl: connection.baseUrl, token: connection.token },
+  );
+}
+
+/**
+ * 接続先を切り替える。
+ *
+ * 繋がらなければ元に戻す。「繋いだつもりで実は何も保存されていない」
+ * という状態を作らないため。
+ */
+async function connect(connection: Connection | null): Promise<void> {
+  const previous = state.client;
+  state.client = makeClient(connection);
+  try {
+    state.me = await state.client.me();
+    await reloadProjects();
+  } catch (error) {
+    state.client = previous;
+    throw error;
+  }
+  saveConnection(connection);
+  state.open = null;
+  state.document = emptyDocument();
+  const first = state.projects[0];
+  if (first) await openProject(await state.client.getProject(first.id));
+  else refreshAll();
+  setStatus(
+    connection === null
+      ? t("conn.disconnected")
+      : t("conn.connected", { target: connection.baseUrl }),
+  );
+}
+
 /* ===== 起動 ================================================= */
 
 /** まっさらなときの初期化。持ち主のアカウントと見本のプロジェクトを作る。 */
@@ -624,7 +804,10 @@ async function seed(): Promise<void> {
     LocalApiClient.persist();
   }
   if ((await client.listProjects()).length === 0) {
-    await client.createProject(newId(), sampleName(lang()), sampleDocument(lang()));
+    const created = await client.createProject(newId(), sampleName(lang()), sampleDocument(lang()));
+    // 見本にも期限を入れておく。そうしないと一覧の「状態」が
+    // 「進行中」しか出ず、何を見る欄なのか伝わらない。
+    await client.updateProject(created.id, { dueDate: addDays(today, 60) });
   }
 }
 
@@ -642,6 +825,24 @@ async function main(): Promise<void> {
     );
     render();
     return;
+  }
+
+  // 接続先が覚えてあればサーバに繋ぐ。繋がらなければローカルで続ける
+  // (手元の分まで見られなくなるほうが困る)。
+  const saved = loadConnection();
+  if (saved !== null) {
+    state.client = makeClient(saved);
+    try {
+      state.me = await state.client.me();
+      await reloadProjects();
+      const first = state.projects[0];
+      if (first) await openProject(await state.client.getProject(first.id));
+      else refreshAll();
+      return;
+    } catch (error) {
+      state.client = new LocalApiClient(LOCAL_OWNER);
+      reportError(error);
+    }
   }
 
   try {
