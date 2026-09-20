@@ -75,7 +75,8 @@ export class HttpApiClient implements ApiClient {
       response = await fetch(`${this.baseUrl}${path}`, init);
     } catch (cause) {
       // 通信そのものが失敗した場合も、画面の扱いを揃えるため ApiError に包む。
-      throw new ApiError("unauthorized", `サーバに接続できません: ${String(cause)}`, 0);
+      // 届かなかったのであって、断られたのではない。
+      throw new ApiError("offline", String(cause), 0);
     }
 
     if (response.status === 204) return undefined as T;

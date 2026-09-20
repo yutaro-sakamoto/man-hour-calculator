@@ -52,6 +52,8 @@ pub struct AppState<C: Sql> {
     pub store: RwLock<SqlStore<C>>,
     pub auth: Auth,
     pub ui: Arc<str>,
+    /// API を呼んでよい別の置き場所。空なら**どこからも許さない**。
+    pub allow_origins: Vec<String>,
 }
 
 pub type App<C> = Arc<AppState<C>>;
@@ -258,9 +260,47 @@ struct DuplicateBody {
 
 /* ===== ルート ===== */
 
+/// 別の場所に置いた画面から呼べるようにする層。
+///
+/// サーバが自分で配る画面を開くぶんには同一オリジンなので、これは要らない。
+/// 必要になるのは、GitHub Pages などに置いた 1 枚の HTML から社内サーバを
+/// 呼ぶとき。**明示的に挙げた出どころだけ**を通す。`*` は使わない —
+/// トークンを載せる API を誰からでも呼べるようにする理由が無い。
+fn cors(origins: &[String]) -> Option<tower_http::cors::CorsLayer> {
+    if origins.is_empty() {
+        return None;
+    }
+    let parsed: Vec<axum::http::HeaderValue> = origins
+        .iter()
+        .filter_map(|origin| match origin.parse() {
+            Ok(value) => Some(value),
+            Err(_) => {
+                tracing::warn!(origin, "読み取れない出どころなので無視します");
+                None
+            }
+        })
+        .collect();
+    if parsed.is_empty() {
+        return None;
+    }
+    Some(
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(parsed)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::PATCH,
+                axum::http::Method::DELETE,
+            ])
+            .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+    )
+}
+
 /// 組み立てたルータ。テストからも同じものを使う。
 pub fn router<C: Sql + 'static>(app: App<C>) -> Router {
-    Router::new()
+    let allowed = cors(&app.allow_origins);
+    let routes = Router::new()
         .route("/v1/me", get(me::<C>))
         .route("/v1/users", get(list_users::<C>).post(create_user::<C>))
         .route(
@@ -316,8 +356,12 @@ pub fn router<C: Sql + 'static>(app: App<C>) -> Router {
         .route("/", get(ui::<C>))
         .fallback(get(ui::<C>))
         .layer(tower_http::catch_panic::CatchPanicLayer::new())
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .with_state(app)
+        .layer(tower_http::trace::TraceLayer::new_for_http());
+
+    match allowed {
+        Some(layer) => routes.layer(layer).with_state(app),
+        None => routes.with_state(app),
+    }
 }
 
 async fn healthz() -> Response {

@@ -884,9 +884,13 @@ test("グループに配った権限はメンバー全員に効く", async ({ pa
 
   // 2 人目のアカウントを作る。
   await page.click('button:text("アカウントを追加")');
-  const second = page.locator("tr[data-account]").nth(1);
-  await second.locator("input").fill("鈴木");
-  await second.locator("input").blur();
+  // 一覧は名前順。追加した行が 2 行目とはかぎらないので、既定の名前で探す。
+  const added = page
+    .locator("tr[data-account]")
+    .filter({ has: page.locator('input[value="名前"]') });
+  // 入力するとその場で保存され、画面が組み直される。行は名前で探しているので、
+  // ここで blur を待つと「名前」の行はもう無い。
+  await added.locator("input").fill("鈴木");
   await expect(
     page.locator('tr[data-account] input[value="鈴木"]'),
   ).toHaveCount(1);

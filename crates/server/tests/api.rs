@@ -29,6 +29,14 @@ struct Harness {
 
 impl Harness {
     fn new<C: Sql + 'static>(conn: C, auth_mode: Auth) -> Self {
+        Self::with_origins(conn, auth_mode, Vec::new())
+    }
+
+    fn with_origins<C: Sql + 'static>(
+        conn: C,
+        auth_mode: Auth,
+        allow_origins: Vec<String>,
+    ) -> Self {
         let store = SqlStore::open(conn).expect("開ける");
         let mut tokens = Vec::new();
         for (id, name, role) in [
@@ -53,6 +61,7 @@ impl Harness {
             store: RwLock::new(store),
             auth: auth_mode,
             ui: Arc::from("<!doctype html><title>画面</title>"),
+            allow_origins,
         });
         Self {
             app: mhc_server::http::router(app),
@@ -660,4 +669,79 @@ async fn postgres_behaves_the_same_as_sqlite() {
     assert_eq!(listed[0]["name"], "案件");
     assert_eq!(listed[0]["role"], "editor");
     assert_eq!(listed[0]["ownerNames"], json!(["佐藤"]));
+}
+
+/* ===== 別の場所に置いた画面から呼ぶ ===== */
+
+#[tokio::test]
+async fn other_origins_are_refused_unless_they_are_named() {
+    // 既定ではどこからも許さない。サーバが自分で配る画面を開くぶんには
+    // 同一オリジンなので、これで困ることはない。
+    let server = sqlite();
+    let request = HttpRequest::builder()
+        .method("OPTIONS")
+        .uri("/v1/projects")
+        .header("Origin", "https://pages.example")
+        .header("Access-Control-Request-Method", "GET")
+        .body(Body::empty())
+        .unwrap();
+    let response = server.app.clone().oneshot(request).await.unwrap();
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none(),
+        "許していない出どころに許可を返してはいけない"
+    );
+}
+
+#[tokio::test]
+async fn a_named_origin_may_call_the_api() {
+    let server = Harness::with_origins(
+        SqliteConn::in_memory().unwrap(),
+        Auth::Token,
+        vec!["https://pages.example".into()],
+    );
+
+    // 下調べ (preflight) に答えること。
+    let request = HttpRequest::builder()
+        .method("OPTIONS")
+        .uri("/v1/projects")
+        .header("Origin", "https://pages.example")
+        .header("Access-Control-Request-Method", "GET")
+        .header("Access-Control-Request-Headers", "authorization")
+        .body(Body::empty())
+        .unwrap();
+    let response = server.app.clone().oneshot(request).await.unwrap();
+    let headers = response.headers();
+    assert_eq!(
+        headers
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://pages.example")
+    );
+    assert!(
+        headers
+            .get("access-control-allow-headers")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().contains("authorization")),
+        "トークンを載せられなければ意味がない"
+    );
+
+    // 挙げていない出どころには許可を返さない。
+    let request = HttpRequest::builder()
+        .method("OPTIONS")
+        .uri("/v1/projects")
+        .header("Origin", "https://よそ.example")
+        .header("Access-Control-Request-Method", "GET")
+        .body(Body::empty())
+        .unwrap();
+    let response = server.app.clone().oneshot(request).await.unwrap();
+    assert_ne!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://よそ.example")
+    );
 }

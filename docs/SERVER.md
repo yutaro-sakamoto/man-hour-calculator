@@ -40,6 +40,7 @@ mhc-server --db postgres://user:pw@host/mhc       # PostgreSQL に保存する
 mhc-server --auth header --auth-header X-Forwarded-User   # SSO の後ろに置く
 mhc-server --auth none                            # 手元で試すときだけ
 mhc-server --ui ./dist/index.html                 # 埋め込みではなくファイルを配る
+mhc-server --allow-origin https://example.github.io       # 別の場所の画面から呼ぶ
 ```
 
 | 項目 | 既定 | 備考 |
@@ -48,6 +49,7 @@ mhc-server --ui ./dist/index.html                 # 埋め込みではなくフ�
 | `--listen` | `127.0.0.1:8080` | **既定では外に出さない**。外に出すときだけ変える |
 | `--auth` | `token` | `token` / `header` / `none` |
 | `--admin-id` | `admin` | 最初に作る管理者 |
+| `--allow-origin` | (なし) | 別の場所に置いた画面から呼ぶときだけ。繰り返し指定できる |
 
 ## 認証
 
@@ -82,6 +84,28 @@ mhc-server --auth header --auth-header X-Forwarded-User
 ### `none`
 
 繋いだ全員が管理者として操作できる。起動時に警告が出る。手元で試すとき専用。
+
+## 別の場所に置いた画面から呼ぶ
+
+サーバが自分で配る画面 (`http://…:8080/`) を開くぶんには、**何も要らない**。
+同じ出どころなのでブラウザは黙って通す。これが普通の使い方。
+
+GitHub Pages に置いた HTML や、手元に保存した 1 枚の HTML
+(`file://`) から社内サーバを呼びたいときだけ、その出どころを挙げる。
+
+```sh
+mhc-server --allow-origin https://example.github.io
+mhc-server --allow-origin null            # file:// から開いた HTML
+```
+
+省略すると**どこからも許さない**。`*` は用意していない — トークンを載せる
+API を誰からでも呼べるようにする理由が無いため。
+
+> `null` は `file://` で開いたページの出どころだが、**サンドボックスの
+> iframe など別のものも `null` を名乗る**。手元で試すとき以外には使わないこと。
+
+画面側は「サーバへの接続先」に URL とトークンを入れる。サーバが配る画面なら
+URL は既に入っている。繋がらなければローカルに戻り、理由が出る。
 
 ## 保存先
 

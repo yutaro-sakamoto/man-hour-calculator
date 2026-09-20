@@ -158,6 +158,8 @@ const ja = {
   "api.invalid": "入力が不正です ({message})",
   "api.conflict": "操作できません ({message})",
   "api.internal": "サーバ側で問題が起きました ({message})",
+  "api.offline":
+    "サーバに届きませんでした。URL と、サーバが動いているかを確かめてください ({message})",
 
   "members.you": "あなた",
   "tab.members": "人員",
@@ -566,6 +568,7 @@ const en: Dictionary = {
   "api.invalid": "Invalid input ({message})",
   "api.conflict": "Cannot do that ({message})",
   "api.internal": "The server ran into a problem ({message})",
+  "api.offline": "Could not reach the server. Check the URL and whether it is running ({message})",
 
   "members.you": "You",
   "tab.members": "People",

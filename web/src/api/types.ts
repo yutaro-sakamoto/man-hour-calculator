@@ -157,9 +157,15 @@ export interface Project {
   document: ProjectDocument;
 }
 
-/** 失敗の種類。HTTP のステータスに対応する。 */
+/**
+ * 失敗の種類。HTTP のステータスに対応する。
+ *
+ * `offline` だけはサーバから返らない。**要求がサーバに届かなかった**ときに
+ * 画面側で付ける。通信の失敗を「ログインが必要」と言ってしまうと、
+ * 直しようのないところを直そうとさせてしまうため。
+ */
 export type ApiErrorCode =
-  "unauthorized" | "forbidden" | "notFound" | "invalid" | "conflict" | "internal";
+  "unauthorized" | "forbidden" | "notFound" | "invalid" | "conflict" | "internal" | "offline";
 
 export class ApiError extends Error {
   constructor(

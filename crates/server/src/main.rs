@@ -70,8 +70,15 @@ fn start<C: Sql + 'static>(cli: Cli, conn: C) -> Result<(), String> {
         store: RwLock::new(store),
         auth,
         ui,
+        allow_origins: cli.allow_origins.clone(),
     });
 
+    if !cli.allow_origins.is_empty() {
+        println!(
+            "別の場所の画面から呼べるようにします: {}",
+            cli.allow_origins.join(", ")
+        );
+    }
     println!("保存先: {label}");
     println!("待ち受け: http://{}", cli.listen);
     serve(app, cli.listen)
