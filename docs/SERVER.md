@@ -139,4 +139,4 @@ PostgreSQL を立てたジョブがあるので、方言の食い違いはそこ
 
 `Store` の後ろを差し替えれば、API Gateway + Lambda + DynamoDB でも動く形に
 してある (`project_metas()` が中身を読まないのはそのため)。
-設計は [AWS.md](AWS.md) に。
+構成と手順は [AWS.md](AWS.md) に書いてある (実装はまだ)。
