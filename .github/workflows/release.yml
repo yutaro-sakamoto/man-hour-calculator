@@ -356,7 +356,7 @@ jobs:
       # 「この成果物は、この リポジトリの この ワークフローが作った」ことを
       # 署名付きで残す。受け取った側は `gh attestation verify` で確かめられる。
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             out/*.tar.gz
