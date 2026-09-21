@@ -638,6 +638,10 @@ async fn postgres_behaves_the_same_as_sqlite() {
         for table in [
             "schema_version",
             "api_tokens",
+            // 添付は版 4 で作り直している。**両方の名前**を落とさないと、
+            // 2 回目の走行で版 3 の CREATE TABLE が「既にある」で落ちる。
+            "attachments",
+            "attachments_v4",
             "comments",
             "project_access",
             "projects",
@@ -1084,4 +1088,52 @@ fn a_write_that_fails_part_way_leaves_the_previous_row_alone() {
         .expect("ある");
     assert_eq!(back.body, "最初の本文", "落ちたのに本文が書き換わっている");
     assert_eq!(back.attachments.len(), 1, "落ちたのに添付が消えている");
+}
+
+/// 書き込むメソッドが、1 つ残らずトランザクションに入っていること。
+///
+/// `remove_project_group` だけ囲い忘れていた。個別に「途中で落としてみる」
+/// テストを書くのは相手によっては難しいので、**構造として見張る**。
+/// 同じ見落としが次に起きたとき、ここで止まる。
+#[test]
+fn every_mutating_store_method_runs_in_a_transaction() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/store/mod.rs"))
+        .expect("読める");
+
+    // `impl Store for &SqlStore<C>` の本文だけを見る。
+    let start = source
+        .find("impl<C: Sql> Store for &SqlStore<C>")
+        .expect("Store の実装がある");
+    let body = &source[start..];
+
+    let mut missing: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    let mut guarded = false;
+    let close = |current: &mut Option<String>, guarded: bool, missing: &mut Vec<String>| {
+        if let Some(name) = current.take() {
+            if !guarded {
+                missing.push(name);
+            }
+        }
+    };
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("fn ") {
+            close(&mut current, guarded, &mut missing);
+            let name = rest.split('(').next().unwrap_or("");
+            // 読み取りだけのものは囲う必要がない。
+            current =
+                (name.starts_with("put_") || name.starts_with("remove_")).then(|| name.to_string());
+            guarded = false;
+        }
+        if trimmed.contains("self.transaction()?") {
+            guarded = true;
+        }
+    }
+    close(&mut current, guarded, &mut missing);
+
+    assert!(
+        missing.is_empty(),
+        "トランザクションに入っていない書き込み: {missing:?}"
+    );
 }

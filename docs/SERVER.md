@@ -154,7 +154,11 @@ PostgreSQL を立てたジョブがあるので、方言の食い違いはそこ
 
 - `GET /healthz` は認証なしで答える (`{"status":"ok","api":…,"schema":…}`)。
   死活監視やロードバランサの検査に使う
-- ログは `tracing`。`RUST_LOG=debug` などで細かくできる
+- ログは `tracing`。**いまの既定ではリクエストのログは出ない** —
+  既定のフィルタが `info,tower_http=warn` で、`TraceLayer` が出すものは
+  DEBUG のため。見たいときは `RUST_LOG=info,tower_http=debug` を付ける。
+  起動時の「保存先」「待ち受け」「管理者トークン」は標準出力に直接出る
+  (`tracing` を通らない)
 - Ctrl-C で、処理中のリクエストを終えてから止まる
 - 1 つのリクエストが panic しても、そのリクエストが 500 になるだけで
   プロセスは落ちない (`CatchPanicLayer` と `panic = "unwind"`)
