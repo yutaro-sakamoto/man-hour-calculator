@@ -598,6 +598,10 @@ impl<C: Sql> Store for &SqlStore<C> {
         if self.project_group(id)?.is_none() {
             return Ok(false);
         }
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        // ここだけ囲い忘れていた。3 文の途中で落ちると「付与だけ消えて
+        // グループは残る」状態が残る。
+        let tx = self.transaction()?;
         let key = Value::text(id.as_str());
         // 配下のプロジェクトは消さない。所属だけ外す。
         self.sql().execute(
@@ -610,6 +614,7 @@ impl<C: Sql> Store for &SqlStore<C> {
         )?;
         self.sql()
             .execute("DELETE FROM project_groups WHERE id = ?", &[key])?;
+        tx.commit()?;
         Ok(true)
     }
 
