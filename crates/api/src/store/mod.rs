@@ -12,14 +12,50 @@
 //!   (サーバは書き込みロック、将来の DynamoDB なら条件付き書き込み)。
 //! - **一覧は中身を読まない。** [`Store::project_metas`] は `Document` を含まない。
 //!   プロジェクトが増えても一覧が重くならないようにするため。
+//! - **並びを正規化する。** 権限とメンバーの並びは、入れた順ではなく
+//!   [`normalize_access`] / [`normalize_members`] の順で返す。SQL の
+//!   `ORDER BY` が既にそうなっているし、揃えておかないと「同じ操作をしたのに
+//!   ローカル版とサーバ版で応答が違う」ことになる。
+//! - **数え直さない。** `put_project` は渡された `task_count` /
+//!   `member_count` をそのまま保存する。中身から数え直すのは
+//!   [`crate::model::Project::refresh_counts`] を呼ぶ側の仕事。
+//!
+//! この約束は [`conformance`] が実装ごとに確かめている。**新しい保存先を
+//! 足すときは、まずそれを通すこと。**
+
+#[cfg(any(test, feature = "conformance"))]
+pub mod conformance;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-    Comment, CommentId, Project, ProjectGroup, ProjectGroupId, ProjectId, ProjectMeta, User,
-    UserGroup, UserGroupId, UserId,
+    AccessEntry, Comment, CommentId, Project, ProjectGroup, ProjectGroupId, ProjectId, ProjectMeta,
+    User, UserGroup, UserGroupId, UserId,
 };
+
+/// 権限の並びを揃える。
+///
+/// `SqlStore` は `ORDER BY principal_kind, principal_id` で読むので、
+/// 入れた順は残らない。他の実装もこれに合わせる。揃っていないと、
+/// 同じデータでもローカル版とサーバ版で応答の並びが変わる。
+///
+/// 同じ相手を 2 度含めてはいけない (SQL では主キーが重複して落ちる)。
+/// 重複を除くのは呼び出し側 —— [`crate::service::Service`] の仕事。
+pub fn normalize_access(access: &mut [AccessEntry]) {
+    access.sort_by(|a, b| {
+        a.principal
+            .kind()
+            .cmp(b.principal.kind())
+            .then_with(|| a.principal.id().cmp(b.principal.id()))
+    });
+}
+
+/// グループのメンバーの並びを揃える。理由は [`normalize_access`] と同じ
+/// (`ORDER BY user_id`)。
+pub fn normalize_members(members: &mut [UserId]) {
+    members.sort();
+}
 
 /// 永続化の口。
 pub trait Store {
@@ -260,7 +296,8 @@ impl Store for MemoryStore {
         Ok(self.user_groups.iter().find(|g| &g.id == id).cloned())
     }
 
-    fn put_user_group(&mut self, group: UserGroup) -> ApiResult<()> {
+    fn put_user_group(&mut self, mut group: UserGroup) -> ApiResult<()> {
+        normalize_members(&mut group.members);
         match self.user_groups.iter_mut().find(|slot| slot.id == group.id) {
             Some(slot) => *slot = group,
             None => self.user_groups.push(group),
@@ -293,7 +330,8 @@ impl Store for MemoryStore {
         Ok(self.project_groups.iter().find(|g| &g.id == id).cloned())
     }
 
-    fn put_project_group(&mut self, group: ProjectGroup) -> ApiResult<()> {
+    fn put_project_group(&mut self, mut group: ProjectGroup) -> ApiResult<()> {
+        normalize_access(&mut group.access);
         match self
             .project_groups
             .iter_mut()
@@ -334,7 +372,10 @@ impl Store for MemoryStore {
     }
 
     fn put_project(&mut self, mut project: Project) -> ApiResult<()> {
-        project.refresh_counts();
+        // **数え直さない。** 中身を変えた側 (`Service`) が
+        // `refresh_counts()` を呼んでから渡す。ここで数えると、
+        // SQL の実装と振る舞いが分かれる (あちらは列をそのまま書く)。
+        normalize_access(&mut project.meta.access);
         match self
             .projects
             .iter_mut()
@@ -389,6 +430,15 @@ impl Store for MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `MemoryStore` が `Store` の約束を守っていること。
+    /// 同じ検査を `SqlStore` にも当てている
+    /// (`crates/server/tests/store_conformance.rs`)。
+    #[test]
+    fn the_memory_store_keeps_the_contract() {
+        super::conformance::run_all(MemoryStore::new);
+    }
+
     use crate::model::{AccessEntry, Principal, ProjectRole, SystemRole};
 
     const NOW: &str = "2026-09-20T00:00:00Z";
@@ -543,6 +593,9 @@ mod tests {
             end_date: None,
             assignee_id: None,
         });
+        // 数えるのは呼ぶ側。`Store` は渡された数をそのまま持つ
+        // (`conformance::counts_are_stored_as_given`)。
+        p.refresh_counts();
         store.put_project(p).unwrap();
 
         let metas = store.project_metas().unwrap();
