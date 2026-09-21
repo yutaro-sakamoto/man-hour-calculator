@@ -34,11 +34,13 @@ jobs:
   # 変異を入れても「意味のある間違い」になりにくい。
   run:
     name: mutants (shard ${{ matrix.shard }}/4)
+    # cargo-mutants の --shard は **0 始まり** (k < n)。1..4 と書くと
+    # 4/4 が `shard k must be less than n` で落ちる。
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
 
