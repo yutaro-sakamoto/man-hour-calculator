@@ -313,6 +313,17 @@ jobs:
       - name: Check
         run: ./spec/check.sh
 
+  # 文書・仕様・コードのずれを、機械で見つけられるぶんだけ潰す。
+  # モデルを使わないので一瞬で終わる。人の目や重いレビューは、これを
+  # 通してから。
+  sync:
+    name: docs and spec drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check
+        run: ./scripts/check-sync.sh
+
   # 「どこを通っていないか分からない」を潰す。閾値は全体で 1 つだけ置き、
   # 内訳はログに出す。crates/xtask と crates/wasm (ビルド道具と FFI) は
   # 数字を押し下げるが、除くと「除いたところが腐る」ので入れたまま。

@@ -17,10 +17,24 @@ if [ ! -f "$JAR" ]; then
     "https://github.com/tlaplus/tlaplus/releases/download/${TLA_VERSION}/tla2tools.jar"
 fi
 
+# **1 つも検査せずに緑にならないこと。** `.tla` が消えても `.cfg` が消えても、
+# 素直に書くと「何もせず成功」になる。それでは見張りにならない。
+shopt -s nullglob
+specs=(*.tla)
+if [ ${#specs[@]} -eq 0 ]; then
+  echo "検査する仕様がありません (spec/*.tla)" >&2
+  exit 1
+fi
+
 status=0
-for spec in *.tla; do
+checked=0
+for spec in "${specs[@]}"; do
   name="${spec%.tla}"
-  [ -f "$name.cfg" ] || continue
+  if [ ! -f "$name.cfg" ]; then
+    echo "==> $name: .cfg がありません" >&2
+    status=1
+    continue
+  fi
   echo
   echo "==> $name"
   # -deadlock: このモデルは「もう何もできない」状態に達してよい
@@ -32,6 +46,13 @@ for spec in *.tla; do
     echo "==> $name: 反例あり" >&2
     status=1
   fi
+  checked=$((checked + 1))
 done
 
+if [ "$checked" -eq 0 ]; then
+  echo "1 つも検査できませんでした" >&2
+  exit 1
+fi
+echo
+echo "検査した仕様: $checked"
 exit "$status"
