@@ -52,6 +52,24 @@ P80 完了日                        2026-12-11   ← 休日と予定を踏ま�
   書き出せる。CSV の入出力、ブラウザへの自動保存
 - 日本語 / English 切り替え、ダークモードは OS の設定に追従
 
+## 手に入れる
+
+`v*.*.*` のタグを打つたびに
+[Release](https://github.com/yutaro-sakamoto/man-hour-calculator/releases) が作られ、
+次のものが添えられます。
+
+- **1 枚の HTML** — ダウンロードしてダブルクリックするだけ
+- **サーバの単体バイナリ** — Linux と Windows、x86_64 と arm64
+  （Linux は静的リンクの musl 版も）
+- **SBOM**（CycloneDX。Rust 側と npm 側の両方）、`cargo audit` の結果、
+  依存とライセンスの一覧、`SHA256SUMS`
+- **署名された出所証明**（SLSA provenance）。
+  `gh attestation verify <ファイル> --repo yutaro-sakamoto/man-hour-calculator` で確かめられます
+
+サーバのバイナリは `cargo auditable` で組んであるので、依存の一覧が
+**バイナリのなかに**入っています。手元で `cargo audit bin mhc-server` と
+すれば読み出せます。
+
 ## 使う
 
 **<https://yutaro-sakamoto.github.io/man-hour-calculator/>** に紹介ページがあり、
@@ -335,7 +353,6 @@ E[総] = p·E[当初] + (1 − p)·E[当初] = E[当初]
 - AWS（API Gateway + Lambda + DynamoDB）への配置。構成と手順は `docs/AWS.md` に
   書いてあり、`Store` の実装とハンドラの外側だけが残っています
 - タスク間相関（単一ファクター・ガウシアンコピュラ）。ABI には場所を確保済み
-- タグ push で `dist/app.html` を Release に添付
 
 ## ライセンス
 

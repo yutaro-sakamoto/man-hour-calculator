@@ -56,6 +56,22 @@ Finish date, P80              2026-12-11           ← holidays and meetings inc
   (`.mhcall.json`), CSV import and export, automatic saving into the browser
 - Japanese / English, and dark mode following the OS setting
 
+## Getting it
+
+Every `v*.*.*` tag builds a [Release](https://github.com/yutaro-sakamoto/man-hour-calculator/releases)
+carrying:
+
+- **the single HTML file** — download, double-click, done
+- **the server as a standalone binary** — Linux and Windows, x86_64 and arm64 (Linux also
+  ships a statically linked musl build)
+- **an SBOM** (CycloneDX) for both the Rust and the npm side, a `cargo audit` report, a
+  dependency and licence inventory, and `SHA256SUMS`
+- **signed build provenance** (SLSA). Verify with
+  `gh attestation verify <file> --repo yutaro-sakamoto/man-hour-calculator`
+
+The server binaries are built with `cargo auditable`, so the dependency list travels
+*inside* the binary: `cargo audit bin mhc-server` reads it back on your machine.
+
 ## Using it
 
 There is an introduction page at
@@ -348,7 +364,6 @@ task's cumulative sum, within 1% of the range" effectively backs the numerical c
 - Deploying to AWS (API Gateway + Lambda + DynamoDB). The design and the steps are written
   up in `docs/AWS.md`; what is left is the `Store` implementation and the outer handler
 - Correlation between tasks (a single-factor Gaussian copula). The ABI has room reserved
-- Attaching `dist/app.html` to a Release on tag push
 
 ## License
 
