@@ -21,7 +21,16 @@ import {
 import type { AppActions, AppState } from "../app.ts";
 import { t } from "../i18n.ts";
 import { newId } from "../model/project.ts";
-import { button, checkbox, foldout, h, iconButton, select, textInput, type Child } from "./dom.ts";
+import {
+  button,
+  checkbox,
+  committedTextInput,
+  foldout,
+  h,
+  iconButton,
+  select,
+  type Child,
+} from "./dom.ts";
 import { principalName } from "./sharing.ts";
 
 const ROLE_CHOICES = (): { value: ProjectRole; label: string }[] =>
@@ -68,7 +77,7 @@ function renderUserGroups(state: AppState, actions: AppActions): HTMLElement {
             h("div", { class: "group-card", dataset: { userGroup: group.id } }, [
               h("div", { class: "group-head" }, [
                 admin
-                  ? textInput(
+                  ? committedTextInput(
                       group.name,
                       (value) => {
                         const name = value.trim();
@@ -193,7 +202,7 @@ function renderProjectGroups(state: AppState, actions: AppActions): HTMLElement 
             return h("div", { class: "group-card", dataset: { projectGroup: group.id } }, [
               h("div", { class: "group-head" }, [
                 manage
-                  ? textInput(
+                  ? committedTextInput(
                       group.name,
                       (value) => {
                         const name = value.trim();

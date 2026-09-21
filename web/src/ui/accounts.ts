@@ -10,7 +10,7 @@ import type { AppActions, AppState } from "../app.ts";
 import { LocalApiClient } from "../api/local.ts";
 import { t } from "../i18n.ts";
 import { newId } from "../model/project.ts";
-import { button, card, h, iconButton, select, textInput } from "./dom.ts";
+import { button, card, committedTextInput, h, iconButton, select } from "./dom.ts";
 
 const SYSTEM_ROLE_CHOICES = (): { value: SystemRole; label: string }[] =>
   (["member", "admin"] as const).map((role) => ({
@@ -25,7 +25,7 @@ function renderAccountRow(state: AppState, actions: AppActions, user: User): HTM
   return h("tr", { dataset: { account: user.id } }, [
     h("td", {}, [
       admin || isMe
-        ? textInput(
+        ? committedTextInput(
             user.name,
             (value) => {
               const name = value.trim();

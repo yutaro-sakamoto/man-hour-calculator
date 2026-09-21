@@ -18,13 +18,22 @@ export function renderConnection(state: AppState, actions: AppActions): HTMLElem
   // いる場所を打ち直させるのは無駄だし、同一オリジンなら確実に通る。
   const servedFrom =
     location.protocol === "http:" || location.protocol === "https:" ? location.origin : "";
-  let url = saved?.baseUrl ?? servedFrom;
-  let token = saved?.token ?? "";
+  // 書きかけは状態に置く。クロージャに置くと、関係のない再描画
+  // (自動保存の完了、プロジェクトを開く) で消える。
+  const draft = state.connectionDraft ?? {
+    baseUrl: saved?.baseUrl ?? servedFrom,
+    token: saved?.token ?? "",
+  };
+  // **いまの書きかけ**に重ねる。描画時の値に重ねると、片方を打ち直した
+  // ときにもう片方が古い値へ巻き戻る。
+  const keep = (change: Partial<typeof draft>): void => {
+    state.connectionDraft = { ...(state.connectionDraft ?? draft), ...change };
+  };
 
   const urlInput = textInput(
-    url,
+    draft.baseUrl,
     (value) => {
-      url = value;
+      keep({ baseUrl: value });
     },
     {
       dataset: { focus: "connection:url" },
@@ -32,11 +41,16 @@ export function renderConnection(state: AppState, actions: AppActions): HTMLElem
     },
   );
   const tokenInput = h("input", {
-    attrs: { type: "password", value: token, autocomplete: "off", "aria-label": t("conn.token") },
+    attrs: {
+      type: "password",
+      value: draft.token,
+      autocomplete: "off",
+      "aria-label": t("conn.token"),
+    },
     dataset: { focus: "connection:token" },
     on: {
       input: (event) => {
-        token = (event.target as HTMLInputElement).value;
+        keep({ token: (event.target as HTMLInputElement).value });
       },
     },
   });
@@ -64,15 +78,20 @@ export function renderConnection(state: AppState, actions: AppActions): HTMLElem
         button(
           t("conn.connect"),
           () => {
-            const baseUrl = normalizeBaseUrl(url);
+            // 書きかけは状態から読む。押した時点の中身が要る。
+            const current = state.connectionDraft ?? draft;
+            const baseUrl = normalizeBaseUrl(current.baseUrl);
             if (baseUrl === null) {
-              actions.patch((draft) => {
-                draft.status = { text: t("conn.badUrl"), tone: "error" };
+              // 描き直しても書きかけは消えない (`connectionDraft`)。
+              actions.patch((s2) => {
+                s2.status = { text: t("conn.badUrl"), tone: "error" };
               });
               return;
             }
             actions.run(async () => {
-              await actions.connect({ baseUrl, token: token.trim() });
+              await actions.connect({ baseUrl, token: current.token.trim() });
+              // 繋ぎ終えたら書きかけは捨てる。保存された値が正本。
+              state.connectionDraft = null;
             });
           },
           { class: "primary", dataset: { action: "connect" } },
@@ -82,6 +101,7 @@ export function renderConnection(state: AppState, actions: AppActions): HTMLElem
           () => {
             actions.run(async () => {
               await actions.connect(null);
+              state.connectionDraft = null;
             });
           },
           { attrs: { disabled: !state.client.remote }, dataset: { action: "disconnect" } },

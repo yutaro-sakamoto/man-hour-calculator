@@ -105,6 +105,29 @@ export function textInput(value: string, onInput: (value: string) => void, optio
  * `type="number"` は選択範囲を直接は扱えないので、そこだけ細工がある。
  * 細工を外すと、`125` と打ったときに 1 文字ずつ前に差し込まれて `521` になる。
  */
+/**
+ * 文字の入力欄。**確定は `change`** (入力欄を離れるか Enter)。
+ *
+ * 名前の変更のように、1 打鍵ごとに API を叩いてはいけない欄で使う。
+ * `input` で拾うと、`Alpha` → `AlphaXY` と打つ間に 7 回書き込みが飛び、
+ * 応答が届く順によっては最後の文字が消える。
+ */
+export function committedTextInput(
+  value: string,
+  onCommit: (value: string) => void,
+  options: Options = {},
+) {
+  return h("input", {
+    ...options,
+    attrs: { type: "text", value, ...options.attrs },
+    on: {
+      change: (event) => {
+        onCommit((event.target as HTMLInputElement).value);
+      },
+    },
+  });
+}
+
 export function numberInput(
   value: number | string,
   onChange: (value: string) => void,

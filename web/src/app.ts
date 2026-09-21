@@ -111,6 +111,13 @@ export interface AppState {
   commentAttachments: Attachment[];
   /** 予定をすべて出している日 (`YYYY-MM-DD`)。狭い升に収まらないとき。 */
   expandedDay: string | null;
+  /**
+   * 接続先の欄に書きかけのもの。`null` なら保存済みの値を出す。
+   *
+   * クロージャに置いておくと、**関係のない再描画で消える**。トークンの欄は
+   * `type="password"` なので、消えたことが見えないまま空で接続してしまう。
+   */
+  connectionDraft: { baseUrl: string; token: string } | null;
   status: { text: string; tone: "info" | "error" };
   /** 見通しの表で確率を見る日。 */
   probeDate: string | null;

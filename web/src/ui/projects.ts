@@ -22,7 +22,16 @@ import { slackDays } from "../model/status.ts";
 import { renderAccounts } from "./accounts.ts";
 import { commentButton } from "./comments.ts";
 import { renderConnection } from "./connection.ts";
-import { button, card, dateInput, h, iconButton, select, textInput } from "./dom.ts";
+import {
+  button,
+  card,
+  committedTextInput,
+  dateInput,
+  h,
+  iconButton,
+  select,
+  textInput,
+} from "./dom.ts";
 import { renderGroups } from "./groups.ts";
 import { healthBadge, healthSeverity, needsAttention } from "./health.ts";
 import { renderSharing } from "./sharing.ts";
@@ -276,7 +285,7 @@ function renderRow(
       h("td", { class: "name-cell" }, [
         h("div", { class: "stack" }, [
           manage
-            ? textInput(project.name, rename, {
+            ? committedTextInput(project.name, rename, {
                 dataset: { focus: `project:${project.id}:name` },
                 attrs: { "aria-label": t("projects.name") },
               })

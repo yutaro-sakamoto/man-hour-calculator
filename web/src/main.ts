@@ -57,7 +57,7 @@ import type { ResolvedMembers } from "./model/members.ts";
 import type { ScheduleModel } from "./model/schedule.ts";
 import { buildRows, invalidRows, type TreeRow } from "./model/tree.ts";
 import { renderCalendarTab } from "./ui/calendar.ts";
-import { button, clear, h } from "./ui/dom.ts";
+import { append, button, clear, h } from "./ui/dom.ts";
 import { renderMembersTab } from "./ui/members.ts";
 import { renderCommentsModal } from "./ui/comments.ts";
 import { renderProjectsTab } from "./ui/projects.ts";
@@ -113,6 +113,7 @@ const state: AppState = {
   editingEventId: null,
   editingEventDay: null,
   expandedDay: null,
+  connectionDraft: null,
   comments: [],
   commentScope: null,
   commentDraft: "",
@@ -729,7 +730,7 @@ function render(): void {
     ],
   );
 
-  root.append(
+  append(root, [
     header(),
     // 状態表示はタブより上。全体の状態であってタブの中身ではないし、
     // レールとパネルの間に挟まると、繋がって見えるのを邪魔する。
@@ -740,6 +741,11 @@ function render(): void {
       dataset: { tone: state.status.tone, run: String(runCount) },
     }),
     tabBar(),
+    // 自動保存が効いていないことは、黙っていてはいけない。
+    // 気づかないまま書き続けて、再読み込みで全部消えるのがいちばん困る。
+    state.client.remote || !LocalApiClient.storageBroken()
+      ? null
+      : h("p", { id: "storage-warning", class: "hint warn", text: t("file.autosaveOff") }),
     editable
       ? panel
       : h("div", {}, [
@@ -747,7 +753,7 @@ function render(): void {
           panel,
         ]),
     footer(),
-  );
+  ]);
   // コメントとタスクの詳細はどのタブからでも開くので、タブの中身の外に置く。
   // (閲覧権限しか無いときの囲いも外れるため、詳細は自前で無効にする。)
   const detail = renderTaskDetailModal(state, actions);
@@ -1016,6 +1022,8 @@ async function main(): Promise<void> {
   }
 
   try {
+    // 読めない内容は**空で上書きしない**。書き込みを止めたうえで、
+    // 画面は使える状態にして注意書きを出す (`storageBroken`)。
     LocalApiClient.restore();
     await seed();
     state.me = await state.client.me();

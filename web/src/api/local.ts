@@ -58,26 +58,59 @@ export class LocalApiClient implements ApiClient {
 
   /* ===== 保存と復元 ===== */
 
-  /** 保存しておいたワークスペースを読む。無ければ `false`。 */
-  static restore(): boolean {
+  /**
+   * 保存しておいたワークスペースを読む。
+   *
+   * **「無い」と「読めない」を区別する。** 一緒くたにすると、読めない状態を
+   * 「まっさら」とみなして空のワークスペースで上書きしてしまう。版を上げた
+   * あとに古い HTML を開いただけで、手元のプロジェクトが全部消える。
+   */
+  static restore(): "ok" | "empty" | "unreadable" {
     let saved: string | null = null;
     try {
       saved = localStorage.getItem(STORAGE_KEY);
     } catch {
       // プライベートモードなどで読めないことがある。空から始める。
-      return false;
+      return "empty";
     }
-    if (saved === null) return false;
+    if (saved === null) return "empty";
     const outcome = JSON.parse(importState(saved)) as Outcome;
-    return outcome.ok === "true";
+    if (outcome.ok === "true") return "ok";
+    // 読めないものを潰さない。書き込みを止めて、そのまま残す。
+    LocalApiClient.sealed = true;
+    return "unreadable";
+  }
+
+  /**
+   * 保存を止める。読めない内容を上書きしないための封。
+   *
+   * 一度封をしたら、その画面が開いている間は書かない。
+   */
+  private static sealed = false;
+
+  /** 直近の保存に失敗したか。失敗したままなら自動保存は効いていない。 */
+  private static failed = false;
+
+  /**
+   * 保存できない状態か。画面はこれを見て注意書きを出す。
+   *
+   * 読めない内容を守るために止めている場合と、書き込みそのものが
+   * 失敗している場合 (容量不足・プライベートモード) の両方を指す。
+   */
+  static storageBroken(): boolean {
+    return LocalApiClient.sealed || LocalApiClient.failed;
   }
 
   /** いまのワークスペースを保存する。 */
   static persist(): boolean {
+    if (LocalApiClient.sealed) return false;
     try {
       localStorage.setItem(STORAGE_KEY, exportState());
+      LocalApiClient.failed = false;
       return true;
     } catch {
+      // 容量不足やプライベートモード。**黙って捨てない** — 画面に出す。
+      LocalApiClient.failed = true;
       return false;
     }
   }
