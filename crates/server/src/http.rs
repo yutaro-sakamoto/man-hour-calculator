@@ -73,13 +73,25 @@ impl<C: Sql> AppState<C> {
     fn actor(&self, headers: &HeaderMap, now: &str) -> Result<UserId, ApiError> {
         match &self.auth {
             Auth::Trusting(user) => Ok(user.clone()),
-            Auth::Header(name) => headers
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(UserId::new)
-                .ok_or_else(|| ApiError::unauthorized(format!("{name} ヘッダがありません"))),
+            Auth::Header(name) => {
+                // **重なっていたら断る。** `get` は 1 つ目を返すので、前段の
+                // プロキシが上書きではなく追加する設定 (Apache の
+                // `RequestHeader add` など) だと、利用者が送った値のほうが
+                // 先に読まれて、名乗りたい放題になる。
+                let mut values = headers.get_all(name).iter();
+                let (Some(value), None) = (values.next(), values.next()) else {
+                    return Err(ApiError::unauthorized(format!(
+                        "{name} ヘッダがありません (重複しているときも断ります)"
+                    )));
+                };
+                value
+                    .to_str()
+                    .ok()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(UserId::new)
+                    .ok_or_else(|| ApiError::unauthorized(format!("{name} ヘッダが読めません")))
+            }
             Auth::Token => {
                 let header = headers
                     .get(header::AUTHORIZATION)
