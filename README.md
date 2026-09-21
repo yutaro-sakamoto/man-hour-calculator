@@ -128,6 +128,20 @@ The end-to-end tests open `dist/app.html` **over `file://`**. That checks the pr
 itself — one HTML file, working offline — on every run: if a single external request goes
 out, the test fails.
 
+### Keeping the docs and the spec honest
+
+```sh
+./scripts/check-sync.sh
+```
+
+Checks the mechanical things: that the ABI version agrees in all three places,
+that every Kani harness appears in the verification table, that the functions
+the TLA+ spec names still exist, that no document links to a file that is gone.
+CI runs it on every pull request.
+
+Conventions for working on this repository with a coding agent are in
+[AGENTS.md](AGENTS.md).
+
 ### How much of it is actually tested
 
 ```sh

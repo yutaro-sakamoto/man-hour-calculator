@@ -84,12 +84,18 @@
 cargo test --workspace                     # 1〜3 段
 cargo kani --workspace                     # 5 段 (11 ハーネス、約 45 秒)
 cargo +nightly miri test -p mhc-wasm       # FFI (約 2 分)
-spec/check.sh                              # 6 段 (TLC)
+./spec/check.sh                            # 6 段 (TLC)
 cargo mutants -p mhc-core -p mhc-api       # 上の検査に歯があるか
+./scripts/check-sync.sh                    # この表と実態がずれていないか
 ```
 
-CI では `miri` `kani` が pull request ごとに、ミューテーションテストが
-毎日 03:00 (JST) に回る。
+最後の 1 つは**この文書そのものを見張る**もの。ハーネスを足して表に
+書き忘れる、ABI の版が 3 か所で食い違う、リンクの先が消える、といった
+「読めば分かる食い違い」を機械で潰す。モデルを使わないので一瞬で終わる。
+
+CI では `miri` `kani` `TLA+` と、上のずれの検査が pull request ごとに、
+ミューテーションテストが毎日 03:00 (JST) に回る。Claude Code で作業して
+いるときは、応答の終わりにもずれの検査が回る (`.claude/settings.json`)。
 
 ## まだ届いていないところ
 
