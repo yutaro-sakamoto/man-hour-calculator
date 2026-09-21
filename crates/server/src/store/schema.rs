@@ -111,6 +111,29 @@ const STEPS: &[&[&str]] = &[
         )",
         "CREATE INDEX attachments_by_comment ON attachments (comment_id, position)",
     ],
+    // 版 4: 添付の一意性を**コメント単位**にする。
+    //
+    // 版 3 では `id` が表全体で一意だった。id は要求の本文から来た値を
+    // そのまま使うので、他のコメントの添付 id を指定されると
+    // 「消してから入れ直す」の入れ直しが主キー違反で落ち、**元の添付が
+    // 消えたまま**になる。
+    &[
+        "CREATE TABLE attachments_v4 (
+            id TEXT NOT NULL,
+            comment_id TEXT NOT NULL,
+            position BIGINT NOT NULL,
+            filename TEXT NOT NULL,
+            mime TEXT NOT NULL,
+            size BIGINT NOT NULL,
+            data TEXT NOT NULL,
+            PRIMARY KEY (comment_id, id)
+        )",
+        "INSERT INTO attachments_v4 (id, comment_id, position, filename, mime, size, data) \
+         SELECT id, comment_id, position, filename, mime, size, data FROM attachments",
+        "DROP TABLE attachments",
+        "ALTER TABLE attachments_v4 RENAME TO attachments",
+        "CREATE INDEX attachments_by_comment ON attachments (comment_id, position)",
+    ],
 ];
 
 /// いま入っている版。まだ何も無ければ 0。

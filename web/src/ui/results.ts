@@ -229,7 +229,7 @@ function renderSettings(state: AppState, actions: AppActions): HTMLElement {
   const isMonteCarlo = settings.engine === 0;
   const setNumber =
     (key: "lambda" | "iterations" | "seed" | "bins" | "gridPoints") => (value: string) => {
-      actions.mutate((document) => {
+      actions.edit((document) => {
         const parsed = Number(value);
         if (Number.isFinite(parsed)) document.settings[key] = parsed;
       });
@@ -261,13 +261,14 @@ function renderSettings(state: AppState, actions: AppActions): HTMLElement {
                 document.settings.dist = value === "1" ? 1 : 0;
               });
             },
-            { id: "dist" },
+            { id: "dist", dataset: { focus: `settings:dist` } },
           ),
         ),
         field(
           t("settings.lambda"),
           numberInput(settings.lambda, setNumber("lambda"), {
             id: "lambda",
+            dataset: { focus: `settings:lambda` },
             attrs: { min: 0, max: 100, step: 0.5, disabled: settings.dist !== 0 },
           }),
         ),
@@ -284,13 +285,14 @@ function renderSettings(state: AppState, actions: AppActions): HTMLElement {
                 document.settings.engine = value === "1" ? 1 : 0;
               });
             },
-            { id: "engine" },
+            { id: "engine", dataset: { focus: `settings:engine` } },
           ),
         ),
         field(
           t("settings.iterations"),
           numberInput(settings.iterations, setNumber("iterations"), {
             id: "iterations",
+            dataset: { focus: `settings:iterations` },
             attrs: { min: 1, max: 2_000_000, step: 10_000, disabled: !isMonteCarlo },
           }),
         ),
@@ -298,6 +300,7 @@ function renderSettings(state: AppState, actions: AppActions): HTMLElement {
           t("settings.seed"),
           numberInput(settings.seed, setNumber("seed"), {
             id: "seed",
+            dataset: { focus: `settings:seed` },
             attrs: { min: 0, step: 1, disabled: !isMonteCarlo },
           }),
         ),
@@ -305,6 +308,7 @@ function renderSettings(state: AppState, actions: AppActions): HTMLElement {
           t("settings.bins"),
           numberInput(settings.bins, setNumber("bins"), {
             id: "bins",
+            dataset: { focus: `settings:bins` },
             attrs: { min: 4, max: 512, step: 4 },
           }),
         ),
@@ -312,6 +316,7 @@ function renderSettings(state: AppState, actions: AppActions): HTMLElement {
           t("settings.grid"),
           numberInput(settings.gridPoints, setNumber("gridPoints"), {
             id: "grid",
+            dataset: { focus: `settings:grid` },
             attrs: { min: 16, max: 16_384, step: 256, disabled: isMonteCarlo },
           }),
         ),

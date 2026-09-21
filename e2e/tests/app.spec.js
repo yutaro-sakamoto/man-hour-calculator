@@ -1742,3 +1742,63 @@ test("下の案内から Issue に飛べて、外へは取りに行かない", a
   await expect(footer.locator("a").first()).toHaveAttribute("rel", /noopener/);
   expect(external, "外へ取りに行っている").toEqual([]);
 });
+
+test("タスク名に書いた HTML は、吹き出しで文字として出る", async ({ page }) => {
+  // 吹き出しは以前 innerHTML で組み立てていて、タスク名がそのまま
+  // スクリプトとして動いた。接続トークンを持ち出せる経路だった。
+  const { errors } = await open(page);
+  await openTab(page, "tasks");
+  const payload = '<img src=x onerror="window.__pwned=1">';
+  await recompute(page, () =>
+    rows(page).nth(1).locator('input[type="text"]').first().fill(payload),
+  );
+
+  await openTab(page, "forecast");
+  const chart = page.locator("#schedule-chart");
+  const box = await chart.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const tip = page.locator("#schedule-tooltip");
+  await expect(tip).toHaveAttribute("data-visible", "true");
+
+  // 要素としては生えず、文字として出る。
+  await expect(tip.locator("img")).toHaveCount(0);
+  await expect(tip).toContainText("<img");
+  expect(
+    await page.evaluate(() => window.__pwned),
+    "動いてしまった",
+  ).toBeUndefined();
+  expect(errors).toEqual([]);
+});
+
+test("数値の欄は、続けて打っても値が崩れない", async ({ page }) => {
+  // 1 打鍵ごとに入力欄を作り直していたので、キャレットが先頭に戻り、
+  // 打った数字が前に差し込まれていた (125 → 521、200000 → 2)。
+  // type="number" はキャレットを持ち越せないので、値の編集では
+  // その場で描き直さないようにしてある。
+  await open(page);
+  await openTab(page, "tasks");
+  const likely = rows(page).nth(1).locator('input[data-focus$=":likely"]');
+  await likely.click();
+  await likely.press("ControlOrMeta+a");
+  await page.keyboard.type("125");
+  await expect(likely).toHaveValue("125");
+
+  await openTab(page, "forecast");
+  await openCard(page, "settings");
+
+  const iterations = page.locator("#iterations");
+  await iterations.click();
+  await iterations.press("ControlOrMeta+a");
+  await page.keyboard.type("200000");
+  await expect(iterations).toBeFocused();
+  await expect(iterations).toHaveValue("200000");
+
+  await openTab(page, "calendar");
+  const hours = page.locator(
+    'input[type="number"][data-focus="calendar:hoursPerPersonDay"]',
+  );
+  await hours.click();
+  await hours.press("ControlOrMeta+a");
+  await page.keyboard.type("7.5");
+  await expect(hours).toHaveValue("7.5");
+});

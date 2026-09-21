@@ -52,7 +52,7 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
   const setNumber =
     (key: "hoursPerPersonDay" | "horizonDays") =>
     (value: string): void => {
-      actions.mutate((document) => {
+      actions.edit((document) => {
         const parsed = Number(value);
         if (Number.isFinite(parsed)) document.calendar[key] = Math.max(0.1, parsed);
       });
@@ -84,12 +84,14 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
       field(
         t("cal.horizon"),
         numberInput(calendar.horizonDays, setNumber("horizonDays"), {
+          dataset: { focus: "calendar:horizonDays" },
           attrs: { min: 1, max: 1830, step: 30 },
         }),
       ),
       field(
         t("cal.hoursPerPersonDay"),
         numberInput(calendar.hoursPerPersonDay, setNumber("hoursPerPersonDay"), {
+          dataset: { focus: "calendar:hoursPerPersonDay" },
           attrs: { min: 0.5, max: 24, step: 0.5 },
         }),
       ),

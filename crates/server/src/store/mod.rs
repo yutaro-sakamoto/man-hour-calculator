@@ -325,6 +325,13 @@ impl<C: Sql> Store for &SqlStore<C> {
             return Ok(false);
         }
         let key = Value::text(id.as_str());
+        // **トークンを先に失効させる。** これが残っていると、あとから同じ id で
+        // アカウントを作り直したときに、消したはずのトークンがそのまま通る
+        // (`auth::resolve` はハッシュだけで引き、記録された user_id を返す)。
+        self.sql().execute(
+            "DELETE FROM api_tokens WHERE user_id = ?",
+            std::slice::from_ref(&key),
+        )?;
         // 宙に浮いた権限とメンバーシップを残さない。`MemoryStore` と同じ後始末。
         self.sql().execute(
             "DELETE FROM project_access WHERE principal_kind = 'user' AND principal_id = ?",

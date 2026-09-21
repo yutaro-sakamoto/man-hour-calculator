@@ -360,12 +360,26 @@ function captureFocus(): FocusSnapshot | null {
   }
   const key = active.dataset.focus;
   if (key === undefined) return null;
-  const canSelect = active instanceof HTMLInputElement && active.type !== "date";
   return {
     key,
-    start: canSelect ? active.selectionStart : null,
-    end: canSelect ? active.selectionEnd : null,
+    ...readSelection(active),
   };
+}
+
+/**
+ * 選択範囲を読む。読めない種類の入力では `null`。
+ *
+ * `type="number"` と `type="date"` は選択範囲を持たない。**だから数値の欄は
+ * 作り直してはいけない** — 位置を戻す手立てが無く、キャレットが先頭へ落ちる
+ * (`type` を一時的に `text` にしても、戻した時点で選択は消える。確認済み)。
+ * 値の編集で描き直しを起こさないのは、そのため ({@link AppActions.edit})。
+ */
+function readSelection(element: Element): { start: number | null; end: number | null } {
+  if (!(element instanceof HTMLInputElement)) return { start: null, end: null };
+  if (element.type === "date" || element.type === "number") {
+    return { start: null, end: null };
+  }
+  return { start: element.selectionStart, end: element.selectionEnd };
 }
 
 function restoreFocus(snapshot: FocusSnapshot | null): void {
@@ -373,12 +387,11 @@ function restoreFocus(snapshot: FocusSnapshot | null): void {
   const target = root.querySelector<HTMLElement>(`[data-focus="${CSS.escape(snapshot.key)}"]`);
   if (!target) return;
   target.focus();
-  if (target instanceof HTMLInputElement && snapshot.start !== null) {
-    try {
-      target.setSelectionRange(snapshot.start, snapshot.end ?? snapshot.start);
-    } catch {
-      /* 選択範囲を持てない種類の入力では無視してよい */
-    }
+  if (!(target instanceof HTMLInputElement) || snapshot.start === null) return;
+  try {
+    target.setSelectionRange(snapshot.start, snapshot.end ?? snapshot.start);
+  } catch {
+    /* 選択範囲を持てない種類の入力では無視してよい */
   }
 }
 
@@ -771,14 +784,25 @@ function refreshAll(): void {
   scheduleSave();
 }
 
+/** 内容を変えて、再計算を予約する。描き直しは呼び出し側が決める。 */
+function applyChange(change: (document: ProjectDocument) => void): void {
+  change(state.document);
+  window.clearTimeout(computeTimer);
+  computeTimer = window.setTimeout(refreshAll, COMPUTE_DELAY_MS);
+  state.rows = buildRows(state.document.tasks);
+}
+
 const actions: AppActions = {
   mutate(change) {
-    change(state.document);
-    window.clearTimeout(computeTimer);
-    computeTimer = window.setTimeout(refreshAll, COMPUTE_DELAY_MS);
+    applyChange(change);
     // 構造の変化はすぐ画面に出す。数字の更新だけ少し遅れて追いつく。
-    state.rows = buildRows(state.document.tasks);
     render();
+  },
+  edit(change) {
+    // **描き直さない。** 入力欄を作り直すとキャレットが失われる種類
+    // (`type="number"`) があり、1 打鍵ごとに作り直すと `125` が `521` になる。
+    // 打ち終わって 220ms すれば `refreshAll` が描き直す。
+    applyChange(change);
   },
   patch(change) {
     change(state);

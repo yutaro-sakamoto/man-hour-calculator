@@ -113,6 +113,22 @@ impl Harness {
         (status, parsed)
     }
 
+    /// 生のトークンで叩く (発行済みの一覧に無いものを試すため)。
+    async fn send_with_secret(&self, method: &str, path: &str, secret: &str) -> StatusCode {
+        let request = HttpRequest::builder()
+            .method(method)
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {secret}"))
+            .body(Body::empty())
+            .expect("組み立てられる");
+        self.app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("応答が返る")
+            .status()
+    }
+
     async fn get(&self, path: &str, user: &str) -> (StatusCode, Value) {
         self.send("GET", path, Some(user), None).await
     }
@@ -922,4 +938,81 @@ async fn deleting_a_project_takes_its_comments_with_it_over_http() {
         .await;
     let (_, listed) = server.get("/v1/projects/p1/comments", "alice").await;
     assert_eq!(listed.as_array().map(Vec::len), Some(0));
+}
+
+/* ===== レビューで見つかったもの ===== */
+
+#[tokio::test]
+async fn deleting_a_user_revokes_their_tokens() {
+    // トークンが残っていると、あとから同じ id でアカウントを作り直したとき、
+    // 消したはずのトークンがそのまま通ってしまう。
+    let server = sqlite();
+    let bob = server.token("bob").to_string();
+
+    server.ok("DELETE", "/v1/users/bob", "root", None).await;
+
+    // 作り直す。`create_user` が断るのは「いま存在する id」だけ。
+    server
+        .ok(
+            "POST",
+            "/v1/users",
+            "root",
+            Some(json!({ "id": "bob", "name": "別の鈴木", "systemRole": "member" })),
+        )
+        .await;
+
+    let status = server.send_with_secret("GET", "/v1/me", &bob).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "消したアカウントのトークンが生き返っている"
+    );
+}
+
+#[tokio::test]
+async fn an_attachment_id_used_by_another_comment_does_not_destroy_it() {
+    // 添付の id は要求の本文から来た値をそのまま使う。以前は表全体で
+    // 一意だったので、他のコメントの id を指定すると「消してから入れ直す」の
+    // 入れ直しが主キー違反で落ち、元の添付が消えたままになった。
+    let server = sqlite();
+    server
+        .ok(
+            "POST",
+            "/v1/projects",
+            "alice",
+            Some(json!({ "id": "p1", "name": "案件" })),
+        )
+        .await;
+
+    let attachment = json!({
+        "id": "a1",
+        "filename": "screen.png",
+        "mime": "image/png",
+        "size": 3,
+        "data": "AAAA",
+    });
+    for id in ["c1", "c2"] {
+        server
+            .ok(
+                "POST",
+                "/v1/projects/p1/comments",
+                "alice",
+                Some(json!({ "commentId": id, "body": "本文", "attachments": [attachment] })),
+            )
+            .await;
+    }
+
+    // c1 の添付が残っていること。
+    let comments = server.get("/v1/projects/p1/comments", "alice").await.1;
+    let c1 = comments
+        .as_array()
+        .expect("配列")
+        .iter()
+        .find(|c| c["id"] == "c1")
+        .expect("ある");
+    assert_eq!(
+        c1["attachments"].as_array().expect("配列").len(),
+        1,
+        "同じ id を別のコメントで使ったら消えた"
+    );
 }

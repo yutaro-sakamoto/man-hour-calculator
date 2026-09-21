@@ -158,6 +158,15 @@ export interface AppWidgets {
 export interface AppActions {
   /** 内容を変更して、再計算・保存・再描画まで行う。 */
   mutate: (change: (document: ProjectDocument) => void) => void;
+  /**
+   * 入力欄のなかの値だけを変える。**その場では描き直さない。**
+   *
+   * 画面は変更のたびに作り直すので、1 打鍵ごとに `mutate` を呼ぶと入力欄も
+   * 作り直される。`type="number"` はキャレットの位置を持ち越せないため、
+   * それだけで `125` と打ったつもりが `521` になる。打ち終われば
+   * 再計算のついでに描き直される。
+   */
+  edit: (change: (document: ProjectDocument) => void) => void;
   /** 計算に影響しない表示の変更。 */
   patch: (change: (state: AppState) => void) => void;
   /** API を呼び、失敗したら状態表示に出す。成功すれば再描画する。 */
