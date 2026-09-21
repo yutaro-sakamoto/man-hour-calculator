@@ -1802,3 +1802,32 @@ test("数値の欄は、続けて打っても値が崩れない", async ({ page 
   await page.keyboard.type("7.5");
   await expect(hours).toHaveValue("7.5");
 });
+
+test("終了が開始以下の予定は、その日の稼働を潰さない", async ({ page }) => {
+  // 長さの無い時間帯を「終日」の印 (NaN) に倒していたので、10:00〜10:00 の
+  // 予定がその人のその日を丸ごと消していた。
+  await open(page);
+  await openTab(page, "calendar");
+  await page.selectOption('select[aria-label="表示する人員"]', "0");
+  const capacityOn = async (date) => {
+    const label = await page
+      .locator(`.day[aria-label*="${date}"]`)
+      .getAttribute("aria-label");
+    return Number(label.match(/: ([\d.]+)/)[1]);
+  };
+  const before = await capacityOn("2026-09-29");
+
+  await page.locator('.day[data-day="2026-09-29"] .day-add').click();
+  await page
+    .locator('.modal-card input[aria-label="内容"]')
+    .fill("長さのない予定");
+  const times = page.locator('.modal-card input[type="time"]');
+  await times.nth(0).fill("10:00");
+  await recompute(page, () => times.nth(1).fill("10:00"));
+  await page.keyboard.press("Escape");
+
+  expect(await capacityOn("2026-09-29"), "丸一日ぶん消えている").toBeCloseTo(
+    before,
+    6,
+  );
+});

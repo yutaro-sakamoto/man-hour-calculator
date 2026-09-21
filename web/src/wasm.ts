@@ -158,7 +158,12 @@ function encodeEvents(calendar: CalendarSettings, members: ResolvedMembers): Enc
     const startMinute = minutesFromTime(event.startTime);
     const endMinute = minutesFromTime(event.endTime);
     // 時刻が片方しか読めないものは終日として扱う。
-    const timed = startMinute !== null && endMinute !== null && endMinute > startMinute;
+    //
+    // **終了が開始以下でも、そのまま送る。** かつては `NaN` に倒していたが、
+    // `NaN` は「終日」の印なので、10:00〜10:00 や 22:00〜02:00 の予定が
+    // その日の稼働を丸ごと潰していた。長さの無い時間帯は、受け取った側が
+    // 「何も消費しない」として正しく扱う。
+    const timed = startMinute !== null && endMinute !== null;
     encoded.push({
       startDay,
       endDay: Math.max(startDay, endDay),

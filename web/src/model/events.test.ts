@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { dayFromIso } from "../format.ts";
-import { occurrencesOn, occursOn, shortTime } from "./events.ts";
+import { occurrenceStart, occurrencesOn, occursOn, shortTime } from "./events.ts";
 import type { CalendarEventItem } from "../types.ts";
 
 const day = (iso: string): number => {
@@ -162,4 +162,56 @@ test("休みにした回は升にも出ない", () => {
   const weekly = event({ repeatWeeks: 1, excludedDates: ["2026-09-14"] });
   assert.equal(occurrencesOn([weekly], day("2026-09-14")).length, 0);
   assert.equal(occurrencesOn([weekly], day("2026-09-21")).length, 1);
+});
+
+/* ===== レビューで見つかったもの ===== */
+
+test("繰り返しの周期より長い回は、後半まで続く", () => {
+  // 直近 2 回しか見ていなかったころは、長い予定の後半が「起きない」ことに
+  // なり、その日の稼働が削られないまま残った。
+  const long = event({
+    startDate: "2026-09-21",
+    endDate: "2026-10-11", // 21 日ぶん
+    repeatWeeks: 1,
+    until: "2026-09-28",
+  });
+  const from = dayFromIso("2026-09-21") ?? 0;
+  for (let offset = 0; offset <= 27; offset++) {
+    assert.ok(occursOn(long, from + offset), `${String(offset)} 日目が抜けている`);
+  }
+  assert.equal(occursOn(long, from + 28), false, "until を越えた回は起きない");
+
+  // 覆っているのがどの回かも正しく分かる。
+  assert.equal(occurrenceStart(long, from + 6), from);
+  assert.equal(occurrenceStart(long, from + 21), from + 7);
+});
+
+test("休みにした回は、実際に覆っている回で判断する", () => {
+  // 周期の格子から割り出していたころは、長い予定で「休みにしたはずの回」を
+  // 指してしまい、画面から休みにできなくなっていた。
+  const long = event({
+    startDate: "2026-09-21",
+    endDate: "2026-10-11",
+    repeatWeeks: 1,
+    excludedDates: ["2026-10-05"], // 3 回目 (= +14 日) を休みにする
+  });
+  const from = dayFromIso("2026-09-21") ?? 0;
+  // +14 日は、7 日目に始まった回がまだ覆っている。
+  assert.ok(occursOn(long, from + 14));
+  assert.equal(occurrenceStart(long, from + 14), from + 7);
+
+  const shown = occurrencesOn([long], from + 14);
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0]?.firstDay, from + 7, "休みにした回を指している");
+});
+
+test("終了が開始以下の予定は、終日扱いにならない", () => {
+  // 終日の印は「時刻が無いこと」。長さの無い時間帯を NaN に倒していたので、
+  // 10:00〜10:00 や 22:00〜02:00 がその日の稼働を丸ごと潰していた。
+  const sameTime = event({ startTime: "10:00", endTime: "10:00" });
+  const overnight = event({ startTime: "22:00", endTime: "02:00" });
+  for (const item of [sameTime, overnight]) {
+    const [shown] = occurrencesOn([item], day("2026-09-07"));
+    assert.equal(shown?.allDay, false, "終日として扱われている");
+  }
 });
