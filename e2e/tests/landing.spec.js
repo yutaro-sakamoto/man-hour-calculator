@@ -108,3 +108,21 @@ test("ファイルとして保存するリンクがある", async ({ page }) => 
   await expect(link).toHaveAttribute("href", "app.html");
   await expect(link).toHaveAttribute("download", "man-hour-calculator.html");
 });
+
+test("紹介ページからも意見を出せる", async ({ page }) => {
+  await open(page);
+  const footer = page.locator("footer");
+  // 英語と日本語の両方に書いてある。切り替えても案内が消えない。
+  await expect(footer.locator('a[data-feedback="bug"]')).toHaveCount(2);
+  await expect(
+    footer.locator('span[lang="en"] a[data-feedback="bug"]'),
+  ).toBeVisible();
+
+  await page.click('button[data-set-lang="ja"]');
+  await expect(
+    footer.locator('span[lang="ja"] a[data-feedback="idea"]'),
+  ).toBeVisible();
+  await expect(
+    footer.locator('span[lang="en"] a[data-feedback="idea"]'),
+  ).toBeHidden();
+});

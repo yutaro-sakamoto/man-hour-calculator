@@ -1623,13 +1623,11 @@ test("コメントに画像を添付すると本文のなかに出る", async ({
   await openTab(page, "tasks");
   await openTaskComments(page, 1);
 
-  await page
-    .locator(".comments-card .attach-input")
-    .setInputFiles({
-      name: "screen.png",
-      mimeType: "image/png",
-      buffer: TINY_PNG,
-    });
+  await page.locator(".comments-card .attach-input").setInputFiles({
+    name: "screen.png",
+    mimeType: "image/png",
+    buffer: TINY_PNG,
+  });
   // 付けたものは一覧に出て、本文にも綴りが差し込まれる。
   await expect(page.locator(".attachment-drafts .chip")).toHaveCount(1);
   await expect(page.locator(".comment-input")).toHaveValue(/attachment:/);
@@ -1640,13 +1638,11 @@ test("コメントに画像を添付すると本文のなかに出る", async ({
   // 差し込んだ綴りの id は書き換えてしまったので、付け直す。
   await page.locator(".attachment-drafts button").click();
   await expect(page.locator(".attachment-drafts")).toHaveCount(0);
-  await page
-    .locator(".comments-card .attach-input")
-    .setInputFiles({
-      name: "screen.png",
-      mimeType: "image/png",
-      buffer: TINY_PNG,
-    });
+  await page.locator(".comments-card .attach-input").setInputFiles({
+    name: "screen.png",
+    mimeType: "image/png",
+    buffer: TINY_PNG,
+  });
 
   await page.click('button[data-action="post-comment"]');
   const image = page.locator(".comment .markdown img.comment-image");
@@ -1685,7 +1681,7 @@ test("画像でない添付は名前付きのリンクになる", async ({ page 
 
   // 本文には入らない。コメントの下に、押せば落とせるリンクとして出る。
   await expect(page.locator(".comment .markdown img")).toHaveCount(0);
-  const link = page.locator('.comment .attachment-list a[data-attachment]');
+  const link = page.locator(".comment .attachment-list a[data-attachment]");
   await expect(link).toContainText("log.txt");
   await expect(link).toHaveAttribute("href", /^data:text\/plain/);
   await expect(link).toHaveAttribute("download", "log.txt");
@@ -1722,4 +1718,27 @@ test("添付は 1 コメントにつき 5 件まで", async ({ page }) => {
   await expect(page.locator("#status")).toContainText("a5.png");
   // 上限まで付いたら、付けるボタン自体が止まる。
   await expect(page.locator('button[data-action="attach"]')).toBeDisabled();
+});
+
+test("下の案内から Issue に飛べて、外へは取りに行かない", async ({ page }) => {
+  const { external } = await open(page);
+  const footer = page.locator(".app-footer");
+  await expect(footer).toBeVisible();
+
+  // 素の <a> なので、置いてあるだけでは通信しない。
+  await expect(footer.locator('a[data-feedback="bug"]')).toHaveAttribute(
+    "href",
+    /issues\/new\?labels=bug$/,
+  );
+  await expect(footer.locator('a[data-feedback="idea"]')).toHaveAttribute(
+    "href",
+    /issues\/new$/,
+  );
+  await expect(footer.locator('a[data-feedback="repo"]')).toHaveAttribute(
+    "href",
+    /man-hour-calculator$/,
+  );
+  // 別のところへ連れて行くので、元のページは渡さない。
+  await expect(footer.locator("a").first()).toHaveAttribute("rel", /noopener/);
+  expect(external, "外へ取りに行っている").toEqual([]);
 });

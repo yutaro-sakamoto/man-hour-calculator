@@ -86,6 +86,14 @@ cargo xtask build          # → dist/app.html (道具) と dist/index.html (紹
 Rust 側の依存クレートはゼロです。Node 側の依存はビルド時だけのもの（TypeScript・
 esbuild・ESLint・Prettier）で、配布物には一切含まれません。
 
+### Dev Container を使う場合
+
+`.devcontainer/` に上のものが全部入っています。ツールチェーン・Node 22・
+対応する binaryen・同梱 SQLite のビルドに要る C コンパイラ・Playwright の
+Chromium まで揃っているので、開いてすぐ `cargo xtask build && cargo test --workspace`
+が通ります。CI でも同じコンテナを組み立てて、その中でスモークテストを回しています。
+ここに書いてあることと実際に動くものが離れていかないようにするためです。
+
 ## 検証
 
 ```sh

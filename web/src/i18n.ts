@@ -198,6 +198,11 @@ const ja = {
     "サーバに届きませんでした。URL と、サーバが動いているかを確かめてください ({message})",
 
   "members.you": "あなた",
+
+  "feedback.lead": "おかしなところ、足りないものがあれば:",
+  "feedback.bug": "不具合を報告",
+  "feedback.idea": "ご意見・ご要望",
+  "feedback.repo": "GitHub",
   "tab.members": "人員",
   "tab.calendar": "カレンダー",
   "tab.forecast": "見通し",
@@ -680,6 +685,11 @@ const en: Dictionary = {
   "api.offline": "Could not reach the server. Check the URL and whether it is running ({message})",
 
   "members.you": "You",
+
+  "feedback.lead": "Something wrong, or something missing?",
+  "feedback.bug": "Report a bug",
+  "feedback.idea": "Suggest something",
+  "feedback.repo": "GitHub",
   "tab.members": "People",
   "tab.calendar": "Calendar",
   "tab.forecast": "Forecast",

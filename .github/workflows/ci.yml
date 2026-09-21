@@ -238,6 +238,52 @@ jobs:
             e2e/test-results
           retention-days: 7
 
+  # 「書いてある手順どおりの環境で本当に動くか」を見る。既存の server ジョブと
+  # 同じ筋書きを、**Dev Container の中で**もう一度通す。重複は承知の上で、
+  # 開発環境が口伝に戻らないようにするのが目的。
+  devcontainer:
+    name: dev container — build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the container and run inside it
+        uses: devcontainers/ci@v0.3
+        with:
+          configFile: .devcontainer/devcontainer.json
+          push: never
+          runCmd: |
+            set -euo pipefail
+
+            # 口伝だったものが全部入っているか。
+            rustc --version
+            node --version
+            wasm-opt --version
+            cc --version | head -1
+
+            # 画面が組み上がる (最適化が効いていることまで見る)。
+            cargo xtask build --require-wasm-opt
+
+            # 中身が通る。
+            cargo test --workspace
+
+            # 単体のバイナリが起動して応答する。
+            cargo build --profile server -p mhc-server
+            ./target/server/mhc-server --db sqlite:/tmp/dev.db --listen 127.0.0.1:8080 \
+              > /tmp/server.log 2>&1 &
+            for _ in $(seq 30); do
+              curl -sf localhost:8080/healthz > /dev/null && break
+              sleep 1
+            done
+            cat /tmp/server.log
+            token=$(grep -oP 'トークン: \K[0-9a-f]{64}' /tmp/server.log)
+            test -n "$token"
+
+            curl -sf -H "Authorization: Bearer $token" -o /tmp/me.json localhost:8080/v1/me
+            grep -q '"systemRole":"admin"' /tmp/me.json
+            curl -sf -o /tmp/ui.html localhost:8080/
+            grep -q '工数見積もり / Effort Estimator' /tmp/ui.html
+
   # 成果物は 1 枚の HTML なので、そのまま Pages に置けば公開版になる。
   # main に入ったときだけ、E2E まで通ったものを配る。
   pages:
