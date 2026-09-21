@@ -19,6 +19,7 @@ import {
   roundedRect,
   setupCanvas,
   watchRedraw,
+  type TooltipRow,
 } from "./common.ts";
 
 const PAD = { top: 30, right: 16, bottom: 44 };
@@ -331,21 +332,20 @@ export function createScheduleChart(
     const lang = getLang();
     const box = canvas.getBoundingClientRect();
     const localX = clientX === null ? xOfDay(day) : clientX - box.left;
-    const rows = model.rows
-      .slice(0, 8)
-      .map(
-        (row) =>
-          `<div>${row.label}: <b>${formatPercent(row.probabilities[day] ?? 0, lang, 0)}</b></div>`,
-      )
-      .join("");
-    tooltip.show(
-      `<div><b>${formatDayShort(model.startDay + day, lang)}</b></div>` +
-        `<div>${t("sched.overall")}: <b>${formatPercent(model.overall[day] ?? 0, lang, 0)}</b></div>` +
-        (rows === "" ? "" : `<hr>${rows}`),
-      localX,
-      layout.rowsTop + 4,
-      box.width,
-    );
+    // タスク名は利用者が書いた文字列なので、**組み立てずに部品として渡す**。
+    const rows: TooltipRow[] = [
+      { label: formatDayShort(model.startDay + day, lang), heading: true },
+      {
+        label: t("sched.overall"),
+        value: formatPercent(model.overall[day] ?? 0, lang, 0),
+      },
+      ...model.rows.slice(0, 8).map((row, index) => ({
+        label: row.label,
+        value: formatPercent(row.probabilities[day] ?? 0, lang, 0),
+        rule: index === 0,
+      })),
+    ];
+    tooltip.show(rows, localX, layout.rowsTop + 4, box.width);
   }
 
   const onPointer = (event: PointerEvent): void => {

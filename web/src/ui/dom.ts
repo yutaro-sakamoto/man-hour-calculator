@@ -97,6 +97,14 @@ export function textInput(value: string, onInput: (value: string) => void, optio
   });
 }
 
+/**
+ * 数値の入力欄。
+ *
+ * `input` で拾うので、画面は 1 打鍵ごとに作り直される。**キャレットの
+ * 持ち越しは `main.ts` の `captureFocus` / `restoreFocus` が面倒を見る。**
+ * `type="number"` は選択範囲を直接は扱えないので、そこだけ細工がある。
+ * 細工を外すと、`125` と打ったときに 1 文字ずつ前に差し込まれて `521` になる。
+ */
 export function numberInput(
   value: number | string,
   onChange: (value: string) => void,

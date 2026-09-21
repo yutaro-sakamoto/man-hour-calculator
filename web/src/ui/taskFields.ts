@@ -16,7 +16,9 @@ export type SetTask = (change: Partial<Task>) => void;
 
 export function taskWriter(actions: AppActions, taskId: string): SetTask {
   return (change) => {
-    actions.mutate((document) => {
+    // `edit` はその場で描き直さない。1 打鍵ごとに入力欄を作り直すと、
+    // 数値の欄はキャレットを失う (`AppActions.edit` を参照)。
+    actions.edit((document) => {
       const target = document.tasks.find((task) => task.id === taskId);
       if (target) Object.assign(target, change);
     });

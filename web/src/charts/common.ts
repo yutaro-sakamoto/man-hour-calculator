@@ -138,12 +138,50 @@ export function watchRedraw(canvas: HTMLCanvasElement, draw: () => void): void {
   });
 }
 
+/**
+ * 吹き出しの 1 行。
+ *
+ * 文字列で受け取って組み立てるのではなく、**部品に分けて受け取る**。
+ * HTML の文字列を作らせないための形で、こうしておけば
+ * 「タスク名をそのまま差し込む」書き方ができない。
+ */
+export interface TooltipRow {
+  label: string;
+  /** 右に添える値。太字で出る。 */
+  value?: string;
+  /** この行の上に区切り線を引く。 */
+  rule?: boolean;
+  /** 値を持たない見出しの行。 */
+  heading?: boolean;
+}
+
 /** canvas に重ねる吹き出し。 */
 export class Tooltip {
   constructor(private readonly element: HTMLElement) {}
 
-  show(html: string, localX: number, localY: number, hostWidth: number): void {
-    this.element.innerHTML = html;
+  /**
+   * 中身を差し替えて出す。
+   *
+   * **`innerHTML` は使わない。** 文字は必ず `textContent` に入るので、
+   * タスク名に何が書かれていてもスクリプトにはならない
+   * (`web/src/model/markdown.ts` と同じ方針)。
+   */
+  show(rows: readonly TooltipRow[], localX: number, localY: number, hostWidth: number): void {
+    const nodes: Node[] = [];
+    for (const row of rows) {
+      if (row.rule === true) nodes.push(document.createElement("hr"));
+      const line = document.createElement("div");
+      const label = document.createElement(row.heading === true ? "b" : "span");
+      label.textContent = row.value === undefined ? row.label : `${row.label}: `;
+      line.appendChild(label);
+      if (row.value !== undefined) {
+        const value = document.createElement("b");
+        value.textContent = row.value;
+        line.appendChild(value);
+      }
+      nodes.push(line);
+    }
+    this.element.replaceChildren(...nodes);
     this.element.dataset.visible = "true";
     const width = this.element.offsetWidth;
     this.element.style.left = `${String(Math.max(4, Math.min(localX + 14, hostWidth - width - 4)))}px`;

@@ -453,7 +453,11 @@ impl<S: Store> Service<S> {
         if let Some(role) = role {
             group.access.push(AccessEntry::new(principal.clone(), role));
         }
-        if !group.access.iter().any(|e| e.role == ProjectRole::Owner) {
+        // 付与が残っているかではなく、**実在のアカウントが所有者として残るか**を
+        // 見る。件数だけを見ていると、構成員の居ないグループに owner を付けた
+        // まま自分の付与を外せてしまい、誰も改名も削除もできない入れ物が残る
+        // (プロジェクトが 1 件も入っていない入れ物では、下の輪が 1 周もしない)。
+        if self.owner_users_of_folder(&group)?.is_empty() {
             return Err(ApiError::conflict(
                 "グループの所有者がいなくなります。先に別の所有者を立ててください",
             ));
@@ -922,6 +926,35 @@ impl<S: Store> Service<S> {
                     for member in members.into_iter().flatten() {
                         if self.store.user(&member)?.is_some() {
                             out.insert(member);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// その入れ物を実際に管理できるアカウントの集合。
+    ///
+    /// 数え方は [`Self::owner_users`] と同じで、見るのは入れ物自身の付与だけ。
+    fn owner_users_of_folder(&self, group: &ProjectGroup) -> ApiResult<Owners> {
+        let mut out = Owners::default();
+        for entry in &group.access {
+            if entry.role != ProjectRole::Owner {
+                continue;
+            }
+            match &entry.principal {
+                Principal::User(id) => {
+                    if self.store.user(id)?.is_some() {
+                        out.insert(id.clone());
+                    }
+                }
+                Principal::Group(id) => {
+                    if let Some(team) = self.store.user_group(id)? {
+                        for member in team.members {
+                            if self.store.user(&member)?.is_some() {
+                                out.insert(member);
+                            }
                         }
                     }
                 }
@@ -1470,6 +1503,60 @@ mod tests {
         );
         let root = actor(&service, "root");
         assert!(service.delete_user(&root, &UserId::new("alice")).is_ok());
+    }
+
+    /// 空の入れ物でも、実在の所有者が残ることを確かめる。
+    ///
+    /// レビューで見つかったもの。配下のプロジェクトごとに回る検査は、
+    /// プロジェクトが 1 件も無いと 1 周もしないので素通りしていた。
+    #[test]
+    fn an_empty_folder_cannot_be_left_without_a_real_owner() {
+        let mut service = setup();
+        let root = actor(&service, "root");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("empty"), "空のチーム")
+            .unwrap();
+
+        let alice = actor(&service, "alice");
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("pg1"), "部門")
+            .unwrap();
+        // 入れ物にはプロジェクトを 1 件も入れない。
+        service
+            .set_group_access(
+                &alice,
+                &ProjectGroupId::new("pg1"),
+                &Principal::group("empty"),
+                Some(ProjectRole::Owner),
+            )
+            .unwrap();
+
+        assert_eq!(
+            service
+                .set_group_access(
+                    &alice,
+                    &ProjectGroupId::new("pg1"),
+                    &Principal::user("alice"),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict,
+            "実在の所有者が居なくなる"
+        );
+
+        // グループに人を入れれば、そのグループ経由で所有者が立つので外せる。
+        service
+            .set_group_member(&root, &UserGroupId::new("empty"), &UserId::new("bob"), true)
+            .unwrap();
+        assert!(service
+            .set_group_access(
+                &alice,
+                &ProjectGroupId::new("pg1"),
+                &Principal::user("alice"),
+                None,
+            )
+            .is_ok());
     }
 
     /* ===== 不変条件: 所有者 =====

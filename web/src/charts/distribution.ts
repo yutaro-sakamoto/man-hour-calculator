@@ -313,13 +313,23 @@ export function createDistributionChart(
     const box = canvas.getBoundingClientRect();
     const localX = clientX === null ? xOf((from + to) / 2) : clientX - box.left;
     tooltip.show(
-      `<div>${t("chart.tooltipRange", {
-        from: formatNumber(from, lang),
-        to: formatNumber(to, lang),
-        unit: t("unit.days"),
-      })}</div>` +
-        `<div>${t("chart.tooltipProb")}: <b>${formatPercent(model.probs[bin] ?? 0, lang, 2)}</b></div>` +
-        `<div>${t("chart.tooltipCum")}: <b>${formatPercent(model.cdf[bin + 1] ?? 0, lang, 1)}</b></div>`,
+      [
+        {
+          label: t("chart.tooltipRange", {
+            from: formatNumber(from, lang),
+            to: formatNumber(to, lang),
+            unit: t("unit.days"),
+          }),
+        },
+        {
+          label: t("chart.tooltipProb"),
+          value: formatPercent(model.probs[bin] ?? 0, lang, 2),
+        },
+        {
+          label: t("chart.tooltipCum"),
+          value: formatPercent(model.cdf[bin + 1] ?? 0, lang, 1),
+        },
+      ],
       localX,
       layout.histTop + 26,
       box.width,
