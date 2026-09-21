@@ -9,6 +9,12 @@
             "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/sync-check.sh",
             "timeout": 30,
             "statusMessage": "文書と仕様のずれを見ています"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/journal-check.sh",
+            "timeout": 10,
+            "statusMessage": "貯めた知見を昇格し忘れていないか見ています"
           }
         ]
       }
@@ -26,7 +32,8 @@
       "Bash(npm --prefix web run:*)",
       "Bash(npx playwright test:*)",
       "Bash(./scripts/check-sync.sh:*)",
-      "Bash(./spec/check.sh:*)"
+      "Bash(./spec/check.sh:*)",
+      "Bash(./scripts/journal.sh:*)"
     ],
     "ask": [
       "Bash(gh pr merge:*)",

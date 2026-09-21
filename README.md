@@ -140,7 +140,10 @@ the TLA+ spec names still exist, that no document links to a file that is gone.
 CI runs it on every pull request.
 
 Conventions for working on this repository with a coding agent are in
-[AGENTS.md](AGENTS.md).
+[AGENTS.md](AGENTS.md). Pitfalls, misreadings and design decisions are collected
+in [docs/JOURNAL.md](docs/JOURNAL.md) and promoted — a note becomes a rule,
+a rule becomes a machine check. The ones worth carrying to the next project
+live in [dev-skills/](dev-skills/) as Claude Code skills.
 
 ### How much of it is actually tested
 

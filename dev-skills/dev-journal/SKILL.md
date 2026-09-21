@@ -5,9 +5,10 @@ description: 開発中に踏んだ穴・読み違い・設計判断を書き残�
 
 # 知見を貯めて、次に効かせる
 
-man-hour-calculator では**これをやらなかった**。踏んだ穴は commit message と
+man-hour-calculator では**最初これをやらなかった**。踏んだ穴は commit message と
 `.claude/rules/` と CI のコメントに散らばっていて、拾い直すのに丸 1 日かかった。
-**次のプロジェクトでは最初から入れる。**
+拾い直したものを遡って書くところから始めて、あとから入れた。
+**次のプロジェクトでは最初から入れる。** 半日で組める。
 
 要点は 1 つ。**書くだけでは効かない。昇格させる。**
 
@@ -144,6 +145,23 @@ man-hour-calculator では**これをやらなかった**。踏んだ穴は comm
 # 前のプロジェクトから、上げ損ねたものを拾う
 grep -B 5 '昇格: 未' ../previous-project/docs/JOURNAL.md
 ```
+
+## 動いているもの
+
+man-hour-calculator に入れたひと揃い。そのまま写せる。
+
+| ファイル | 何 |
+|---|---|
+| `docs/JOURNAL.md` | 日誌。遡って書いた 15 件から始めた |
+| `scripts/journal.sh` | `new` / `open` / `stats` |
+| `.claude/commands/learn.md` | `/learn` |
+| `.claude/hooks/journal-check.sh` | 未昇格が閾値を超えたときだけ言う |
+| `.claude/rules/skills.md` | 段 4 (skills へ移す) の書きかた |
+| `scripts/check-sync.sh` | 昇格の段の綴り、項目数と `昇格:` の行数の一致 |
+| `AGENTS.md`「学んだことを持ち越す」 | 昇格の表と、**設定そのものを直してよい**の一文 |
+
+最後の 1 行が要る。無いと、気づいたことがあっても `AGENTS.md` や
+`.claude/rules/` を書き換えてよいのか分からず、段 2 で止まる。
 
 ## この仕組み自体が死ぬ兆候
 
