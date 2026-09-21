@@ -66,7 +66,7 @@ export class LocalApiClient implements ApiClient {
    * あとに古い HTML を開いただけで、手元のプロジェクトが全部消える。
    */
   static restore(): "ok" | "empty" | "unreadable" {
-    let saved: string | null = null;
+    let saved: string | null;
     try {
       saved = localStorage.getItem(STORAGE_KEY);
     } catch {
