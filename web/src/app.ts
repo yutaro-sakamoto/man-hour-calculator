@@ -20,16 +20,16 @@ import type { TreeRow } from "./model/tree.ts";
 import type { ColumnMode, TaskFilter } from "./types.ts";
 import type { ComputeResult } from "./wasm.ts";
 
-export type TabId = "projects" | "tasks" | "members" | "calendar" | "distribution" | "schedule";
+/**
+ * タブ。
+ *
+ * 分布とスケジュールは `forecast` 1 つにまとめてある。別々のタブに
+ * 分けていたころは、「どれだけぶれるか」と「いつ終わるか」を**見比べられ
+ * なかった**。同じ計算の 2 つの見え方なので、並べて置く。
+ */
+export type TabId = "projects" | "tasks" | "members" | "calendar" | "forecast";
 
-export const TABS: readonly TabId[] = [
-  "projects",
-  "tasks",
-  "members",
-  "calendar",
-  "distribution",
-  "schedule",
-];
+export const TABS: readonly TabId[] = ["projects", "tasks", "members", "calendar", "forecast"];
 
 /** いま開いているプロジェクト。 */
 export interface OpenProject {
@@ -104,8 +104,15 @@ export interface AppState {
   /** 予定をすべて出している日 (`YYYY-MM-DD`)。狭い升に収まらないとき。 */
   expandedDay: string | null;
   status: { text: string; tone: "info" | "error" };
-  /** スケジュールタブで確率を見る日。 */
+  /** 見通しの表で確率を見る日。 */
   probeDate: string | null;
+  /**
+   * 詳細を開いているタスクの id。`null` なら閉じている。
+   *
+   * 添字ではなく id で持つ。並べ替えや削除で添字はずれるが、
+   * 窓が別のタスクに化けるのは事故でしかない。
+   */
+  taskDetailId: string | null;
 }
 
 /** プロジェクト一覧の絞り込み。空文字は「すべて」。 */

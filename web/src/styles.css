@@ -274,24 +274,41 @@ fieldset.readonly .card {
   margin-top: 20px;
   border-bottom: 1px solid var(--grid);
   overflow-x: auto;
+  /* 選択中のタブが下のパネルと繋がって見えるように、枠線を 1px 食う。 */
+  position: relative;
+  z-index: 1;
 }
+/* 選択中かどうかは 4 つの手がかりで示す — 面・上辺の帯・下の枠の切れ目・
+   文字の太さ。色だけだと、暗い配色でも色覚によっても頼りにならない。 */
 .tabs button {
-  border: 0;
-  border-bottom: 2px solid transparent;
+  border: 1px solid transparent;
+  border-top: 3px solid transparent;
   border-radius: 8px 8px 0 0;
-  background: transparent;
+  background: var(--surface-sunken);
   color: var(--ink-secondary);
   font: inherit;
   font-size: 14px;
-  padding: 9px 16px;
+  padding: 7px 16px 9px;
   min-height: 40px;
   cursor: pointer;
   white-space: nowrap;
+  margin-bottom: -1px;
+}
+.tabs button:hover {
+  color: var(--ink);
 }
 .tabs button[aria-selected="true"] {
+  background: var(--surface);
   color: var(--series);
-  border-bottom-color: var(--series);
-  font-weight: 620;
+  border-color: var(--grid);
+  border-top-color: var(--series);
+  /* 下の枠線をパネルと同じ面で切り欠く = パネルと地続きに見える。 */
+  border-bottom-color: var(--surface);
+  font-weight: 650;
+}
+.tab-panel {
+  border-top: 1px solid var(--grid);
+  margin-top: -1px;
 }
 
 /* ===== カード ===== */
@@ -1031,7 +1048,9 @@ select.assignee {
 .chart-box {
   position: relative;
   margin: 14px 0 0;
-  height: 420px;
+  /* 見通しタブには canvas が 2 枚並ぶ。1 枚 420px だと、2 枚目に
+     届くまでに画面 1 つぶんスクロールすることになる。 */
+  height: 340px;
 }
 .chart-box canvas {
   width: 100%;
@@ -1160,8 +1179,157 @@ details.data-view .scroll {
 .sens-table td:first-child {
   width: 100%;
 }
-.probe-table td:last-child {
+.forecast-table td:last-child,
+.forecast-table th:last-child {
   white-space: nowrap;
+}
+.forecast-table .name-cell {
+  width: 100%;
+}
+.forecast-table tr[data-strong="true"] > td {
+  font-weight: 620;
+}
+/* 表の名前は押せる。見た目は文字のままにして、行の詰まりを崩さない。 */
+.row-open {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  border-bottom: 1px dotted var(--grid);
+}
+.row-open:hover {
+  color: var(--series);
+  border-bottom-color: var(--series);
+}
+.probe-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 10px;
+  font-weight: 400;
+}
+.forecast-table-wrap {
+  margin-top: 8px;
+}
+
+/* ===== 進捗カード ===== */
+.progress-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.progress-meter {
+  height: 12px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+  flex: 1;
+}
+.progress-meter.thin {
+  height: 6px;
+}
+.meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--series);
+}
+.progress-elapsed .meter-fill {
+  background: var(--ink-secondary);
+}
+.progress-value {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  min-width: 60px;
+  text-align: right;
+}
+.progress-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 26px;
+  margin-top: 14px;
+}
+.progress-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.progress-elapsed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.progress-elapsed .field-label {
+  white-space: nowrap;
+}
+
+/* ===== タスクの詳細 ===== */
+.detail-card {
+  max-width: 720px;
+  width: min(720px, 94vw);
+}
+.detail-heading {
+  font-size: 15px;
+}
+.event-head .spacer {
+  flex: 1;
+}
+.detail-section + .detail-section {
+  border-top: 1px solid var(--grid);
+  margin-top: 16px;
+  padding-top: 4px;
+}
+.detail-readouts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 20px;
+}
+.detail-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.detail-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 16px;
+  align-items: end;
+}
+.detail-children {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+.detail-spark {
+  margin-top: 14px;
+}
+
+/* ===== 小さな折れ線 (SVG) ===== */
+.sparkline {
+  width: 100%;
+  height: 44px;
+  display: block;
+}
+.spark-area {
+  fill: color-mix(in srgb, var(--series) 18%, transparent);
+  stroke: none;
+}
+.spark-line {
+  fill: none;
+  stroke: var(--series);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.spark-mark,
+.spark-base {
+  stroke: var(--grid);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 .visually-hidden {
@@ -1181,7 +1349,7 @@ details.data-view .scroll {
     padding: 0 12px 48px;
   }
   .chart-box {
-    height: 360px;
+    height: 300px;
   }
   header h1 {
     font-size: 18px;

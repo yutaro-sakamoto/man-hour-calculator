@@ -3,22 +3,38 @@ import { test } from "node:test";
 
 import { buildStatus, slackDays } from "./status.ts";
 import { createTask, emptyDocument } from "./project.ts";
-import { buildRows } from "./tree.ts";
 import type { ProjectSummary } from "../api/types.ts";
 import type { ScheduleModel } from "./schedule.ts";
 import type { ComputeResult } from "../wasm.ts";
 
 const NOW = "2026-09-20T10:00:00Z";
 
-/** 必要なところだけ埋めた計算結果。 */
-function result(over: Partial<ComputeResult> = {}): ComputeResult {
+/**
+ * 必要なところだけ埋めた計算結果。
+ *
+ * `effective` は葉ごとの `min, likely, max`。進捗はこの `likely` と
+ * `spent` から出る (`progress.ts`)。
+ */
+function result(
+  leaves: { total: number; spent: number; state?: number }[],
+  over: Partial<ComputeResult> = {},
+): ComputeResult {
   const percentiles = new Float64Array(7);
   percentiles[2] = 10; // P50
   percentiles[4] = 14; // P80
+  const effective = new Float64Array(leaves.length * 3);
+  leaves.forEach((leaf, index) => {
+    effective[index * 3] = leaf.total;
+    effective[index * 3 + 1] = leaf.total;
+    effective[index * 3 + 2] = leaf.total;
+  });
   return {
+    nTasks: leaves.length,
     percentiles,
-    totalSpent: 3,
-    states: new Float64Array([0, 0]),
+    totalSpent: leaves.reduce((sum, leaf) => sum + leaf.spent, 0),
+    spent: new Float64Array(leaves.map((leaf) => leaf.spent)),
+    effective,
+    states: new Float64Array(leaves.map((leaf) => leaf.state ?? 0)),
     ...over,
   } as ComputeResult;
 }
@@ -29,28 +45,24 @@ const schedule = (p50: number | null, p80: number | null): ScheduleModel =>
     overallMarks: { p10: null, p25: null, p50, p75: null, p80, p90: null },
   }) as ScheduleModel;
 
-function documentWith(tasks: { likely: string; progress: number }[]) {
+function documentWith(count: number) {
   const document = emptyDocument();
-  document.tasks = tasks.map((task, index) =>
-    createTask({
-      name: `t${String(index)}`,
-      min: task.likely,
-      likely: task.likely,
-      max: task.likely,
-    }),
+  document.tasks = Array.from({ length: count }, (_, index) =>
+    createTask({ name: `t${String(index)}` }),
   );
-  document.tasks.forEach((task, index) => {
-    task.progress = tasks[index]?.progress ?? 0;
-  });
   return document;
 }
 
 test("控えは計算結果をそのまま写す", () => {
-  const document = documentWith([
-    { likely: "1", progress: 0 },
-    { likely: "1", progress: 0 },
-  ]);
-  const status = buildStatus(document, buildRows(document.tasks), result(), schedule(5, 9), NOW);
+  const status = buildStatus(
+    documentWith(2),
+    result([
+      { total: 4, spent: 2 },
+      { total: 6, spent: 1 },
+    ]),
+    schedule(5, 9),
+    NOW,
+  );
 
   assert.equal(status.effortP50, 10);
   assert.equal(status.effortP80, 14);
@@ -62,11 +74,9 @@ test("控えは計算結果をそのまま写す", () => {
 });
 
 test("期間内に終わらない場合は完了日を持たない", () => {
-  const document = documentWith([{ likely: "1", progress: 0 }]);
   const status = buildStatus(
-    document,
-    buildRows(document.tasks),
-    result({ states: new Float64Array([0]) }),
+    documentWith(1),
+    result([{ total: 1, spent: 0 }]),
     schedule(null, null),
     NOW,
   );
@@ -74,16 +84,14 @@ test("期間内に終わらない場合は完了日を持たない", () => {
   assert.equal(status.finishP80, null);
 });
 
-test("進捗は予定の大きさで重みを付ける", () => {
-  // 件数で数えると、小さなタスクをたくさん終えただけで進んだように見える。
-  const document = documentWith([
-    { likely: "1", progress: 1 },
-    { likely: "9", progress: 0 },
-  ]);
+test("控えの進捗は工数ベースの 1 つの定義から引く", () => {
+  // 画面に出る進捗とサーバの遅延判定が食い違わないよう、出どころは 1 つ。
   const status = buildStatus(
-    document,
-    buildRows(document.tasks),
-    result({ states: new Float64Array([2, 0]) }),
+    documentWith(2),
+    result([
+      { total: 1, spent: 1, state: 2 },
+      { total: 9, spent: 0 },
+    ]),
     schedule(5, 9),
     NOW,
   );
@@ -92,11 +100,9 @@ test("進捗は予定の大きさで重みを付ける", () => {
 });
 
 test("何も無ければ進捗は 0 で、0 除算にならない", () => {
-  const document = documentWith([{ likely: "0", progress: 0.5 }]);
   const status = buildStatus(
-    document,
-    buildRows(document.tasks),
-    result({ states: new Float64Array([0]) }),
+    documentWith(1),
+    result([{ total: 0, spent: 0 }]),
     schedule(null, null),
     NOW,
   );
@@ -104,11 +110,9 @@ test("何も無ければ進捗は 0 で、0 除算にならない", () => {
 });
 
 test("基準は空で送る (保存時刻はサーバが刻む)", () => {
-  const document = documentWith([{ likely: "1", progress: 0 }]);
   const status = buildStatus(
-    document,
-    buildRows(document.tasks),
-    result({ states: new Float64Array([0]) }),
+    documentWith(1),
+    result([{ total: 1, spent: 0 }]),
     schedule(5, 9),
     NOW,
   );
