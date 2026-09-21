@@ -1016,3 +1016,72 @@ async fn an_attachment_id_used_by_another_comment_does_not_destroy_it() {
         "同じ id を別のコメントで使ったら消えた"
     );
 }
+
+#[tokio::test]
+async fn a_duplicated_auth_header_is_refused() {
+    // 前段のプロキシが「上書き」ではなく「追加」する設定だと、利用者が送った
+    // 値のほうが先に読まれて、名乗りたい放題になる。
+    let server = Harness::new(
+        SqliteConn::in_memory().unwrap(),
+        Auth::Header("X-Forwarded-User".into()),
+    );
+    let request = HttpRequest::builder()
+        .method("GET")
+        .uri("/v1/me")
+        .header("X-Forwarded-User", "root") // 利用者が送ったもの
+        .header("X-Forwarded-User", "bob") // プロキシが足したもの
+        .body(Body::empty())
+        .unwrap();
+    let response = server.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "重なったヘッダの 1 つ目を信じている"
+    );
+}
+
+/// 書き込みの**途中**で落ちても、前の中身がそのまま残ること。
+///
+/// API 層の検査 (`check_attachments`) は書き込みの前に弾くので、ここは
+/// 保存層を直に叩く。同じ id の添付を 2 つ持たせると、コメントの行を
+/// 書き換えたあと、添付の入れ直しが主キー違反で落ちる。
+#[test]
+fn a_write_that_fails_part_way_leaves_the_previous_row_alone() {
+    use mhc_api::model::{Attachment, Comment, CommentId, ProjectId};
+
+    let store = SqlStore::open(SqliteConn::in_memory().expect("開ける")).expect("開ける");
+    let mut handle = &store;
+
+    let file = |id: &str| Attachment {
+        id: id.into(),
+        filename: "a.png".into(),
+        mime: "image/png".into(),
+        size: 3,
+        data: "AAAA".into(),
+    };
+    let comment = |body: &str, attachments: Vec<Attachment>| Comment {
+        id: CommentId::new("c1"),
+        project_id: ProjectId::new("p1"),
+        task_id: None,
+        author: mhc_api::model::UserId::new("alice"),
+        body: body.into(),
+        created_at: NOW.into(),
+        updated_at: None,
+        attachments,
+    };
+
+    handle
+        .put_comment(comment("最初の本文", vec![file("a1")]))
+        .expect("書ける");
+
+    // 添付の id が重なっているので、入れ直しの途中で落ちる。
+    let broken = handle.put_comment(comment("書き直した本文", vec![file("dup"), file("dup")]));
+    assert!(broken.is_err(), "重複した id が通ってしまった");
+
+    let back = handle
+        .comment(&CommentId::new("c1"))
+        .expect("読める")
+        .expect("ある");
+    assert_eq!(back.body, "最初の本文", "落ちたのに本文が書き換わっている");
+    assert_eq!(back.attachments.len(), 1, "落ちたのに添付が消えている");
+}

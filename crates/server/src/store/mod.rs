@@ -19,6 +19,7 @@ pub mod schema;
 pub mod sqlite;
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use mhc_api::error::{ApiError, ApiResult};
@@ -68,6 +69,62 @@ pub trait Sql: Send {
 
     /// この保存先の呼び名 (起動時のログに出す)。
     fn label(&self) -> String;
+
+    /// ここから先をひとまとまりにする。
+    fn begin(&mut self) -> ApiResult<()> {
+        self.execute("BEGIN", &[])
+    }
+
+    /// まとめて確定する。
+    fn commit(&mut self) -> ApiResult<()> {
+        self.execute("COMMIT", &[])
+    }
+
+    /// まとめて捨てる。
+    fn rollback(&mut self) -> ApiResult<()> {
+        self.execute("ROLLBACK", &[])
+    }
+}
+
+/// ひとまとまりの書き込み。落ちれば**何も起きなかったことにする**。
+///
+/// これが無いと、「消してから入れ直す」形の書き込みが途中で落ちたときに
+/// 消しただけの状態が残る。プロジェクトなら前の版が消え、権限の行が空に
+/// なれば誰もそのプロジェクトに触れなくなる。
+///
+/// トランザクションは**接続**の状態なので、文ごとに錠を取り直しても続く。
+/// 書き込みのあいだは呼び出し側が排他の錠を持っているので、あいだに別の
+/// 書き込みが割り込むことはない (`http.rs` の `write()`)。
+#[must_use = "commit しないと巻き戻る"]
+struct Transaction<'a, C: Sql> {
+    store: &'a SqlStore<C>,
+    /// いちばん外側か。内側は何もしない (素の `BEGIN` は入れ子にできない)。
+    outermost: bool,
+    done: bool,
+}
+
+impl<C: Sql> Transaction<'_, C> {
+    fn commit(mut self) -> ApiResult<()> {
+        self.done = true;
+        self.store.depth.fetch_sub(1, Ordering::SeqCst);
+        if self.outermost {
+            self.store.sql().commit()?;
+        }
+        Ok(())
+    }
+}
+
+impl<C: Sql> Drop for Transaction<'_, C> {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        // `?` で途中から抜けた道。巻き戻す。
+        self.store.depth.fetch_sub(1, Ordering::SeqCst);
+        if self.outermost {
+            let _ = self.store.sql().rollback();
+        }
+    }
 }
 
 /// 取り出した行を読む助け。列がずれていたら 500 にする (黙って 0 にしない)。
@@ -171,6 +228,8 @@ const META_COLUMNS: &str =
 /// 読み書きのロックを取るので、ここでの待ちはまず起きない。
 pub struct SqlStore<C: Sql> {
     sql: Mutex<C>,
+    /// いま何重に囲まれているか。
+    depth: AtomicU32,
 }
 
 impl<C: Sql> SqlStore<C> {
@@ -179,6 +238,7 @@ impl<C: Sql> SqlStore<C> {
         schema::migrate(&mut sql)?;
         Ok(Self {
             sql: Mutex::new(sql),
+            depth: AtomicU32::new(0),
         })
     }
 
@@ -191,6 +251,20 @@ impl<C: Sql> SqlStore<C> {
         self.sql
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// ここから先をひとまとまりにする。返り値を `commit` すると確定する。
+    fn transaction(&self) -> ApiResult<Transaction<'_, C>> {
+        let outermost = self.depth.load(Ordering::SeqCst) == 0;
+        if outermost {
+            self.sql().begin()?;
+        }
+        self.depth.fetch_add(1, Ordering::SeqCst);
+        Ok(Transaction {
+            store: self,
+            outermost,
+            done: false,
+        })
     }
 
     pub fn label(&self) -> String {
@@ -304,6 +378,8 @@ impl<C: Sql> Store for &SqlStore<C> {
     }
 
     fn put_user(&mut self, user: User) -> ApiResult<()> {
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         self.sql().execute(
             "DELETE FROM users WHERE id = ?",
             &[Value::text(user.id.as_str())],
@@ -317,13 +393,16 @@ impl<C: Sql> Store for &SqlStore<C> {
                 Value::text(system_role_text(user.system_role)),
                 Value::text(&user.created_at),
             ],
-        )
+        )?;
+        tx.commit()
     }
 
     fn remove_user(&mut self, id: &UserId) -> ApiResult<bool> {
         if self.user(id)?.is_none() {
             return Ok(false);
         }
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         let key = Value::text(id.as_str());
         // **トークンを先に失効させる。** これが残っていると、あとから同じ id で
         // アカウントを作り直したときに、消したはずのトークンがそのまま通る
@@ -347,6 +426,7 @@ impl<C: Sql> Store for &SqlStore<C> {
         )?;
         self.sql()
             .execute("DELETE FROM users WHERE id = ?", &[key])?;
+        tx.commit()?;
         Ok(true)
     }
 
@@ -397,6 +477,8 @@ impl<C: Sql> Store for &SqlStore<C> {
     }
 
     fn put_user_group(&mut self, group: UserGroup) -> ApiResult<()> {
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         let key = Value::text(group.id.as_str());
         self.sql().execute(
             "DELETE FROM user_groups WHERE id = ?",
@@ -420,13 +502,15 @@ impl<C: Sql> Store for &SqlStore<C> {
                 &[key.clone(), Value::text(member.as_str())],
             )?;
         }
-        Ok(())
+        tx.commit()
     }
 
     fn remove_user_group(&mut self, id: &UserGroupId) -> ApiResult<bool> {
         if self.user_group(id)?.is_none() {
             return Ok(false);
         }
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         let key = Value::text(id.as_str());
         self.sql().execute(
             "DELETE FROM project_access WHERE principal_kind = 'group' AND principal_id = ?",
@@ -442,6 +526,7 @@ impl<C: Sql> Store for &SqlStore<C> {
         )?;
         self.sql()
             .execute("DELETE FROM user_groups WHERE id = ?", &[key])?;
+        tx.commit()?;
         Ok(true)
     }
 
@@ -485,6 +570,8 @@ impl<C: Sql> Store for &SqlStore<C> {
     }
 
     fn put_project_group(&mut self, group: ProjectGroup) -> ApiResult<()> {
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         let key = Value::text(group.id.as_str());
         self.sql().execute(
             "DELETE FROM project_groups WHERE id = ?",
@@ -503,7 +590,8 @@ impl<C: Sql> Store for &SqlStore<C> {
             "group_id",
             group.id.as_str(),
             &group.access,
-        )
+        )?;
+        tx.commit()
     }
 
     fn remove_project_group(&mut self, id: &ProjectGroupId) -> ApiResult<bool> {
@@ -558,6 +646,8 @@ impl<C: Sql> Store for &SqlStore<C> {
     }
 
     fn put_project(&mut self, project: Project) -> ApiResult<()> {
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         let meta = &project.meta;
         let key = Value::text(meta.id.as_str());
         let status = match &meta.status {
@@ -592,13 +682,16 @@ impl<C: Sql> Store for &SqlStore<C> {
             "project_id",
             meta.id.as_str(),
             &meta.access,
-        )
+        )?;
+        tx.commit()
     }
 
     fn remove_project(&mut self, id: &ProjectId) -> ApiResult<bool> {
         if self.project(id)?.is_none() {
             return Ok(false);
         }
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         let key = Value::text(id.as_str());
         self.sql().execute(
             "DELETE FROM project_access WHERE project_id = ?",
@@ -617,6 +710,7 @@ impl<C: Sql> Store for &SqlStore<C> {
         )?;
         self.sql()
             .execute("DELETE FROM projects WHERE id = ?", &[key])?;
+        tx.commit()?;
         Ok(true)
     }
 
@@ -654,6 +748,8 @@ impl<C: Sql> Store for &SqlStore<C> {
     }
 
     fn put_comment(&mut self, comment: Comment) -> ApiResult<()> {
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         let key = Value::text(comment.id.as_str());
         self.sql().execute(
             "DELETE FROM comments WHERE id = ?",
@@ -675,13 +771,16 @@ impl<C: Sql> Store for &SqlStore<C> {
         )?;
         // 添付は毎回まるごと置き換える。`edit_comment` が送られた一覧を
         // そのまま新しい一覧とするので、差分を取る意味が無い。
-        self.replace_attachments(&comment.id, &comment.attachments)
+        self.replace_attachments(&comment.id, &comment.attachments)?;
+        tx.commit()
     }
 
     fn remove_comment(&mut self, id: &CommentId) -> ApiResult<bool> {
         if self.comment(id)?.is_none() {
             return Ok(false);
         }
+        // ひとまとまりにする。途中で落ちたら、何も起きなかったことにする。
+        let tx = self.transaction()?;
         let key = Value::text(id.as_str());
         self.sql().execute(
             "DELETE FROM attachments WHERE comment_id = ?",
@@ -689,6 +788,7 @@ impl<C: Sql> Store for &SqlStore<C> {
         )?;
         self.sql()
             .execute("DELETE FROM comments WHERE id = ?", &[key])?;
+        tx.commit()?;
         Ok(true)
     }
 }
