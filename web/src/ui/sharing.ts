@@ -15,7 +15,7 @@ import {
 } from "../api/types.ts";
 import { canManage, type AppActions, type AppState } from "../app.ts";
 import { t } from "../i18n.ts";
-import { button, card, h, iconButton, select } from "./dom.ts";
+import { button, foldout, h, iconButton, select, type Child } from "./dom.ts";
 
 const ROLE_CHOICES = (): { value: ProjectRole; label: string }[] =>
   [...PROJECT_ROLES].reverse().map((role) => ({ value: role, label: t(`role.${role}`) }));
@@ -48,10 +48,33 @@ function candidates(
   return list;
 }
 
+/**
+ * 「共有」は畳んでおく。
+ *
+ * 既にグループと接続先は畳んであった (「一覧を主役にしたいので、管理まわりは
+ * 畳んでおく」) のに、共有とアカウントだけ開いたままだった。**ローカルでは
+ * ログインが無いので、ここで決めた権限はサーバに繋ぐまで効かない** —
+ * その断りを、この節自身が本文で書いている。初めて開いた人がいちばん先に
+ * 読むものが、いまは効かない機能の説明になっていた。
+ */
+function sharingPanel(state: AppState, children: Child[]): HTMLElement {
+  return foldout(
+    {
+      id: "panel-sharing",
+      title: t("share.heading"),
+      open: state.openPanels["panel-sharing"] ?? false,
+      onToggle: (open) => {
+        state.openPanels["panel-sharing"] = open;
+      },
+    },
+    children,
+  );
+}
+
 export function renderSharing(state: AppState, actions: AppActions): HTMLElement {
   const open = state.open;
   if (open === null) {
-    return card(t("share.heading"), [h("p", { class: "empty", text: t("share.needProject") })]);
+    return sharingPanel(state, [h("p", { class: "empty", text: t("share.needProject") })]);
   }
   const manage = canManage(state) || state.me.systemRole === "admin";
   const choices = candidates(
@@ -65,7 +88,7 @@ export function renderSharing(state: AppState, actions: AppActions): HTMLElement
     state.projects = await state.client.listProjects();
   };
 
-  return card(t("share.heading"), [
+  return sharingPanel(state, [
     h("p", { class: "hint", text: t("share.hint") }),
     state.client.remote ? null : h("p", { class: "hint", text: t("share.localHint") }),
     open.access.length === 0

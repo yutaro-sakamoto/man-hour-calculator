@@ -71,8 +71,20 @@ async function openCard(page, id) {
   await expect(panel).toHaveAttribute("open", "");
 }
 
+/**
+ * 「アカウント」の節を開く。
+ *
+ * プロジェクトタブの管理まわり (共有・グループ・アカウント・接続先) は
+ * **畳んである**。一覧を主役にするため。触る前に開く。
+ */
+const openAccounts = (page) => openCard(page, "panel-accounts");
+
+/** 「このプロジェクトの共有」の節を開く。理由は [openAccounts] と同じ。 */
+const openSharing = (page) => openCard(page, "panel-sharing");
+
 /** 「別のアカウントとして操作」で、名前に一致するアカウントに切り替える。 */
 async function actAs(page, name) {
+  await openAccounts(page);
   const picker = page.locator('select[aria-label="別のアカウントとして操作"]');
   const value = await picker
     .locator("option")
@@ -607,15 +619,52 @@ test("プロジェクトを増やして切り替えられる", async ({ page }) 
   await page.click('button:text("新しいプロジェクト")');
   await expect(page.locator("tr[data-project]")).toHaveCount(2);
   // 新しいほうが開いている。空なので計算するものが無い。
-  await expect(page.locator("#status")).toContainText(
-    "計算するタスクがありません",
-  );
+  await expect(page.locator("#status")).toContainText("タスクを 1 つ作ると");
 
   // ヘッダの切り替えで元に戻れる。
   await page.selectOption(".project-picker", { label: "Sample project" });
   await expect(page.locator("#status")).toContainText(/ms\)/);
   await openTab(page, "tasks");
   await expect(rows(page)).toHaveCount(8);
+});
+
+test("まっさらなプロジェクトは、責められずに始められる", async ({ page }) => {
+  // 作った直後は「何も間違っていない」。赤い字を出すと、初めての人は
+  // 自分が壊したと読む。案内は出すが、色は変えない。
+  await open(page);
+  await openTab(page, "projects");
+  await page.click('button:text("新しいプロジェクト")');
+  await openTab(page, "tasks");
+
+  const status = page.locator("#status");
+  await expect(status).toHaveAttribute("data-tone", "info");
+  await expect(status).toContainText("タスクを 1 つ作ると");
+
+  // 絞る対象が無いのに絞り込みを出さない。
+  await expect(page.locator(".filter-bar")).toHaveCount(0);
+
+  // **案内が名指しする操作が、実際に押せる。** ここに実物が無いまま
+  // 「サンプルを読み込む」と書いてあった時期がある。
+  await expect(page.locator(".empty")).toContainText("サンプルを読み込む");
+  await recompute(page, () =>
+    page.click('button:text("サンプルを読み込む")'),
+  );
+  await expect(rows(page)).toHaveCount(8);
+  // 見本が入れば、要約に数字が出る。
+  await expect(status).toContainText(/ms\)/);
+  expect(Number(await summary(page, "effortP80"))).toBeGreaterThan(0);
+
+  // 2 件以上になったので、絞り込みも出る。
+  await expect(page.locator(".filter-bar")).toHaveCount(1);
+});
+
+test("P80 が何かは、数字の出ている場所で分かる", async ({ page }) => {
+  // 意味の説明は「見通し」タブの奥にしか無かった。疑問が起きるのは手前。
+  await open(page);
+  await expect(page.locator(".summary-legend")).toContainText("80 %");
+  await expect(
+    page.locator('.summary-item[data-key="effortP80"]'),
+  ).toHaveAttribute("title", /80 %/);
 });
 
 test("プロジェクトの内容は互いに混ざらない", async ({ page }) => {
@@ -669,6 +718,7 @@ test("共有した相手は与えた権限の範囲でしか触れない", async
   await openTab(page, "projects");
 
   // 相手のアカウントを作る。
+  await openAccounts(page);
   await page.click('button:text("アカウントを追加")');
   await expect(page.locator("tr[data-account]")).toHaveCount(2);
   const otherName = page
@@ -680,6 +730,7 @@ test("共有した相手は与えた権限の範囲でしか触れない", async
   await otherName.blur();
 
   // 閲覧者として共有する。
+  await openSharing(page);
   const addRow = page
     .locator(".card", { hasText: "このプロジェクトの共有" })
     .locator(".inline-row");
@@ -704,6 +755,7 @@ test("所有者がいなくなる操作は拒否される", async ({ page }) => 
   await open(page);
   await openTab(page, "projects");
   // 唯一の所有者である自分の共有を解除しようとする。
+  await openSharing(page);
   await page
     .locator('tr[data-principal] button[title*="共有を解除"]')
     .first()
@@ -716,6 +768,7 @@ test("所有者がいなくなる操作は拒否される", async ({ page }) => 
 test("一般アカウントはアカウントを管理できない", async ({ page }) => {
   await open(page);
   await openTab(page, "projects");
+  await openAccounts(page);
   await page.click('button:text("アカウントを追加")');
   const second = page.locator("tr[data-account]").nth(1);
   await second.locator("input").first().fill("一般");
@@ -1135,6 +1188,7 @@ test("グループに配った権限はメンバー全員に効く", async ({ pa
   await openTab(page, "projects");
 
   // 2 人目のアカウントを作る。
+  await openAccounts(page);
   await page.click('button:text("アカウントを追加")');
   // 一覧は名前順。追加した行が 2 行目とはかぎらないので、既定の名前で探す。
   const added = page
@@ -1165,6 +1219,7 @@ test("グループに配った権限はメンバー全員に効く", async ({ pa
     .check();
 
   // そのチームに閲覧権限を配る。
+  await openSharing(page);
   const addShare = page.locator('[data-add="share"]');
   await addShare
     .locator('select[aria-label="相手"]')
@@ -1599,6 +1654,7 @@ test("閲覧しかできない人もコメントは書ける", async ({ page }) 
   await openTab(page, "projects");
 
   // 2 人目を作って、閲覧だけ配る。
+  await openAccounts(page);
   await page.click('button:text("アカウントを追加")');
   const added = page
     .locator("tr[data-account]")
@@ -1610,6 +1666,7 @@ test("閲覧しかできない人もコメントは書ける", async ({ page }) 
     page.locator('tr[data-account] input[value="鈴木"]'),
   ).toHaveCount(1);
 
+  await openSharing(page);
   const addShare = page.locator('[data-add="share"]');
   await addShare
     .locator('select[aria-label="相手"]')
@@ -1772,6 +1829,9 @@ test("タスク名に書いた HTML は、吹き出しで文字として出る",
 
   await openTab(page, "forecast");
   const chart = page.locator("#schedule-chart");
+  // **触る前に画面の中に入れる。** 上に 1 行増えただけで図が画面の外へ
+  // 出て、座標で触れなくなっていた。見た目の都合でずれる検査にしない。
+  await chart.scrollIntoViewIfNeeded();
   const box = await chart.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   const tip = page.locator("#schedule-tooltip");

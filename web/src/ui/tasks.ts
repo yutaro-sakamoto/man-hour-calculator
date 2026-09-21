@@ -3,7 +3,7 @@
 import type { AppActions, AppState } from "../app.ts";
 import { formatDayShort, formatNumber } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { createTask } from "../model/project.ts";
+import { createTask, sampleDocument } from "../model/project.ts";
 import {
   collectGroups,
   indentTask,
@@ -437,27 +437,38 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
   const sum = (key: "min" | "likely" | "max"): number =>
     totals.reduce((acc, row) => acc + row.rollup[key], 0);
 
+  const empty = state.rows.length === 0;
+  // **絞る対象が 2 件に満たないなら、絞り込みは出さない。**
+  // 検索・グループ・優先度・状態・担当の 5 つが並ぶと、初めての人は
+  // 「まずここを埋めるのか」と読む。1 件の表を絞っても得るものは無い。
+  // プロジェクト一覧も同じ規則 (`ui/projects.ts`)。
+  const worthFiltering = state.rows.length >= 2;
+
   return card(null, [
-    renderFilterBar(state, actions, shown.length),
-    h("p", { class: "hint", text: t("filter.viewOnly") }),
-    h("div", { class: "table-scroll" }, [
-      h("table", { class: "task-table" }, [
-        h("thead", {}, [headerRow(header)]),
-        h(
-          "tbody",
-          {},
-          shown.map((row, i) =>
-            renderRow(state, actions, row, { first: i === 0, last: i === shown.length - 1 }),
-          ),
-        ),
-      ]),
-    ]),
+    worthFiltering ? renderFilterBar(state, actions, shown.length) : null,
+    worthFiltering ? h("p", { class: "hint", text: t("filter.viewOnly") }) : null,
+    // 行が 1 つも無いときは表ごと出さない。列の見出しだけが並んでも、
+    // 読み取れるものが無い。
+    empty
+      ? null
+      : h("div", { class: "table-scroll" }, [
+          h("table", { class: "task-table" }, [
+            h("thead", {}, [headerRow(header)]),
+            h(
+              "tbody",
+              {},
+              shown.map((row, i) =>
+                renderRow(state, actions, row, { first: i === 0, last: i === shown.length - 1 }),
+              ),
+            ),
+          ]),
+        ]),
     h(
       "datalist",
       { id: "group-options" },
       groups.map((group) => h("option", { attrs: { value: group } })),
     ),
-    state.rows.length === 0
+    empty
       ? h("p", { class: "empty", text: t("tasks.empty") })
       : shown.length === 0
         ? h("p", { class: "empty", text: t("tasks.noMatch") })
@@ -472,30 +483,49 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
         },
         { id: "add-row", class: "primary" },
       ),
-      button(t("tasks.enableShown"), () => {
-        const ids = new Set(shown.map((row) => row.task.id));
-        actions.mutate((document) => {
-          for (const task of document.tasks) if (ids.has(task.id)) task.enabled = true;
-        });
-      }),
-      button(t("tasks.disableShown"), () => {
-        const ids = new Set(shown.map((row) => row.task.id));
-        actions.mutate((document) => {
-          for (const task of document.tasks) if (ids.has(task.id)) task.enabled = false;
-        });
-      }),
+      // **案内が指す操作を、実際に押せるようにする。** ここに置くまで、
+      // 空の表は「サンプルを読み込む」と案内しておきながら、その名前の
+      // ものが画面のどこにも無かった (見本は初回の起動時にしか作られない)。
+      empty
+        ? button(t("tasks.loadSample"), () => {
+            actions.mutate((document) => {
+              const sample = sampleDocument();
+              document.tasks = sample.tasks;
+              document.calendar.members = sample.calendar.members;
+              document.calendar.events = sample.calendar.events;
+            });
+          })
+        : null,
+      empty
+        ? null
+        : button(t("tasks.enableShown"), () => {
+            const ids = new Set(shown.map((row) => row.task.id));
+            actions.mutate((document) => {
+              for (const task of document.tasks) if (ids.has(task.id)) task.enabled = true;
+            });
+          }),
+      empty
+        ? null
+        : button(t("tasks.disableShown"), () => {
+            const ids = new Set(shown.map((row) => row.task.id));
+            actions.mutate((document) => {
+              for (const task of document.tasks) if (ids.has(task.id)) task.enabled = false;
+            });
+          }),
     ]),
-    h("p", { class: "hint", text: t("tasks.orderHint") }),
-    h("p", { class: "hint", text: t("tasks.assignHint") }),
-    h("p", {
-      class: "status",
-      text: t("tasks.totals", {
-        count: totals.length,
-        min: formatNumber(sum("min"), lang()),
-        likely: formatNumber(sum("likely"), lang()),
-        max: formatNumber(sum("max"), lang()),
-        unit: t("unit.days"),
-      }),
-    }),
+    empty ? null : h("p", { class: "hint", text: t("tasks.orderHint") }),
+    empty ? null : h("p", { class: "hint", text: t("tasks.assignHint") }),
+    empty
+      ? null
+      : h("p", {
+          class: "status",
+          text: t("tasks.totals", {
+            count: totals.length,
+            min: formatNumber(sum("min"), lang()),
+            likely: formatNumber(sum("likely"), lang()),
+            max: formatNumber(sum("max"), lang()),
+            unit: t("unit.days"),
+          }),
+        }),
   ]);
 }
