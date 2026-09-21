@@ -116,3 +116,54 @@ mod tests {
         assert!(!spread.is_degenerate());
     }
 }
+
+/// 3 点見積もりの不変条件を**有界モデル検査**で確かめる。
+///
+/// この型は「作れた時点で `0 <= min <= likely <= max` かつ有限」を
+/// 約束している。約束しているのは型なので、テストで標本を撃つのではなく、
+/// **すべての `f64` の組について**成り立つことを Kani に証明させる。
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    /// 作れたなら不変条件が成り立つ (健全性)。
+    #[kani::proof]
+    fn a_constructed_estimate_always_satisfies_its_invariant() {
+        let (min, likely, max): (f64, f64, f64) = (kani::any(), kani::any(), kani::any());
+        if let Ok(e) = TaskEstimate::new(min, likely, max) {
+            assert!(e.min().is_finite() && e.likely().is_finite() && e.max().is_finite());
+            assert!(e.min() >= 0.0, "負の値を通した");
+            assert!(e.min() <= e.likely(), "min <= likely が破れた");
+            assert!(e.likely() <= e.max(), "likely <= max が破れた");
+            // 幅は NaN にならず、必ず 0 以上。
+            assert!(e.width() >= 0.0, "幅が負か NaN");
+        }
+    }
+
+    /// 不変条件を満たす入力は必ず受け付ける (完全性)。
+    ///
+    /// 健全性だけだと「全部断る」実装でも通ってしまう。
+    #[kani::proof]
+    fn any_valid_triple_is_accepted() {
+        let (min, likely, max): (f64, f64, f64) = (kani::any(), kani::any(), kani::any());
+        kani::assume(min.is_finite() && likely.is_finite() && max.is_finite());
+        kani::assume(min >= 0.0 && min <= likely && likely <= max);
+        assert!(
+            TaskEstimate::new(min, likely, max).is_ok(),
+            "妥当な組を断った"
+        );
+    }
+
+    /// `NaN` はどの位置にあっても必ず弾かれる。
+    ///
+    /// `NaN` は比較がすべて偽になるので、素朴な `if min > likely` の形だと
+    /// すり抜ける。ここが通ることで、以降の比較を全順序として扱ってよい
+    /// ことが保証される。
+    #[kani::proof]
+    fn nan_never_gets_through() {
+        let (a, b): (f64, f64) = (kani::any(), kani::any());
+        assert!(TaskEstimate::new(f64::NAN, a, b).is_err());
+        assert!(TaskEstimate::new(a, f64::NAN, b).is_err());
+        assert!(TaskEstimate::new(a, b, f64::NAN).is_err());
+    }
+}

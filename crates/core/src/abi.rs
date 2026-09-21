@@ -1593,3 +1593,58 @@ mod tests {
         assert_eq!(fallback[6], pert[6], "平均が PERT と一致する");
     }
 }
+
+/// 応答バッファの寸法を**有界モデル検査**で確かめる。
+///
+/// JS は返ってきたバッファを、ヘッダに書かれた寸法どおりに区切って読む。
+/// ここの足し算が桁あふれすると、**宣言された長さと実際の長さが食い違い、
+/// JS が確保されていない領域を読む**。これはこの ABI で最も重い失敗なので、
+/// 標本ではなく、受け付けうる寸法の**すべての組**について証明する。
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    /// 受け付けうる寸法の範囲を仮定して、区画が重ならず、
+    /// 最後の目印が全体の長さと一致することを確かめる。
+    #[kani::proof]
+    fn the_declared_length_always_matches_the_sections() {
+        let n_bins: usize = kani::any();
+        let n_tasks: usize = kani::any();
+        let prefix_width: usize = kani::any();
+        let n_members: usize = kani::any();
+        let n_days: usize = kani::any();
+
+        // `Request::decode` が通す範囲。これ以外はそもそも計算に入らない。
+        kani::assume((MIN_BINS..=MAX_BINS).contains(&n_bins));
+        kani::assume((1..=MAX_TASKS).contains(&n_tasks));
+        kani::assume(prefix_width <= MAX_PREFIX_BINS + 1);
+        kani::assume((1..=MAX_MEMBERS).contains(&n_members));
+        kani::assume(n_days <= MAX_HORIZON);
+        let n_pct = PCT_LEVELS.len();
+
+        let offsets = response_offsets(n_bins, n_pct, n_tasks, prefix_width, n_members, n_days);
+
+        // 区画は前から順に並び、重ならない。
+        assert!(offsets[0] == RESP_HEADER, "本体はヘッダの直後から始まる");
+        let mut i = 1;
+        while i < offsets.len() {
+            assert!(offsets[i] >= offsets[i - 1], "区画の順が逆転している");
+            i += 1;
+        }
+
+        // 最後の目印 = ヘッダ + 全区画の長さの和。桁あふれしていれば破れる。
+        let body = n_bins
+            + (n_bins + 1)
+            + n_pct * 2
+            + n_tasks * 4
+            + n_tasks * 3
+            + n_tasks * prefix_width
+            + n_members
+            + n_members * n_days * 3;
+        assert_eq!(
+            offsets[LAST_OFFSET],
+            RESP_HEADER + body,
+            "宣言長が区画の合計と一致しない"
+        );
+    }
+}

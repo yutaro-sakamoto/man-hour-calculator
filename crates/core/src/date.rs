@@ -8,8 +8,12 @@
 /// 日数から曜日を求める。`0` = 日曜、`6` = 土曜。
 ///
 /// 1970-01-01 は木曜日なので、そこを基準にしている。
+///
+/// **先に 7 で割ってから 4 を足す。** 素直に `day + 4` と書くと
+/// `i64` の上端で桁あふれする (Kani が見つけた)。実際の日数は暦の範囲に
+/// 収まるが、公開の関数が入力次第で panic しうる状態にはしておかない。
 pub fn weekday(day: i64) -> u32 {
-    (((day + 4) % 7 + 7) % 7) as u32
+    (day.rem_euclid(7) + 4).rem_euclid(7) as u32
 }
 
 /// 年月日から日数へ。
@@ -260,5 +264,75 @@ mod tests {
             4,
             "5 月の祝日は 3・4・5・6 の 4 日"
         );
+    }
+}
+
+/// 暦の変換を**有界モデル検査**で確かめる。
+///
+/// テストが確かめられるのは「試した入力について正しい」ことだけで、
+/// 日付の変換のように穴のあき方が分かりにくいものでは、標本の外に
+/// 落とし穴が残る。ここでは日数を**記号のまま**扱い、区間のすべての値に
+/// ついて成り立つことを Kani (CBMC) に証明させる。
+///
+/// `cargo kani` のときだけ組み立てられるので、通常のビルドには影響しない。
+/// 依存クレートも増えない (`kani` は検査器が注入する)。
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    /// 1970-01-01 から ±200 年ぶん。うるう年・100 年・400 年の分岐を
+    /// すべてまたぐ幅を取ってある。
+    const LO: i64 = -73_000;
+    const HI: i64 = 73_000;
+
+    /// 日数 → 年月日 → 日数 が恒等であること。
+    ///
+    /// この 2 つは別々の式で書かれていて、片方だけ間違っていても
+    /// 個別の値では一致してしまうことがある。
+    #[kani::proof]
+    fn civil_round_trip_is_identity() {
+        let day: i64 = kani::any();
+        kani::assume((LO..=HI).contains(&day));
+
+        let (y, m, d) = civil_from_days(day);
+        assert!((1..=12).contains(&m), "月が 1..=12 の外");
+        assert!((1..=31).contains(&d), "日が 1..=31 の外");
+        assert_eq!(days_from_civil(y, m, d), day, "往復して戻らない");
+    }
+
+    /// 隣り合う日は、年月日として見ても必ず 1 日進むこと。
+    ///
+    /// 月末・年末・うるう日をまたぐところで境界がずれていないかを、
+    /// 区間のすべての点について確かめる。
+    #[kani::proof]
+    fn the_next_day_is_always_one_day_later() {
+        let day: i64 = kani::any();
+        kani::assume((LO..HI).contains(&day));
+
+        let (y0, m0, d0) = civil_from_days(day);
+        let (y1, m1, d1) = civil_from_days(day + 1);
+        let same_month = y1 == y0 && m1 == m0 && d1 == d0 + 1;
+        let next_month = y1 == y0 && m1 == m0 + 1 && d1 == 1;
+        let next_year = y1 == y0 + 1 && m0 == 12 && m1 == 1 && d1 == 1;
+        assert!(
+            same_month || next_month || next_year,
+            "日付が 1 日進んでいない"
+        );
+    }
+
+    /// 曜日は必ず 0..=6。**負の日数でも**。
+    ///
+    /// Rust の `%` は負の左辺に対して負を返すので、素朴に書くと
+    /// 1970 年より前で範囲外になる。そこを補正してあることの証明。
+    #[kani::proof]
+    fn the_weekday_is_always_in_range() {
+        // **どんな `i64` でも**。範囲の仮定を置かない。
+        let day: i64 = kani::any();
+        let w = weekday(day);
+        assert!(w < 7, "曜日が 0..=6 の外");
+        // 7 日周期であること (足して桁あふれしないところで確かめる)。
+        if day < i64::MAX - 7 {
+            assert_eq!(weekday(day + 7), w, "7 日周期になっていない");
+        }
     }
 }

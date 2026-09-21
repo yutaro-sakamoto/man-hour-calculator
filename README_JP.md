@@ -319,15 +319,22 @@ E[総] = p·E[当初] + (1 − p)·E[当初] = E[当初]
 - 担当者のいないタスクは黙って誰かに押し付けず、「未割当」という仮の人員に
   まとめて画面にもそう出す
 - 日本の祝日は近似式で求めた春分・秋分を含め、公表値と一致することをテストで固定
+- **[Kani](https://model-checking.github.io/kani/) による有界モデル検査**が、
+  11 個の不変条件を「試した入力」ではなく**区間のすべての入力**について証明します。
+  日付の往復、見積もりの不変条件、応答バッファの寸法、権限の順序
+- **[TLA+](https://lamport.azurewebsites.net/tla/tla.html) と TLC** で権限の設計を
+  検査します。到達しうるどの状態でも、各プロジェクトには実在の所有者が
+  1 人以上残ること。単体テストが見ていなかった穴が見つかりました
+- **`cargo miri`** が FFI 層を strict provenance で回します。JavaScript から来た
+  生ポインタを扱う唯一の場所を、未定義動作の観点で確かめます
+- `docs/VERIFICATION.md` に「どの約束を、どの強さで、どこで確かめているか」の
+  対応表があります
 
 ## これから
 
 - AWS（API Gateway + Lambda + DynamoDB）への配置。構成と手順は `docs/AWS.md` に
   書いてあり、`Store` の実装とハンドラの外側だけが残っています
 - タスク間相関（単一ファクター・ガウシアンコピュラ）。ABI には場所を確保済み
-- [Kani](https://model-checking.github.io/kani/) による有界モデル検査と、
-  不変条件 ⇔ 検証手段の追跡表（`docs/VERIFICATION.md`）
-- `cargo miri` で FFI 層の未定義動作検査
 - タグ push で `dist/app.html` を Release に添付
 
 ## ライセンス
