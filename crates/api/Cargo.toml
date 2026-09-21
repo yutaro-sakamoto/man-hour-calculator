@@ -13,3 +13,8 @@ serde_json = "1"
 
 [lints]
 workspace = true
+
+[features]
+# 適合テスト (`store::conformance`) を外から使えるようにする。
+# 既定では入らない。ローカル版 (WASM) に検査用のコードを載せないため。
+conformance = []

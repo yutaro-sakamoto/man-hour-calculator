@@ -50,6 +50,10 @@ gh pr merge <n> --merge --delete-branch
   外部のアイコン・フォント・画像を足さない。`fetch()` を増やさない
 - **HTML の文字列を組み立てない。** 文字は必ず `textContent` に入れる。
   `innerHTML` は使わない ([.claude/rules/frontend.md](.claude/rules/frontend.md))
+- **保存先は全部、同じ約束を守る。** 検査は
+  [crates/api/src/store/conformance.rs](crates/api/src/store/conformance.rs) に
+  1 組だけ置き、実装ごとに当てる。`Store` を実装するものを増やすときは、
+  **書く前にこれを通す**
 - **権限の判定は `crates/api` の 1 か所だけ。** ローカル (WASM) でもサーバでも
   同じコードが動く。画面側の出し分けは見た目の話でしかない
 - **Rust の依存クレートはゼロ**（`crates/core` と `crates/api`）。

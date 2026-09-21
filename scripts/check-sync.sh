@@ -97,10 +97,14 @@ say "文書のリンク: $links 本 (切れ $missing)"
 
 # -------------------------------------------- 保存データと表の版 ⇔ 移行の段
 # `STORE_VERSION` を上げたら、サーバの表にも段が要る (その逆も)。
-store_version=$(grep -oP 'pub const STORE_VERSION: u32 = \K[0-9]+' crates/api/src/store.rs)
+store_version=$(grep -oP 'pub const STORE_VERSION: u32 = \K[0-9]+' crates/api/src/store/mod.rs)
 schema_steps=$(grep -cP '^\s+// 版 [0-9]+:' crates/server/src/store/schema.rs)
 say "保存データの版=$store_version / 表の段=$schema_steps"
-if [ -n "$store_version" ] && [ "$store_version" -gt "$schema_steps" ]; then
+# **読み取れないことを「ずれ無し」と読まない。** ファイルを動かしたときに
+# 黙って検査が消えるのを防ぐ (実際に store.rs → store/mod.rs で起きた)。
+if [ -z "$store_version" ]; then
+  bad "STORE_VERSION を読み取れません (crates/api/src/store/mod.rs)"
+elif [ "$store_version" -gt "$schema_steps" ]; then
   bad "保存データの版 ($store_version) に対して、表の段 ($schema_steps) が足りません"
 fi
 

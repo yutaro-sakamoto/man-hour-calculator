@@ -61,6 +61,41 @@
 3. 入れ物の所有者を、**構成員の居ないグループに付け替える**
    (`set_group_access` — 「付与が 1 つ残っている」ことしか見ていなかった)
 
+## 保存先 (`Store` の実装すべて)
+
+保存先は 3 つになる (メモリ・SQL・DynamoDB) が、**どれも同じ約束を守る**。
+実装ごとにテストを書くと食い違いに気づけないので、検査は
+`crates/api/src/store/conformance.rs` に 1 組だけ置き、
+**同じものをすべての実装に当てる**。新しい保存先を足すときは、
+書く前にこれを通すこと。
+
+| 約束 | 手段 | どこ |
+|---|---|---|
+| `put_*` は upsert。同じ id で二重に増えない | 適合テスト | `put_is_upsert` |
+| `remove_*` は「本当に消したか」を返す | 適合テスト | `remove_reports_whether_it_existed` |
+| 無い id は `None` / 空。エラーにしない | 適合テスト | `missing_ids_are_none` |
+| アカウントを消すと、その宛先の権限と所属も消える | 適合テスト | `removing_a_user_takes_its_grants_with_it` |
+| グループを消すと、そのグループ宛ての権限も消える | 適合テスト | `removing_a_user_group_takes_its_grants_with_it` |
+| **プロジェクト群を消しても、配下のプロジェクトは消さない** | 適合テスト | `removing_a_project_group_keeps_its_projects` |
+| プロジェクトを消すと、コメントと添付も消える | 適合テスト | `removing_a_project_takes_its_comments_with_it` |
+| 一覧は中身 (`Document`) を読まない | 型 + 適合テスト | `project_metas_has_no_document` |
+| コメントは `(created_at, id)` の順。**並べるのは Store** | 適合テスト | `comments_come_back_oldest_first` |
+| 添付は `put_comment` で全置換。並びは入れた順 | 適合テスト | `put_comment_replaces_the_whole_attachment_list` |
+| **件数は数え直さない。** 渡された値をそのまま持つ | 適合テスト | `counts_are_stored_as_given` |
+| 権限は `(種別, id)` の順で返る | 適合テスト | `access_order_is_normalized` |
+| グループのメンバーは id の順で返る | 適合テスト | `group_members_are_normalized` |
+
+当てている実装:
+
+| 実装 | どこ |
+|---|---|
+| `MemoryStore` (ローカル版・WASM のなか) | `store/mod.rs` `the_memory_store_keeps_the_contract` |
+| `SqlStore` (SQLite / PostgreSQL) | `server/tests/store_conformance.rs` |
+
+最後の 2 つは、この表を作るまで**実装ごとに違っていた**。`MemoryStore`
+だけが `put_project` で件数を数え直し、権限の並びは `SqlStore` だけが
+正規化していた。同じ操作でローカル版とサーバ版の応答が違う状態だった。
+
 ## FFI (`crates/wasm`)
 
 | 約束 | 手段 | どこ |
@@ -81,7 +116,7 @@
 ## 回し方
 
 ```sh
-cargo test --workspace                     # 1〜3 段
+cargo test --workspace                     # 1〜3 段 (Store の適合テストも含む)
 cargo kani --workspace                     # 5 段 (11 ハーネス、約 45 秒)
 cargo +nightly miri test -p mhc-wasm       # FFI (約 2 分)
 ./spec/check.sh                            # 6 段 (TLC)
@@ -105,4 +140,8 @@ CI では `miri` `kani` `TLA+` と、上のずれの検査が pull request ご�
 - **TLA+ の対象は権限の設計だけ。** 計算の進み方やカレンダーは
   モデル化していない。
 - `crates/server` の SQL 層は、実際の PostgreSQL と SQLite に対する
-  CI ジョブで見ている (形式的な検証はしていない)。
+  CI ジョブで見ている (形式的な検証はしていない)。適合テストは SQLite に
+  対してだけ回している。PostgreSQL は CI の専用ジョブで `tests/api.rs` を
+  通しており、そこまで二重に回してはいない。
+- **同時に書いたときの振る舞いは `Store` の約束に入っていない。**
+  直列化は呼び出し側の仕事 (サーバは書き込みロック)。

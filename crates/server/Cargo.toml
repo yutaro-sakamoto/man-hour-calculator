@@ -30,6 +30,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# `Store` の適合テスト。本体には入れない (検査用のコードを配らない)。
+mhc-api = { path = "../api", features = ["conformance"] }
 
 [lints]
 workspace = true
