@@ -316,7 +316,7 @@ jobs:
 
       # tla2tools.jar は版を固定して取りに行く。
       - name: Cache tla2tools
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: spec/.tla
           key: tla2tools-v1.7.4
