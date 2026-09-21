@@ -238,6 +238,48 @@ jobs:
             e2e/test-results
           retention-days: 7
 
+  # 「どこを通っていないか分からない」を潰す。閾値は全体で 1 つだけ置き、
+  # 内訳はログに出す。crates/xtask と crates/wasm (ビルド道具と FFI) は
+  # 数字を押し下げるが、除くと「除いたところが腐る」ので入れたまま。
+  coverage:
+    name: coverage — rust / typescript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: rustup show
+
+      - name: Add llvm-tools
+        run: rustup component add llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # 内訳を出してから、全体の行カバレッジで判定する。
+      - name: Rust coverage
+        run: |
+          cargo llvm-cov --workspace --summary-only
+          cargo llvm-cov --workspace --summary-only --fail-under-lines 85
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      # Node の組み込みだけで測る (道具を増やさない)。読み込まれた
+      # ファイルだけが数えられるので、DOM の要る ui/ や charts/ は
+      # 対象に入らない — 純粋なモジュールだけ、という意味のある範囲になる。
+      - name: TypeScript coverage
+        working-directory: web
+        run: npm run test:coverage
+
   # 「書いてある手順どおりの環境で本当に動くか」を見る。既存の server ジョブと
   # 同じ筋書きを、**Dev Container の中で**もう一度通す。重複は承知の上で、
   # 開発環境が口伝に戻らないようにするのが目的。
