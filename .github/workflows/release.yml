@@ -173,17 +173,34 @@ jobs:
           set -euo pipefail
           bin="target/${{ matrix.target }}/server/mhc-server${{ matrix.ext }}"
           "$bin" --help > /dev/null
-          "$bin" --db "sqlite:$(mktemp -d)/smoke.db" --listen 127.0.0.1:8080 > server.log 2>&1 &
+
+          # 保存先は**作業ディレクトリからの相対**にする。Windows の bash で
+          # `mktemp -d` が返す `/tmp/...` は、Rust 側から見ると ドライブの無い
+          # 読めない綴りになり、サーバが起動しない。
+          rm -f smoke.db
+          "$bin" --db sqlite:./smoke.db --listen 127.0.0.1:8080 > server.log 2>&1 &
+          server_pid=$!
+
+          ok=""
           for _ in $(seq 30); do
-            curl -sf localhost:8080/healthz > /dev/null && break
+            if curl -sf localhost:8080/healthz > /dev/null; then ok=yes; break; fi
+            # 起動に失敗していたら待つだけ無駄。理由を出して止める。
+            if ! kill -0 "$server_pid" 2> /dev/null; then break; fi
             sleep 1
           done
+          if [ -z "$ok" ]; then
+            echo "::error::サーバが応答しません"
+            cat server.log
+            exit 1
+          fi
+
           curl -sf localhost:8080/healthz -o health.json
           cat health.json
           grep -q '"ok"' health.json
           # 画面が**本物**であること。仮ページを抱えたまま配らない。
           curl -sf localhost:8080/ -o ui.html
           grep -q '工数見積もり / Effort Estimator' ui.html
+          kill "$server_pid" 2> /dev/null || true
 
       - name: Package
         shell: bash
@@ -191,6 +208,7 @@ jobs:
           VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
+          rm -f smoke.db health.json ui.html server.log
           name="mhc-server-${VERSION}-${{ matrix.target }}"
           mkdir -p "stage/$name"
           cp "target/${{ matrix.target }}/server/mhc-server${{ matrix.ext }}" "stage/$name/"
