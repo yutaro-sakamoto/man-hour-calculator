@@ -65,11 +65,20 @@ const openTab = (page, tab) => page.click(`.tabs button[data-tab="${tab}"]`);
 
 /** 畳んであるカードを id で開く。言語に依らないので、英語の画面でも使える。 */
 async function openCard(page, id) {
-  const panel = page.locator(`details.foldout#${id}`);
+  // `foldout` (カードそのもの) と `subfold` (カードの中の節) の両方。
+  const panel = page.locator(`details#${id}`);
   if (await panel.evaluate((node) => node.open)) return;
   await panel.locator("summary").click();
   await expect(panel).toHaveAttribute("open", "");
 }
+
+/**
+ * 「タスクごとの見通し」の表を開く。
+ *
+ * **図と要約は開いたまま、引きに行く表は畳んである。** 見通しタブは
+ * 開きっぱなしだと縦 3220px あり、どこを見ればよいか分からなかった。
+ */
+const openForecastRows = (page) => openCard(page, "fold-forecast-rows");
 
 /**
  * 「アカウント」の節を開く。
@@ -489,11 +498,32 @@ test("祝日を使わない設定にすると稼働量が増える", async ({ pa
   expect(await total()).toBeGreaterThan(before);
 });
 
+test("帯グラフは入れ物からはみ出さない", async ({ page }) => {
+  // 入れ物の高さが 340px 固定で、タスクが増えて背の伸びた図が
+  // **下に来るものの上に重なっていた**。その下が見出しだったうちは
+  // 誰も気づかなかったが、押せるものを置いた途端に押せなくなる。
+  await open(page);
+  await openTab(page, "forecast");
+  const overflow = await page.evaluate(() => {
+    const canvas = document.querySelector("#schedule-chart");
+    const box = canvas.closest("figure");
+    return Math.round(
+      canvas.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom,
+    );
+  });
+  expect(overflow, "図が入れ物からはみ出している").toBeLessThanOrEqual(0);
+
+  // その結果として、すぐ下の見出しが実際に押せる。
+  await openForecastRows(page);
+  await expect(page.locator(".forecast-table")).toBeVisible();
+});
+
 test("見通しにタスクごとの完了予測と確率が出る", async ({ page }) => {
   await open(page);
   await openTab(page, "forecast");
   await expect(page.locator("#schedule-chart")).toBeVisible();
 
+  await openForecastRows(page);
   // 全体を含めて 9 行。
   const table = page.locator(".forecast-table tbody tr");
   await expect(table).toHaveCount(9);
@@ -941,6 +971,7 @@ test("行を押すとタスクの詳細が開き、そこで直すと予測が�
   await openTab(page, "forecast");
   const before = await tile(page, "p80");
 
+  await openForecastRows(page);
   await page
     .locator('.forecast-table button.row-open:text("API implementation")')
     .click();
@@ -966,6 +997,7 @@ test("グループを押すと合計が読み取り専用で出て、子をた�
 }) => {
   await open(page);
   await openTab(page, "forecast");
+  await openForecastRows(page);
   await page
     .locator('.forecast-table button.row-open:text("Build phase")')
     .click();

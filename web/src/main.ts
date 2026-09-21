@@ -139,6 +139,8 @@ function chartHost(
   canvasId: string,
   tooltipId: string,
   labelKey: "chart.altHist" | "sched.ganttTitle",
+  /** 中身の高さに合わせて伸びるか (タスクの数で背が変わる図)。 */
+  grows = false,
 ): ChartHost {
   const canvas = h("canvas", {
     id: canvasId,
@@ -149,11 +151,17 @@ function chartHost(
     class: "tooltip",
     attrs: { role: "status", "aria-live": "polite" },
   });
-  return { figure: h("figure", { class: "chart-box" }, [canvas, tooltip]), canvas, tooltip };
+  return {
+    figure: h("figure", { class: `chart-box${grows ? " grows" : ""}` }, [canvas, tooltip]),
+    canvas,
+    tooltip,
+  };
 }
 
 const distributionHost = chartHost("chart", "chart-tooltip", "chart.altHist");
-const scheduleHost = chartHost("schedule-chart", "schedule-tooltip", "sched.ganttTitle");
+// 帯グラフはタスクの数だけ背が伸びる。入れ物を 340px に固定すると
+// **はみ出した図が下の見出しに重なり、押せなくなる**。実際になっていた。
+const scheduleHost = chartHost("schedule-chart", "schedule-tooltip", "sched.ganttTitle", true);
 
 const widgets: AppWidgets = {
   distributionFigure: distributionHost.figure,

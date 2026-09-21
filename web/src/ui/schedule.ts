@@ -13,7 +13,7 @@ import { lang, t } from "../i18n.ts";
 import { progressOfSubtree, progressOverall, type Progress } from "../model/progress.ts";
 import type { ScheduleModel, ScheduleRow } from "../model/schedule.ts";
 import type { TreeRow } from "../model/tree.ts";
-import { button, card, dateInput, h } from "./dom.ts";
+import { button, card, dateInput, foldout, h, subfold } from "./dom.ts";
 
 function legend(): HTMLElement {
   return h("div", { class: "legend" }, [
@@ -34,8 +34,15 @@ export function renderMemberCard(state: AppState): HTMLElement | null {
   if (working.length <= 1) return null;
   const l = lang();
 
-  return card(
-    t("sched.byMember"),
+  return foldout(
+    {
+      id: "panel-by-member",
+      title: t("sched.byMember"),
+      open: state.openPanels["panel-by-member"] ?? false,
+      onToggle: (open) => {
+        state.openPanels["panel-by-member"] = open;
+      },
+    },
     [
       h("p", { class: "hint", text: t("sched.memberNote") }),
       h("table", { class: "member-summary" }, [
@@ -70,7 +77,6 @@ export function renderMemberCard(state: AppState): HTMLElement | null {
         ),
       ]),
     ],
-    "card-members",
   );
 }
 
@@ -183,58 +189,72 @@ function renderForecastTable(
     }),
   ]);
 
-  return h("div", { class: "forecast-table-wrap" }, [
-    h("h3", { class: "section-title", text: t("sched.rowHeading") }),
-    h("p", { class: "hint", text: t("sched.rowNote") }),
-    h("table", { class: "forecast-table" }, [
-      h("thead", {}, [
-        h("tr", {}, [
-          h("th", { text: t("sched.taskCol") }),
-          h("th", { class: "num", text: t("summary.progress") }),
-          h("th", { class: "num", text: `${t("sched.remainingCol")} (${t("unit.days")})` }),
-          h("th", { text: t("summary.finishP50") }),
-          h("th", { text: t("summary.finishP80") }),
-          h("th", { class: "num" }, [t("sched.probability"), picker]),
-        ]),
-      ]),
-      h(
-        "tbody",
-        {},
-        forecastRows(state, model, at).map((row) =>
-          h("tr", { dataset: { strong: String(row.strong), row: row.id ?? "overall" } }, [
-            h("td", { class: "name-cell" }, [
-              h("span", { class: "indent", style: { width: `${String(row.depth * 16)}px` } }),
-              row.openable && row.id !== null
-                ? button(
-                    row.label,
-                    () => {
-                      openTaskDetail(actions, row.id ?? "");
-                    },
-                    { class: "row-open", dataset: { task: row.id } },
-                  )
-                : h("span", { text: row.label }),
-            ]),
-            progressCell(row.progress),
-            h("td", {
-              class: "num",
-              text: row.progress === null ? "—" : formatNumber(row.progress.remaining, l, 1),
-            }),
-            markCell(model, row.marks?.p50),
-            markCell(model, row.marks?.p80),
-            h("td", { class: "num", dataset: { prob: row.probability.toFixed(4) } }, [
-              h("span", { class: "bar-track inline" }, [
-                h("span", {
-                  class: "bar-fill",
-                  style: { width: `${String(row.probability * 100)}%` },
-                }),
-              ]),
-              h("span", { class: "bar-value", text: formatPercent(row.probability, l, 0) }),
+  // **引きに行く表なので畳む。** 上の帯グラフで全体は読めている。
+  // ここを常に開いておくと、タブが縦に伸びて「どこを見ればよいか」が
+  // 分からなくなる (開いたときの高さは 3220px あった)。
+  return subfold(
+    {
+      id: "fold-forecast-rows",
+      title: t("sched.rowHeading"),
+      open: state.openPanels["fold-forecast-rows"] ?? false,
+      onToggle: (open) => {
+        state.openPanels["fold-forecast-rows"] = open;
+      },
+    },
+    [
+      h("div", { class: "forecast-table-wrap" }, [
+        h("p", { class: "hint", text: t("sched.rowNote") }),
+        h("table", { class: "forecast-table" }, [
+          h("thead", {}, [
+            h("tr", {}, [
+              h("th", { text: t("sched.taskCol") }),
+              h("th", { class: "num", text: t("summary.progress") }),
+              h("th", { class: "num", text: `${t("sched.remainingCol")} (${t("unit.days")})` }),
+              h("th", { text: t("summary.finishP50") }),
+              h("th", { text: t("summary.finishP80") }),
+              h("th", { class: "num" }, [t("sched.probability"), picker]),
             ]),
           ]),
-        ),
-      ),
-    ]),
-  ]);
+          h(
+            "tbody",
+            {},
+            forecastRows(state, model, at).map((row) =>
+              h("tr", { dataset: { strong: String(row.strong), row: row.id ?? "overall" } }, [
+                h("td", { class: "name-cell" }, [
+                  h("span", { class: "indent", style: { width: `${String(row.depth * 16)}px` } }),
+                  row.openable && row.id !== null
+                    ? button(
+                        row.label,
+                        () => {
+                          openTaskDetail(actions, row.id ?? "");
+                        },
+                        { class: "row-open", dataset: { task: row.id } },
+                      )
+                    : h("span", { text: row.label }),
+                ]),
+                progressCell(row.progress),
+                h("td", {
+                  class: "num",
+                  text: row.progress === null ? "—" : formatNumber(row.progress.remaining, l, 1),
+                }),
+                markCell(model, row.marks?.p50),
+                markCell(model, row.marks?.p80),
+                h("td", { class: "num", dataset: { prob: row.probability.toFixed(4) } }, [
+                  h("span", { class: "bar-track inline" }, [
+                    h("span", {
+                      class: "bar-fill",
+                      style: { width: `${String(row.probability * 100)}%` },
+                    }),
+                  ]),
+                  h("span", { class: "bar-value", text: formatPercent(row.probability, l, 0) }),
+                ]),
+              ]),
+            ),
+          ),
+        ]),
+      ]),
+    ],
+  );
 }
 
 /** タスクの詳細を開く。表からもタスク一覧からも同じ道を通る。 */

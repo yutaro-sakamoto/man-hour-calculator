@@ -251,6 +251,39 @@ export function headerRow(cells: { label: string; class?: string }[]): HTMLTable
  * 開いているかどうかは**呼び出し側が覚える**。画面は変更のたびに作り直すので、
  * `<details>` に任せると、中の入力を触った瞬間に畳まれてしまう。
  */
+/**
+ * カードの**なか**の折りたたみ。見出しは `h3` の見た目のまま。
+ *
+ * [`foldout`] はカードそのものを畳むもので、カード内の節には重すぎる。
+ * 開閉を覚える仕組みは同じ ([`AppState.openPanels`]) — 画面は変更のたびに
+ * 作り直すので、`<details>` に任せると中を触った瞬間に畳まれる。
+ *
+ * **図と要約は開いたまま、引きに行く表はこれで畳む。** 表は「知りたいことが
+ * あるときに開くもの」で、常に出ている必要がない。
+ */
+export function subfold(
+  options: { id: string; title: string; open: boolean; onToggle: (open: boolean) => void },
+  children: Child[],
+): HTMLElement {
+  return h(
+    "details",
+    {
+      class: "subfold",
+      id: options.id,
+      attrs: { open: options.open },
+      on: {
+        toggle: (event) => {
+          const open = (event.target as HTMLDetailsElement).open;
+          // 理由は `foldout` と同じ。書き戻した `open` の通知は捨てる。
+          if (open === options.open) return;
+          options.onToggle(open);
+        },
+      },
+    },
+    [h("summary", {}, [h("span", { class: "section-title", text: options.title })]), ...children],
+  );
+}
+
 export function foldout(
   options: {
     id: string;

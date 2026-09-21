@@ -4,9 +4,9 @@ import { P50_INDEX, P80_INDEX, P90_INDEX, PCT_LEVELS } from "../abi.ts";
 import type { AppActions, AppState, AppWidgets } from "../app.ts";
 import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { firstDayAtLeast, type ScheduleModel } from "../model/schedule.ts";
+import { firstDayAtLeast } from "../model/schedule.ts";
 import type { ComputeResult } from "../wasm.ts";
-import { card, field, foldout, h, numberInput, select } from "./dom.ts";
+import { card, field, foldout, h, numberInput, select, subfold } from "./dom.ts";
 
 function tile(key: string, label: string, value: string, accent = false): HTMLElement {
   return h("div", { class: `tile${accent ? " accent" : ""}`, dataset: { key, value } }, [
@@ -32,44 +32,60 @@ function renderTiles(result: ComputeResult): HTMLElement {
   ]);
 }
 
-function renderPercentileTable(result: ComputeResult, schedule: ScheduleModel | null): HTMLElement {
+function renderPercentileTable(state: AppState): HTMLElement {
   const l = lang();
-  return h("div", { class: "pct-table" }, [
-    h("h3", { class: "section-title", text: t("pct.heading") }),
-    h("table", {}, [
-      h("thead", {}, [
-        h("tr", {}, [
-          h("th", { text: t("pct.level") }),
-          h("th", { class: "num", text: t("pct.value", { unit: t("unit.days") }) }),
-          h("th", { text: t("pct.date") }),
-          h("th", { text: t("pct.meaning") }),
+  const result = state.result;
+  const schedule = state.schedule;
+  if (result === null) return h("div", {});
+  // 上の 6 枚の札で P50 / P80 / P90 は読める。この表はそれ以外の水準を
+  // 引きに行くためのもの。常に開いておく必要はない。
+  return subfold(
+    {
+      id: "fold-percentiles",
+      title: t("pct.heading"),
+      open: state.openPanels["fold-percentiles"] ?? false,
+      onToggle: (open) => {
+        state.openPanels["fold-percentiles"] = open;
+      },
+    },
+    [
+      h("div", { class: "pct-table" }, [
+        h("table", {}, [
+          h("thead", {}, [
+            h("tr", {}, [
+              h("th", { text: t("pct.level") }),
+              h("th", { class: "num", text: t("pct.value", { unit: t("unit.days") }) }),
+              h("th", { text: t("pct.date") }),
+              h("th", { text: t("pct.meaning") }),
+            ]),
+          ]),
+          h(
+            "tbody",
+            { id: "pct-body" },
+            PCT_LEVELS.map((level, index) => {
+              const value = result.percentiles[index] ?? 0;
+              // 完了日は「その確率で全員が終わっている日」。工数を 1 本のカレンダーに
+              // 当てるのではなく、人ごとの進み方を踏まえた確率から引く。
+              const day = schedule === null ? null : firstDayAtLeast(schedule.overall, level);
+              const pct = Math.round(level * 100);
+              return h("tr", { dataset: { highlight: String(pct === 80) } }, [
+                h("th", { text: `P${String(pct)}`, attrs: { scope: "row" } }),
+                h("td", { class: "num", text: formatNumber(value, l) }),
+                h("td", {
+                  text:
+                    day === null || schedule === null
+                      ? t("sched.notFinishing")
+                      : formatDayShort(schedule.startDay + day, l),
+                  class: day === null ? "warn" : "",
+                }),
+                h("td", { text: t("pct.meaningText", { pct }) }),
+              ]);
+            }),
+          ),
         ]),
       ]),
-      h(
-        "tbody",
-        { id: "pct-body" },
-        PCT_LEVELS.map((level, index) => {
-          const value = result.percentiles[index] ?? 0;
-          // 完了日は「その確率で全員が終わっている日」。工数を 1 本のカレンダーに
-          // 当てるのではなく、人ごとの進み方を踏まえた確率から引く。
-          const day = schedule === null ? null : firstDayAtLeast(schedule.overall, level);
-          const pct = Math.round(level * 100);
-          return h("tr", { dataset: { highlight: String(pct === 80) } }, [
-            h("th", { text: `P${String(pct)}`, attrs: { scope: "row" } }),
-            h("td", { class: "num", text: formatNumber(value, l) }),
-            h("td", {
-              text:
-                day === null || schedule === null
-                  ? t("sched.notFinishing")
-                  : formatDayShort(schedule.startDay + day, l),
-              class: day === null ? "warn" : "",
-            }),
-            h("td", { text: t("pct.meaningText", { pct }) }),
-          ]);
-        }),
-      ),
-    ]),
-  ]);
+    ],
+  );
 }
 
 function renderDataView(result: ComputeResult): HTMLElement {
@@ -352,7 +368,7 @@ export function renderDistributionCard(state: AppState, widgets: AppWidgets): HT
       }),
       renderDataView(result),
       renderProbe(result),
-      renderPercentileTable(result, state.schedule),
+      renderPercentileTable(state),
     ],
     "card-distribution",
   );
