@@ -2,6 +2,12 @@
 resolver = "2"
 members = ["crates/api", "crates/core", "crates/server", "crates/wasm", "crates/xtask"]
 
+# `#[cfg(kani)]` の検査ハーネスは `cargo kani` のときだけ組み立てられる。
+# 通常のビルドでは素通りするので、素性の分からない cfg として警告されないよう
+# ここで宣言しておく (依存クレートは増えない — kani は検査器が注入する)。
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"

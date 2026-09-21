@@ -238,6 +238,57 @@ jobs:
             e2e/test-results
           retention-days: 7
 
+  # FFI 層の未定義動作を見る。`crates/wasm` だけが `unsafe` を持ち、
+  # そこは「JS が寄こした生ポインタを Rust のスライスに読み替える」場所。
+  # 型検査もテストも、ここだけは守ってくれない。
+  miri:
+    name: miri — undefined behaviour in the FFI layer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # miri は nightly にしか無い。rust-toolchain.toml の版とは別に入れる。
+      - name: Install nightly + miri
+        run: |
+          rustup toolchain install nightly --component miri,rust-src
+          rustup run nightly cargo miri --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+
+      # -Zmiri-strict-provenance は「整数から作ったポインタ」を許さない。
+      # 生ポインタを扱う層でこそ効く。
+      - name: Run
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+        run: cargo +nightly miri test -p mhc-wasm
+
+  # 設計上の約束を、標本ではなく**すべての入力について**証明する。
+  # 詳しくは docs/VERIFICATION.md。
+  kani:
+    name: kani — bounded model checking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kani
+
+      # kani setup は自前のツールチェーンと CBMC を取りに行く (数分)。
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier
+          cargo kani setup
+          cargo kani --version
+
+      - name: Verify
+        run: cargo kani --workspace
+
   # 「どこを通っていないか分からない」を潰す。閾値は全体で 1 つだけ置き、
   # 内訳はログに出す。crates/xtask と crates/wasm (ビルド道具と FFI) は
   # 数字を押し下げるが、除くと「除いたところが腐る」ので入れたまま。

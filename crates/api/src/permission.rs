@@ -290,3 +290,108 @@ mod tests {
         assert!(!ProjectRole::Viewer.at_least(ProjectRole::Editor));
     }
 }
+
+/// 権限の判定を**有界モデル検査**で確かめる。
+///
+/// ここは「画面で隠す」のではなく「実際に止める」唯一の場所なので、
+/// 効き方に穴があると、そのまま権限の抜け道になる。役割も操作も有限個なので、
+/// **すべての組み合わせ**を虱潰しに証明できる。
+#[cfg(kani)]
+mod verification {
+    use super::*;
+
+    fn any_role() -> Option<ProjectRole> {
+        match kani::any::<u8>() % 4 {
+            0 => None,
+            1 => Some(ProjectRole::Viewer),
+            2 => Some(ProjectRole::Editor),
+            _ => Some(ProjectRole::Owner),
+        }
+    }
+
+    fn any_permission() -> Permission {
+        match kani::any::<u8>() % 6 {
+            0 => Permission::ProjectRead,
+            1 => Permission::ProjectWrite,
+            2 => Permission::ProjectManage,
+            3 => Permission::ProjectCreate,
+            4 => Permission::UserManage,
+            _ => Permission::CommentPost,
+        }
+    }
+
+    /// 役割は全順序で、`at_least` はその順序と一致すること。
+    #[kani::proof]
+    fn roles_are_totally_ordered() {
+        let (a, b, c) = (
+            any_role().unwrap_or(ProjectRole::Viewer),
+            any_role().unwrap_or(ProjectRole::Viewer),
+            any_role().unwrap_or(ProjectRole::Viewer),
+        );
+        assert!(a.at_least(a), "反射律");
+        if a.at_least(b) && b.at_least(a) {
+            assert!(a == b, "反対称律");
+        }
+        if a.at_least(b) && b.at_least(c) {
+            assert!(a.at_least(c), "推移律");
+        }
+        assert!(a.at_least(b) || b.at_least(a), "全順序");
+        assert!(ProjectRole::Owner.at_least(a), "owner は最強");
+        assert!(a.at_least(ProjectRole::Viewer), "viewer は最弱");
+    }
+
+    /// **強い役割でできることは、弱い役割でもできる、ということはない。**
+    ///
+    /// 逆向き — 役割を上げて、できることが減らないこと (単調性) を示す。
+    /// ここが破れていると「編集者にしたら見られなくなった」が起こりうる。
+    #[kani::proof]
+    fn a_stronger_role_can_never_do_less() {
+        let weak = any_role();
+        let strong = any_role();
+        let permission = any_permission();
+        kani::assume(match (weak, strong) {
+            (None, _) => true,
+            (Some(w), Some(s)) => s.at_least(w),
+            (Some(_), None) => false,
+        });
+
+        let actor = Actor::new(UserId::new("u"), SystemRole::Member);
+        if actor.may(permission, weak) {
+            assert!(
+                actor.may(permission, strong),
+                "役割を上げたのにできなくなった"
+            );
+        }
+    }
+
+    /// 共有されていない人 (`role` が `None`) は、一般ユーザなら
+    /// **プロジェクトを作ること以外は何もできない**。
+    #[kani::proof]
+    fn an_unshared_member_can_do_nothing_to_the_project() {
+        let permission = any_permission();
+        let actor = Actor::new(UserId::new("u"), SystemRole::Member);
+        let allowed = actor.may(permission, None);
+        assert_eq!(
+            allowed,
+            permission == Permission::ProjectCreate,
+            "共有されていないのに通った"
+        );
+    }
+
+    /// 管理する権限は、**必ず所有者以上**でなければ通らない。
+    #[kani::proof]
+    fn managing_always_requires_owner() {
+        let role = any_role();
+        let actor = Actor::new(UserId::new("u"), SystemRole::Member);
+        if actor.may(Permission::ProjectManage, role) {
+            assert_eq!(role, Some(ProjectRole::Owner), "所有者でないのに管理できた");
+        }
+        // 書き換えは編集者以上。
+        if actor.may(Permission::ProjectWrite, role) {
+            assert!(
+                role.is_some_and(|r| r.at_least(ProjectRole::Editor)),
+                "編集者未満なのに書き換えられた"
+            );
+        }
+    }
+}

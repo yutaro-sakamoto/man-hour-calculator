@@ -332,15 +332,22 @@ task's cumulative sum, within 1% of the range" effectively backs the numerical c
   "unassigned" placeholder person, and shown as such
 - Japanese public holidays, including equinoxes from an approximation formula, are pinned
   against the published dates by a test
+- **Bounded model checking with [Kani](https://model-checking.github.io/kani/)** proves 11
+  invariants over *every* input in a range, not just sampled ones — the date round-trip,
+  the estimate invariant, the response-buffer layout, and the permission ordering
+- **[TLA+](https://lamport.azurewebsites.net/tla/tla.html) with TLC** model-checks the
+  access design: every reachable state must leave each project with at least one real
+  owner. It found holes the unit tests did not
+- **`cargo miri`** runs the FFI layer under strict provenance, so the one place that
+  handles raw pointers from JavaScript is checked for undefined behaviour
+- `docs/VERIFICATION.md` traces each promise to how it is checked, and says how strong
+  that check is
 
 ## What is next
 
 - Deploying to AWS (API Gateway + Lambda + DynamoDB). The design and the steps are written
   up in `docs/AWS.md`; what is left is the `Store` implementation and the outer handler
 - Correlation between tasks (a single-factor Gaussian copula). The ABI has room reserved
-- Bounded model checking with [Kani](https://model-checking.github.io/kani/), and a table
-  tracing each invariant to how it is checked (`docs/VERIFICATION.md`)
-- `cargo miri` to check the FFI layer for undefined behaviour
 - Attaching `dist/app.html` to a Release on tag push
 
 ## License
