@@ -196,8 +196,12 @@ function runEngine(document: ProjectDocument): Computed {
   const leaves = rows.filter((row) => row.leafIndex !== null);
   const broken = invalidRows(rows);
   if (broken.length > 0)
-    throw new EngineUnavailable(t("error.invalidRows", { count: broken.length }));
-  if (leaves.length === 0) throw new EngineUnavailable(t("status.noTasks"));
+    throw new EngineUnavailable(t("error.invalidRows", { count: broken.length }), "error");
+  // **「まだ無い」と「あるのに選ばれていない」を分ける。** 前者で
+  // 「選んでください」と言っても、選ぶものが無い。次にやることが
+  // 変わるのだから、言うことも変える。
+  if (leaves.length === 0)
+    throw new EngineUnavailable(rows.length === 0 ? t("status.noTasksYet") : t("status.noTasks"));
 
   // 担当者のいないタスクは「未割当」という仮の人員にまとめる。
   const members = resolveMembers(
@@ -223,8 +227,21 @@ function runEngine(document: ProjectDocument): Computed {
   return { rows, members, result, schedule };
 }
 
-/** 計算できる状態にない、というだけの失敗。異常ではない。 */
-class EngineUnavailable extends Error {}
+/**
+ * 計算できる状態にない、というだけの失敗。異常ではない。
+ *
+ * **だから既定では赤くしない。** 新しく作ったプロジェクトは必ずここを
+ * 通る。作った直後に赤い字が出ると、初めての人は「何か壊した」と読む。
+ * 本当に直すものがあるとき (不正な行) だけ `tone` を `error` にする。
+ */
+class EngineUnavailable extends Error {
+  constructor(
+    message: string,
+    readonly tone: "info" | "error" = "info",
+  ) {
+    super(message);
+  }
+}
 
 function recompute(): void {
   const started = performance.now();
@@ -244,7 +261,7 @@ function recompute(): void {
       state.calendarMember = null;
     }
     if (error instanceof EngineUnavailable) {
-      setStatus(error.message, "error");
+      setStatus(error.message, error.tone);
     } else if (error instanceof ComputeError) {
       const key = `error.${error.status}` as `error.${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8}`;
       const known = [1, 2, 3, 4, 5, 6, 7, 8].includes(error.status);
@@ -419,17 +436,44 @@ function summaryBar(): HTMLElement {
   const remaining =
     result === null ? none : formatNumber(Math.max(0, result.mean - result.totalSpent), l);
 
-  const item = (label: string, value: string, key: string, accent = false): HTMLElement =>
-    h("div", { class: `summary-item${accent ? " accent" : ""}`, dataset: { key, value } }, [
-      h("span", { class: "summary-label", text: label }),
-      h("strong", { class: "summary-value", text: value }),
-    ]);
+  // **説明は、疑問が起きる場所に置く。** いちばん目立つ数字が「P80」
+  // なのに、その意味は「見通し」タブの奥にしか書かれていなかった。
+  const item = (
+    label: string,
+    value: string,
+    key: string,
+    help: string,
+    accent = false,
+  ): HTMLElement =>
+    h(
+      "div",
+      {
+        class: `summary-item${accent ? " accent" : ""}`,
+        dataset: { key, value },
+        attrs: { title: help },
+      },
+      [
+        h("span", { class: "summary-label", text: label }),
+        h("strong", { class: "summary-value", text: value }),
+      ],
+    );
 
   return h("div", { class: "summary-bar" }, [
-    item(`${t("summary.effortP80")} (${t("unit.days")})`, effort, "effortP80", true),
-    item(t("summary.finishP80"), finish, "finishP80", true),
-    item(t("summary.progress"), progress, "progress"),
-    item(`${t("summary.remaining")} (${t("unit.days")})`, remaining, "remaining"),
+    item(
+      `${t("summary.effortP80")} (${t("unit.days")})`,
+      effort,
+      "effortP80",
+      t("summary.effortP80Help"),
+      true,
+    ),
+    item(t("summary.finishP80"), finish, "finishP80", t("summary.finishP80Help"), true),
+    item(t("summary.progress"), progress, "progress", t("summary.progressHint")),
+    item(
+      `${t("summary.remaining")} (${t("unit.days")})`,
+      remaining,
+      "remaining",
+      t("summary.remainingHint"),
+    ),
   ]);
 }
 
@@ -734,6 +778,9 @@ function render(): void {
     header(),
     // 状態表示はタブより上。全体の状態であってタブの中身ではないし、
     // レールとパネルの間に挟まると、繋がって見えるのを邪魔する。
+    // 道具の語彙を 1 行だけ置く。「P80」は画面のいちばん目立つところに
+    // 出ているのに、意味は「見通し」タブの奥にしか書かれていなかった。
+    h("p", { class: "hint summary-legend", text: t("summary.legend") }),
     h("p", {
       class: "status",
       id: "status",

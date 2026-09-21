@@ -10,7 +10,7 @@ import type { AppActions, AppState } from "../app.ts";
 import { LocalApiClient } from "../api/local.ts";
 import { t } from "../i18n.ts";
 import { newId } from "../model/project.ts";
-import { button, card, committedTextInput, h, iconButton, select } from "./dom.ts";
+import { button, committedTextInput, foldout, h, iconButton, select } from "./dom.ts";
 
 const SYSTEM_ROLE_CHOICES = (): { value: SystemRole; label: string }[] =>
   (["member", "admin"] as const).map((role) => ({
@@ -84,63 +84,75 @@ export function renderAccounts(state: AppState, actions: AppActions): HTMLElemen
   const admin = state.me.systemRole === "admin";
   const local = state.client instanceof LocalApiClient ? state.client : null;
 
-  return card(t("accounts.heading"), [
-    h("p", { class: "hint", text: t("accounts.hint") }),
-    h("table", { class: "account-table" }, [
-      h("thead", {}, [
-        h("tr", {}, [
-          h("th", { text: t("accounts.name") }),
-          h("th", { text: t("accounts.systemRole") }),
-          h("th", { text: t("col.actions") }),
-        ]),
-      ]),
-      h(
-        "tbody",
-        {},
-        state.users.map((user) => renderAccountRow(state, actions, user)),
-      ),
-    ]),
-    admin
-      ? h("div", { class: "row-actions" }, [
-          button(t("accounts.add"), () => {
-            actions.run(async () => {
-              await state.client.createUser({
-                id: newId(),
-                name: t("accounts.name"),
-                systemRole: "member",
-              });
-              state.users = await state.client.listUsers();
-            });
-          }),
-        ])
-      : null,
-    // ローカルにはログインが無い。権限の効き方を確かめられるようにしておく。
-    local === null
-      ? null
-      : h("div", { class: "act-as" }, [
-          h("span", { class: "field-label", text: t("accounts.actAs") }),
-          h("div", { class: "inline-row" }, [
-            select(
-              state.me.id,
-              state.users.map((user) => ({
-                value: user.id,
-                label: `${user.name} (${t(`systemRole.${user.systemRole}`)})`,
-              })),
-              (value) => {
-                actions.run(async () => {
-                  local.actAs(value);
-                  state.me = await state.client.me();
-                  state.projects = await state.client.listProjects();
-                  const still = state.projects.find((item) => item.id === state.open?.id);
-                  if (still) await actions.openProject(still.id);
-                  else if (state.projects[0]) await actions.openProject(state.projects[0].id);
-                  else state.open = null;
-                });
-              },
-              { attrs: { "aria-label": t("accounts.actAs") } },
-            ),
+  // グループ・接続先と揃えて畳む。ローカルでは操作する人が 1 人しか
+  // いないので、初めて開いた画面の大半がアカウント管理なのはおかしい。
+  return foldout(
+    {
+      id: "panel-accounts",
+      title: t("accounts.heading"),
+      open: state.openPanels["panel-accounts"] ?? false,
+      onToggle: (open) => {
+        state.openPanels["panel-accounts"] = open;
+      },
+    },
+    [
+      h("p", { class: "hint", text: t("accounts.hint") }),
+      h("table", { class: "account-table" }, [
+        h("thead", {}, [
+          h("tr", {}, [
+            h("th", { text: t("accounts.name") }),
+            h("th", { text: t("accounts.systemRole") }),
+            h("th", { text: t("col.actions") }),
           ]),
-          h("p", { class: "hint", text: t("accounts.actAsHint") }),
         ]),
-  ]);
+        h(
+          "tbody",
+          {},
+          state.users.map((user) => renderAccountRow(state, actions, user)),
+        ),
+      ]),
+      admin
+        ? h("div", { class: "row-actions" }, [
+            button(t("accounts.add"), () => {
+              actions.run(async () => {
+                await state.client.createUser({
+                  id: newId(),
+                  name: t("accounts.name"),
+                  systemRole: "member",
+                });
+                state.users = await state.client.listUsers();
+              });
+            }),
+          ])
+        : null,
+      // ローカルにはログインが無い。権限の効き方を確かめられるようにしておく。
+      local === null
+        ? null
+        : h("div", { class: "act-as" }, [
+            h("span", { class: "field-label", text: t("accounts.actAs") }),
+            h("div", { class: "inline-row" }, [
+              select(
+                state.me.id,
+                state.users.map((user) => ({
+                  value: user.id,
+                  label: `${user.name} (${t(`systemRole.${user.systemRole}`)})`,
+                })),
+                (value) => {
+                  actions.run(async () => {
+                    local.actAs(value);
+                    state.me = await state.client.me();
+                    state.projects = await state.client.listProjects();
+                    const still = state.projects.find((item) => item.id === state.open?.id);
+                    if (still) await actions.openProject(still.id);
+                    else if (state.projects[0]) await actions.openProject(state.projects[0].id);
+                    else state.open = null;
+                  });
+                },
+                { attrs: { "aria-label": t("accounts.actAs") } },
+              ),
+            ]),
+            h("p", { class: "hint", text: t("accounts.actAsHint") }),
+          ]),
+    ],
+  );
 }

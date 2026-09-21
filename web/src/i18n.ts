@@ -215,6 +215,15 @@ const ja = {
   "summary.remaining": "残り",
   "summary.notFinishing": "期間内に終わりません",
   "summary.noData": "—",
+  // いちばん目立つ数字が「P80」。意味の説明は「見通し」タブの奥にしか
+  // 無かったので、**疑問が起きるその場**で答えるようにする。
+  "summary.legend": "P80 = 80 % の確からしさでこの値に収まる、という見込み。",
+  "summary.effortP80Help":
+    "80 % の確からしさで、この工数に収まるという見込み (人日)。P50 は半々の見込み。",
+  "summary.finishP80Help":
+    "80 % の確からしさで、この日までに終わるという見込み。人員の稼働時間と休日を踏まえた日付。",
+  "summary.progressHint": "消化した工数 ÷ 全体の工数。件数ではなく工数で重み付けしています。",
+  "summary.remainingHint": "全体の見込み工数から、消化済みを引いた残り (人日)。",
 
   "filter.heading": "絞り込み",
   "filter.text": "名前で検索",
@@ -233,6 +242,7 @@ const ja = {
 
   "tasks.heading": "タスク",
   "tasks.add": "行を追加",
+  "tasks.loadSample": "サンプルを読み込む",
   "tasks.addChild": "子タスクを追加",
   "tasks.indent": "階層を下げる",
   "tasks.outdent": "階層を上げる",
@@ -244,7 +254,8 @@ const ja = {
     "「{name}」とその配下 (あわせて {count} 件) を削除しますか？ 元に戻せません。",
   "tasks.enableShown": "表示中を使用する",
   "tasks.disableShown": "表示中を除外する",
-  "tasks.empty": "タスクがありません。「行を追加」か「サンプルを読み込む」から始めてください。",
+  "tasks.empty":
+    "まだタスクがありません。下の「行を追加」から 1 つ作るか、「サンプルを読み込む」で見本を入れてください。",
   "tasks.noMatch": "絞り込みに一致するタスクがありません。",
   "tasks.untitled": "無題のタスク",
   "tasks.orderHint": "上から順に着手する前提で日付を計算します。並べ替えると完了日も変わります。",
@@ -316,7 +327,7 @@ const ja = {
   "cal.legendHoliday": "祝日",
   "cal.legendForced": "休日出勤",
   "cal.clickHint":
-    "升の空いているところを押すとその日に予定を足せます。予定を押すと編集できます。日付の数字を押すと休日出勤の指定が切り替わります。",
+    "升の右上の数字は、その日に使える稼働量 (人日) です。升の空いているところを押すとその日に予定を足せます。予定を押すと編集できます。日付の数字を押すと休日出勤の指定が切り替わります。",
   "cal.dayCapacity": "{date}: {value} 人日",
 
   "results.heading": "総工数の分布",
@@ -422,8 +433,9 @@ const ja = {
 
   "status.loading": "計算エンジンを読み込み中…",
   "status.computing": "計算中…",
-  "status.done": "{engine} で計算しました ({ms} ms)",
+  "status.done": "{engine}で計算しました ({ms} ms)",
   "status.noTasks": "計算するタスクがありません。使用するタスクを 1 つ以上選んでください。",
+  "status.noTasksYet": "タスクを 1 つ作ると、ここに工数と完了日が出ます。",
 
   "error.title": "計算できませんでした",
   "error.1": "リクエストの形式が不正です (ABI バージョン不一致の可能性があります)。",
@@ -702,6 +714,13 @@ const en: Dictionary = {
   "summary.remaining": "Remaining",
   "summary.notFinishing": "Does not finish in range",
   "summary.noData": "—",
+  "summary.legend": "P80 = the value this is 80 % likely to stay within.",
+  "summary.effortP80Help":
+    "The effort this project is 80 % likely to stay within (person-days). P50 is the even-odds figure.",
+  "summary.finishP80Help":
+    "The date this project is 80 % likely to finish by, given working hours and days off.",
+  "summary.progressHint": "Effort spent ÷ total effort. Weighted by effort, not by task count.",
+  "summary.remainingHint": "Total expected effort minus what has been spent (person-days).",
 
   "filter.heading": "Filter",
   "filter.text": "Search by name",
@@ -721,6 +740,7 @@ const en: Dictionary = {
 
   "tasks.heading": "Tasks",
   "tasks.add": "Add row",
+  "tasks.loadSample": "Load sample",
   "tasks.addChild": "Add subtask",
   "tasks.indent": "Indent",
   "tasks.outdent": "Outdent",
@@ -732,7 +752,7 @@ const en: Dictionary = {
     "Delete \u201c{name}\u201d and everything under it ({count} in total)? This cannot be undone.",
   "tasks.enableShown": "Use all shown",
   "tasks.disableShown": "Exclude all shown",
-  "tasks.empty": "No tasks yet. Start with “Add row” or “Load sample”.",
+  "tasks.empty": "No tasks yet. Add one with “Add row” below, or start from “Load sample”.",
   "tasks.noMatch": "No tasks match the filter.",
   "tasks.untitled": "Untitled task",
   "tasks.orderHint": "Tasks are worked top to bottom. Reordering changes the finish dates.",
@@ -805,7 +825,7 @@ const en: Dictionary = {
   "cal.legendHoliday": "Holiday",
   "cal.legendForced": "Working anyway",
   "cal.clickHint":
-    "Click empty space in a cell to add an event that day. Click an event to edit it. Click the date number to toggle working on a day off.",
+    "The number at the top right of a cell is the capacity available that day (person-days). Click empty space in a cell to add an event that day. Click an event to edit it. Click the date number to toggle working on a day off.",
   "cal.dayCapacity": "{date}: {value} person-days",
 
   "results.heading": "Distribution of total effort",
@@ -917,6 +937,7 @@ const en: Dictionary = {
   "status.computing": "Computing…",
   "status.done": "Computed with {engine} ({ms} ms)",
   "status.noTasks": "Nothing to compute. Tick “Use” on at least one task.",
+  "status.noTasksYet": "Add one task and the effort and finish date will appear here.",
 
   "error.title": "Could not compute",
   "error.1": "The request buffer is malformed (possible ABI version mismatch).",

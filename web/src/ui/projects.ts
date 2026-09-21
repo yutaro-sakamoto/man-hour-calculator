@@ -431,9 +431,13 @@ function renderProjectList(state: AppState, actions: AppActions): HTMLElement {
     (project) => project.health === "unknown" && project.role !== "viewer",
   );
 
+  // タスク表と同じ規則。1 件しか無いものを絞り込む道具は要らない
+  // (`ui/tasks.ts` の `worthFiltering`)。
+  const worthFiltering = state.projects.length >= 2;
+
   return card(t("projects.heading"), [
     h("p", { class: "hint", text: t("projects.hint") }),
-    filterBar(state, actions, shown.length),
+    worthFiltering ? filterBar(state, actions, shown.length) : null,
     state.projects.length === 0
       ? h("p", { class: "empty", text: t("projects.empty") })
       : shown.length === 0

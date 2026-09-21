@@ -504,6 +504,13 @@ button.icon:hover:not(:disabled) {
   color: var(--ink-muted);
   margin: 10px 0 0;
 }
+/* 要約バーのすぐ下に置く語彙の説明。状態表示と 2 段に見えないよう詰める。 */
+.summary-legend {
+  margin: 8px 0 0;
+}
+.summary-legend + .status {
+  margin-top: 2px;
+}
 .status[data-tone="error"] {
   color: var(--critical);
 }
