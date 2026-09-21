@@ -128,6 +128,8 @@ function renderMember(
       }),
       h("span", { class: "chip muted", text: t("members.tasks", { count: assigned }) }),
       iconButton("×", t("members.remove", { name }), () => {
+        // 担当していたタスクは未割当に戻り、予定の参加者からも外れる。
+        if (!confirm(t("members.confirmDelete", { name, count: assigned }))) return;
         actions.mutate((document) => {
           document.calendar.members.splice(index, 1);
           // 担当が消えたタスクは未割当に戻す。

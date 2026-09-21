@@ -11,6 +11,7 @@ import {
   moveSubtree,
   outdentTask,
   removeSubtree,
+  subtreeRange,
   type TreeRow,
 } from "../model/tree.ts";
 import { memberLabel, UNASSIGNED_ID } from "../model/members.ts";
@@ -465,6 +466,11 @@ function renderRow(
       // 並べ替えや階層とは別の話なので、削除の手前にまとめて置く。
       commentButton(state, actions, row.task.id, t("comments.taskButton")),
       iconButton("×", t("tasks.removeRow", { name: label }), () => {
+        // 配下ごと消えるときだけ問う。1 行ずつ消していく作業で毎回問われるのは
+        // 邪魔なだけで、取り返しがつかないのは部分木が消えるときだけ。
+        const [start, end] = subtreeRange(state.document.tasks, index);
+        const count = end - start;
+        if (count > 1 && !confirm(t("tasks.confirmRemoveSubtree", { name: label, count }))) return;
         actions.mutate((document) => {
           document.tasks = removeSubtree(document.tasks, index);
         });

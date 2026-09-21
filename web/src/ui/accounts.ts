@@ -66,6 +66,8 @@ function renderAccountRow(state: AppState, actions: AppActions, user: User): HTM
         "×",
         t("accounts.remove", { name: user.name }),
         () => {
+          // 権限もグループ所属も一緒に消える。取り消せないので先に問う。
+          if (!confirm(t("accounts.confirmDelete", { name: user.name }))) return;
           actions.run(async () => {
             await state.client.deleteUser(user.id);
             state.users = await state.client.listUsers();

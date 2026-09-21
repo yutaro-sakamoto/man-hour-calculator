@@ -138,6 +138,7 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
       repeatWeeks: 1,
       until: null,
       memberIds: [alice.id, bob.id],
+      excludedDates: [],
     },
     {
       id: newId(),
@@ -149,6 +150,7 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
       repeatWeeks: 2,
       until: null,
       memberIds: [alice.id, bob.id],
+      excludedDates: [],
     },
   ];
 
@@ -336,7 +338,19 @@ function normalizeEvent(raw: unknown, memberIds: Set<string>): CalendarEventItem
     memberIds: Array.isArray(members)
       ? members.map((id) => asString(id)).filter((id) => memberIds.has(id))
       : [],
+    excludedDates: normalizeExcludedDates(record.excludedDates),
   };
+}
+
+/** 休みにした回の初日。読めないものは落とし、重複は畳んで古い順に並べる。 */
+function normalizeExcludedDates(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<string>();
+  for (const value of raw) {
+    const iso = asIsoDate(value);
+    if (iso !== null) out.add(iso);
+  }
+  return [...out].sort();
 }
 
 function normalizeCalendar(raw: unknown): CalendarSettings {

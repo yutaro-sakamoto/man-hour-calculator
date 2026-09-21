@@ -72,6 +72,14 @@ export interface CalendarEventItem {
   until: IsoDate | null;
   /** 参加する人員の id。空なら全員が対象。 */
   memberIds: string[];
+  /**
+   * 休みにした回の**初日**。
+   *
+   * 繰り返す予定のうち 1 回だけを外すために使う。回の初日で指定するので、
+   * 複数日にまたがる回はまるごと消える (途中の 1 日だけ残しても、
+   * 予定としての意味を成さないため)。
+   */
+  excludedDates: IsoDate[];
 }
 
 export interface CalendarSettings {

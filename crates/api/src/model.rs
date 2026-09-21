@@ -413,6 +413,12 @@ pub struct CalendarEvent {
     pub repeat_weeks: u32,
     pub until: Option<String>,
     pub member_ids: Vec<String>,
+    /// 休みにした回の初日 (`YYYY-MM-DD`)。
+    ///
+    /// 繰り返しのうち 1 回だけを外すために使う。既に保存されている内容には
+    /// 無い項目なので、`default` で空として読む。
+    #[serde(default)]
+    pub excluded_dates: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

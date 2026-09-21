@@ -716,6 +716,21 @@ td.finish {
   gap: 12px;
   flex-wrap: wrap;
 }
+/* 休みにした回の一覧。戻す道が見えていないと、休みは取り消せない操作になる。 */
+.skipped-list {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--grid);
+}
+.skipped-list .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 select.assignee {
   width: 96px;
 }

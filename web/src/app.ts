@@ -79,6 +79,12 @@ export interface AppState {
   calendarMember: number | null;
   /** 編集している予定の id。`null` なら編集していない。 */
   editingEventId: string | null;
+  /**
+   * 編集を開くときに押した回の初日 (`YYYY-MM-DD`)。
+   *
+   * 「この回だけ休みにする」がどの回を指すのかは、押した升でしか決まらない。
+   */
+  editingEventDay: string | null;
 
   /**
    * いま開いているプロジェクトのコメント (タスク宛てを含む全部)。
