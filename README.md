@@ -20,20 +20,22 @@ The deliverable is **a single HTML file**. Download it, double-click it, and it 
 server, no install, no network.
 
 ```
-Task                     Min  Likely   Max
-Design
-  Requirements             5      8     20
-  Architecture             3      5     12
-Implementation
-  API                      2      3      5
-  UI                      10     15     40
-  Batch                    2      4      9
-Test and release           3      6     14
-                             ─────────────
+Task                      Min  Likely   Max
+Design phase
+  Requirements              5      8     20
+  Architecture              3      5     12
+Build phase
+  API implementation        2      3      5
+  UI implementation        10     15     40
+  Batch jobs                2      4      9
+Test and release            3      6     14
+                              ─────────────
 Sum of most-likely                41 person-days
 Total effort, P80               53.5 person-days   ← this is what you can promise
 Finish date, P80              2026-12-11           ← holidays and meetings included
 ```
+
+(The sample data is in English. Switching the display language does not change it.)
 
 ## What it does
 
@@ -46,11 +48,12 @@ Finish date, P80              2026-12-11           ← holidays and meetings inc
 - **Finish-date probabilities**: read "when will it be done" per task and overall, as a
   band chart and as a table
 - **Actuals fold back in**: start dates, progress and completion dates redraw the forecast
-- **Comments**: Markdown on projects and tasks — people with view-only access can write them
+- **Comments**: Markdown on projects and tasks, with file attachments (1 MB each, 5 per
+  comment) — people with view-only access can write them
 - **Several projects**: create as many as you like, switch between them, duplicate them
 - **Accounts and permissions**: owner / editor / viewer per project
-- **Saving and handing over**: files (`.mhc.json`), CSV import and export, automatic saving
-  into the browser
+- **Saving and handing over**: one project (`.mhc.json`) or all of them at once
+  (`.mhcall.json`), CSV import and export, automatic saving into the browser
 - Japanese / English, and dark mode following the OS setting
 
 ## Using it

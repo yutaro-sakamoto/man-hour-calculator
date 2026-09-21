@@ -10,12 +10,13 @@
 use crate::error::{ApiError, ApiResult};
 use crate::health;
 use crate::model::{
-    AccessEntry, Comment, CommentId, Document, Principal, Project, ProjectGroup, ProjectGroupId,
-    ProjectId, ProjectMeta, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User,
-    UserGroup, UserGroupId, UserId,
+    AccessEntry, Attachment, Comment, CommentId, Document, Principal, Project, ProjectGroup,
+    ProjectGroupId, ProjectId, ProjectMeta, ProjectRole, ProjectStatus, ProjectSummary, SystemRole,
+    User, UserGroup, UserGroupId, UserId, MAX_ATTACHMENTS_PER_COMMENT, MAX_ATTACHMENT_BYTES,
 };
 use crate::permission::{Actor, Permission};
 use crate::store::Store;
+use std::collections::BTreeSet;
 
 /// 新しいアカウントの中身。
 #[derive(Debug, Clone)]
@@ -24,6 +25,16 @@ pub struct NewUser {
     pub name: String,
     pub email: Option<String>,
     pub system_role: SystemRole,
+}
+
+/// 新しいコメントの中身。
+#[derive(Debug, Clone)]
+pub struct NewComment {
+    pub id: CommentId,
+    /// タスク宛てならそのタスク id。プロジェクト宛てなら `None`。
+    pub task_id: Option<String>,
+    pub body: String,
+    pub attachments: Vec<Attachment>,
 }
 
 /// アカウントの変更内容。`None` の項目は据え置き。
@@ -78,6 +89,50 @@ impl Owners {
     fn all_within(&self, members: &[UserId]) -> bool {
         self.0.iter().all(|id| members.contains(id))
     }
+}
+
+/// 添付を検める。
+///
+/// 中身は解釈しない (この層はファイルの種類を知らない) が、**件数と
+/// 大きさだけは見る**。保存してから溢れたと気づくのでは遅い。
+fn check_attachments(attachments: &[Attachment]) -> ApiResult<()> {
+    if attachments.len() > MAX_ATTACHMENTS_PER_COMMENT {
+        return Err(ApiError::invalid(format!(
+            "添付は 1 件のコメントにつき {MAX_ATTACHMENTS_PER_COMMENT} 件までです"
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    for attachment in attachments {
+        if attachment.id.trim().is_empty() {
+            return Err(ApiError::invalid("添付の id が空です"));
+        }
+        if !seen.insert(attachment.id.as_str()) {
+            return Err(ApiError::invalid("添付の id が重複しています"));
+        }
+        if attachment.filename.trim().is_empty() {
+            return Err(ApiError::invalid("添付のファイル名が空です"));
+        }
+        // base64 は 3 バイトを 4 文字にするので、長さから元の大きさが分かる。
+        // 申告された `size` ではなく**実際に届いた長さ**で見る。末尾の `=`
+        // は詰め物なので引く — ちょうど上限の大きさのファイルを、2 バイト
+        // ぶんの見積もり違いで断ってしまわないように。
+        let encoded = attachment.data.len() as u64;
+        let padding = attachment
+            .data
+            .bytes()
+            .rev()
+            .take(2)
+            .filter(|b| *b == b'=')
+            .count() as u64;
+        let bytes = encoded / 4 * 3 - padding.min(encoded / 4 * 3);
+        if bytes > MAX_ATTACHMENT_BYTES || attachment.size > MAX_ATTACHMENT_BYTES {
+            return Err(ApiError::invalid(format!(
+                "添付 1 件は {} MiB までです",
+                MAX_ATTACHMENT_BYTES / 1024 / 1024
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn trimmed(value: &str, field: &str) -> ApiResult<String> {
@@ -646,25 +701,25 @@ impl<S: Store> Service<S> {
         actor: &Actor,
         id: &ProjectId,
         now: &str,
-        comment_id: CommentId,
-        task: Option<String>,
-        body: &str,
+        new: NewComment,
     ) -> ApiResult<Comment> {
         let project = self.lookup(id)?;
         let role = self.resolve(actor, &project.meta)?;
         self.require(actor, Permission::CommentPost, role)?;
-        if self.store.comment(&comment_id)?.is_some() {
+        if self.store.comment(&new.id)?.is_some() {
             return Err(ApiError::conflict("同じ id のコメントがあります"));
         }
+        check_attachments(&new.attachments)?;
 
         let comment = Comment {
-            id: comment_id,
+            id: new.id,
             project_id: id.clone(),
-            task_id: task,
+            task_id: new.task_id,
             author: actor.user_id.clone(),
-            body: trimmed(body, "コメント")?,
+            body: trimmed(&new.body, "コメント")?,
             created_at: now.to_string(),
             updated_at: None,
+            attachments: new.attachments,
         };
         self.store.put_comment(comment.clone())?;
         Ok(comment)
@@ -680,6 +735,7 @@ impl<S: Store> Service<S> {
         id: &CommentId,
         now: &str,
         body: &str,
+        attachments: Vec<Attachment>,
     ) -> ApiResult<Comment> {
         let mut comment = self.lookup_comment(id)?;
         if comment.author != actor.user_id {
@@ -691,7 +747,9 @@ impl<S: Store> Service<S> {
         let role = self.resolve(actor, &project.meta)?;
         self.require(actor, Permission::CommentPost, role)?;
 
+        check_attachments(&attachments)?;
         comment.body = trimmed(body, "コメント")?;
+        comment.attachments = attachments;
         comment.updated_at = Some(now.to_string());
         self.store.put_comment(comment.clone())?;
         Ok(comment)
@@ -1689,9 +1747,12 @@ mod tests {
                 &bob,
                 &ProjectId::new("p1"),
                 LATER,
-                CommentId::new("c1"),
-                None,
-                "見積もりが楽観的では?",
+                NewComment {
+                    id: CommentId::new("c1"),
+                    task_id: None,
+                    body: "見積もりが楽観的では?".into(),
+                    attachments: Vec::new(),
+                },
             )
             .expect("閲覧者でも書ける");
         assert_eq!(comment.author, UserId::new("bob"));
@@ -1725,9 +1786,12 @@ mod tests {
                 &alice,
                 &ProjectId::new("p1"),
                 LATER,
-                CommentId::new("c1"),
-                None,
-                "内緒の話",
+                NewComment {
+                    id: CommentId::new("c1"),
+                    task_id: None,
+                    body: "内緒の話".into(),
+                    attachments: Vec::new(),
+                },
             )
             .unwrap();
 
@@ -1745,9 +1809,12 @@ mod tests {
                     &carol,
                     &ProjectId::new("p1"),
                     LATER,
-                    CommentId::new("c2"),
-                    None,
-                    "よそ者",
+                    NewComment {
+                        id: CommentId::new("c2"),
+                        task_id: None,
+                        body: "よそ者".into(),
+                        attachments: Vec::new(),
+                    },
                 )
                 .unwrap_err()
                 .code,
@@ -1766,9 +1833,12 @@ mod tests {
                     &alice,
                     &ProjectId::new("p1"),
                     LATER,
-                    CommentId::new(id),
-                    task.map(str::to_string),
-                    "何か",
+                    NewComment {
+                        id: CommentId::new(id),
+                        task_id: task.map(str::to_string),
+                        body: "何か".into(),
+                        attachments: Vec::new(),
+                    },
                 )
                 .unwrap();
         }
@@ -1806,9 +1876,12 @@ mod tests {
                 &bob,
                 &ProjectId::new("p1"),
                 LATER,
-                CommentId::new("c1"),
-                None,
-                "最初の意見",
+                NewComment {
+                    id: CommentId::new("c1"),
+                    task_id: None,
+                    body: "最初の意見".into(),
+                    attachments: Vec::new(),
+                },
             )
             .unwrap();
 
@@ -1816,7 +1889,13 @@ mod tests {
         let alice = actor(&service, "alice");
         assert_eq!(
             service
-                .edit_comment(&alice, &CommentId::new("c1"), LATER, "書き換えた")
+                .edit_comment(
+                    &alice,
+                    &CommentId::new("c1"),
+                    LATER,
+                    "書き換えた",
+                    Vec::new()
+                )
                 .unwrap_err()
                 .code,
             ErrorCode::Forbidden
@@ -1829,11 +1908,129 @@ mod tests {
                 &CommentId::new("c1"),
                 "2026-09-22T09:00:00Z",
                 "直した",
+                Vec::new(),
             )
             .unwrap();
         assert_eq!(edited.body, "直した");
         assert_eq!(edited.updated_at.as_deref(), Some("2026-09-22T09:00:00Z"));
         assert_eq!(edited.created_at, LATER, "書いた時刻は動かない");
+    }
+
+    fn attachment(id: &str, bytes: usize) -> Attachment {
+        Attachment {
+            id: id.into(),
+            filename: format!("{id}.png"),
+            mime: "image/png".into(),
+            size: bytes as u64,
+            // base64 は 3 バイトを 4 文字にし、余りは `=` で詰める。
+            data: {
+                let groups = bytes.div_ceil(3);
+                let padding = (groups * 3) - bytes;
+                format!(
+                    "{}{}",
+                    "A".repeat(groups * 4 - padding),
+                    "=".repeat(padding)
+                )
+            },
+        }
+    }
+
+    fn post_with(
+        service: &mut Service<MemoryStore>,
+        id: &str,
+        attachments: Vec<Attachment>,
+    ) -> ApiResult<Comment> {
+        let alice = actor(service, "alice");
+        service.post_comment(
+            &alice,
+            &ProjectId::new("p1"),
+            LATER,
+            NewComment {
+                id: CommentId::new(id),
+                task_id: None,
+                body: "画面が変です".into(),
+                attachments,
+            },
+        )
+    }
+
+    #[test]
+    fn attachments_ride_along_with_the_comment() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+
+        let posted = post_with(&mut service, "c1", vec![attachment("a1", 10)]).unwrap();
+        assert_eq!(posted.attachments.len(), 1);
+        assert_eq!(posted.attachments[0].filename, "a1.png");
+
+        // 読み出しても付いてくる。
+        let alice = actor(&service, "alice");
+        let listed = service
+            .list_comments(&alice, &ProjectId::new("p1"), None)
+            .unwrap();
+        assert_eq!(listed[0].attachments.len(), 1);
+
+        // 書き直すと、送られた一覧がそのまま新しい一覧になる。
+        let edited = service
+            .edit_comment(&alice, &CommentId::new("c1"), LATER, "直した", Vec::new())
+            .unwrap();
+        assert!(edited.attachments.is_empty(), "外したら消える");
+    }
+
+    #[test]
+    fn too_many_or_too_large_attachments_are_refused() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+
+        let many: Vec<_> = (0..=MAX_ATTACHMENTS_PER_COMMENT)
+            .map(|i| attachment(&format!("a{i}"), 10))
+            .collect();
+        assert_eq!(
+            post_with(&mut service, "c1", many).unwrap_err().code,
+            ErrorCode::Invalid,
+            "件数の上限"
+        );
+
+        let big = attachment("a1", MAX_ATTACHMENT_BYTES as usize + 3);
+        assert_eq!(
+            post_with(&mut service, "c2", vec![big]).unwrap_err().code,
+            ErrorCode::Invalid,
+            "1 件の大きさの上限"
+        );
+
+        // 申告された size だけが大きい場合も断る。
+        let mut lying = attachment("a1", 10);
+        lying.size = MAX_ATTACHMENT_BYTES + 1;
+        assert_eq!(
+            post_with(&mut service, "c3", vec![lying]).unwrap_err().code,
+            ErrorCode::Invalid,
+        );
+
+        assert_eq!(
+            post_with(
+                &mut service,
+                "c4",
+                vec![attachment("a1", 1), attachment("a1", 1)]
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::Invalid,
+            "id の重複"
+        );
+
+        let mut nameless = attachment("a1", 10);
+        nameless.filename = "  ".into();
+        assert_eq!(
+            post_with(&mut service, "c5", vec![nameless])
+                .unwrap_err()
+                .code,
+            ErrorCode::Invalid,
+            "名前が空"
+        );
+
+        // ぎりぎりは通る。
+        let ok = attachment("a1", MAX_ATTACHMENT_BYTES as usize);
+        assert!(post_with(&mut service, "c6", vec![ok]).is_ok());
     }
 
     #[test]
@@ -1853,9 +2050,12 @@ mod tests {
                 &bob,
                 &ProjectId::new("p1"),
                 LATER,
-                CommentId::new("c1"),
-                None,
-                "消される意見",
+                NewComment {
+                    id: CommentId::new("c1"),
+                    task_id: None,
+                    body: "消される意見".into(),
+                    attachments: Vec::new(),
+                },
             )
             .unwrap();
 
@@ -1887,9 +2087,12 @@ mod tests {
                     &alice,
                     &ProjectId::new("p1"),
                     LATER,
-                    CommentId::new("c1"),
-                    None,
-                    "   ",
+                    NewComment {
+                        id: CommentId::new("c1"),
+                        task_id: None,
+                        body: "   ".into(),
+                        attachments: Vec::new(),
+                    },
                 )
                 .unwrap_err()
                 .code,
@@ -1907,9 +2110,12 @@ mod tests {
                 &alice,
                 &ProjectId::new("p1"),
                 LATER,
-                CommentId::new("c1"),
-                None,
-                "何か",
+                NewComment {
+                    id: CommentId::new("c1"),
+                    task_id: None,
+                    body: "何か".into(),
+                    attachments: Vec::new(),
+                },
             )
             .unwrap();
 

@@ -25,8 +25,8 @@ use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use mhc_api::error::ApiError;
 use mhc_api::model::{
-    CommentId, Document, Principal, ProjectGroupId, ProjectId, ProjectRole, ProjectStatus,
-    SystemRole, UserId,
+    Attachment, CommentId, Document, Principal, ProjectGroupId, ProjectId, ProjectRole,
+    ProjectStatus, SystemRole, UserId,
 };
 use mhc_api::protocol::{dispatch, Envelope, Outcome, Request};
 use mhc_api::service::Service;
@@ -227,11 +227,16 @@ struct PostCommentBody {
     #[serde(default)]
     task_id: Option<String>,
     body: String,
+    #[serde(default)]
+    attachments: Vec<Attachment>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BodyOnly {
     body: String,
+    #[serde(default)]
+    attachments: Vec<Attachment>,
 }
 
 /// `?taskId=…` で絞り込む。
@@ -728,6 +733,7 @@ async fn post_comment<C: Sql + 'static>(
         comment_id: body.comment_id,
         task_id: body.task_id,
         body: body.body,
+        attachments: body.attachments,
     };
     call(app, headers, request, Ok_::Created).await
 }
@@ -741,6 +747,7 @@ async fn edit_comment<C: Sql + 'static>(
     let request = Request::EditComment {
         comment_id: CommentId::new(id),
         body: body.body,
+        attachments: body.attachments,
     };
     call(app, headers, request, Ok_::Fine).await
 }

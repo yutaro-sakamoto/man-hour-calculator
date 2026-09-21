@@ -12,7 +12,14 @@
 
 import type { ProjectDocument } from "../api/types.ts";
 import type { Task } from "../types.ts";
-import { createTask, readProjectFile, toFile, type LoadedFile } from "./project.ts";
+import {
+  createTask,
+  readBundle,
+  readProjectFile,
+  toBundle,
+  toFile,
+  type LoadedFile,
+} from "./project.ts";
 import type { TreeRow } from "./tree.ts";
 
 /**
@@ -49,12 +56,40 @@ export function downloadProject(name: string, document: ProjectDocument): void {
   );
 }
 
+/** まとめて書き出す。拡張子を分けて、開くときに取り違えにくくする。 */
+export function downloadBundle(projects: readonly LoadedFile[]): void {
+  downloadText(
+    "projects.mhcall.json",
+    JSON.stringify(toBundle(projects), null, 2),
+    "application/json",
+  );
+}
+
 export async function readFile(file: File): Promise<LoadedFile | null> {
   try {
     return readProjectFile(JSON.parse(await file.text()));
   } catch {
     return null;
   }
+}
+
+/**
+ * 1 件ぶんでも、まとめたものでも読む。
+ *
+ * どちらかはファイルの `schema` で決める。読めたものは**足すだけ**で、
+ * 手元にあるプロジェクトは消さない。
+ */
+export async function readAnyFile(file: File): Promise<LoadedFile[] | null> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await file.text());
+  } catch {
+    return null;
+  }
+  const bundle = readBundle(raw);
+  if (bundle !== null) return bundle;
+  const single = readProjectFile(raw);
+  return single === null ? null : [single];
 }
 
 /* ===== CSV ===================================================

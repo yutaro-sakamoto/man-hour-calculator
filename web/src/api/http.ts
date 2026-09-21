@@ -13,6 +13,7 @@ import type { ApiClient, NewUserInput, ProjectPatchInput, UserPatchInput } from 
 import {
   ApiError,
   type AccessEntry,
+  type Attachment,
   type Comment,
   type CommentId,
   type ApiErrorCode,
@@ -215,16 +216,22 @@ export class HttpApiClient implements ApiClient {
     commentId: CommentId,
     body: string,
     taskId?: string,
+    attachments: Attachment[] = [],
   ): Promise<Comment> {
     return this.send("POST", `/v1/projects/${seg(id)}/comments`, {
       commentId,
       body,
+      attachments,
       ...(taskId === undefined ? {} : { taskId }),
     });
   }
 
-  editComment(commentId: CommentId, body: string): Promise<Comment> {
-    return this.send("PATCH", `/v1/comments/${seg(commentId)}`, { body });
+  editComment(
+    commentId: CommentId,
+    body: string,
+    attachments: Attachment[] = [],
+  ): Promise<Comment> {
+    return this.send("PATCH", `/v1/comments/${seg(commentId)}`, { body, attachments });
   }
 
   deleteComment(commentId: CommentId): Promise<void> {

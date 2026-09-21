@@ -18,6 +18,8 @@ function show(blocks: readonly Block[]): string {
             return `\`${node.text}\``;
           case "link":
             return `[${node.text}](${node.href})`;
+          case "image":
+            return `img[${node.alt}](${node.id})`;
           default:
             return `${node.kind}(${inline(node.children)})`;
         }
@@ -143,4 +145,15 @@ test("長い入力でも素直に返る", () => {
 test("空の入力は空の木", () => {
   assert.deepEqual(parseMarkdown(""), []);
   assert.deepEqual(parseMarkdown("   \n\n  "), []);
+});
+
+test("添付した画像は attachment: の綴りだけを画像にする", () => {
+  assert.equal(show(parseMarkdown("![図](attachment:a1)")), "p(img[図](a1))");
+  // 外の URL は画像にしない。開いただけでそこへ取りに行くことになる。
+  assert.equal(
+    show(parseMarkdown("![図](https://example.com/x.png)")),
+    "p(![図](https://example.com/x.png))",
+  );
+  // 添付へのリンク (`!` なし) はリンクとしても通さない。綴りのまま残す。
+  assert.equal(show(parseMarkdown("[a.pdf](attachment:a2)")), "p([a.pdf](attachment:a2))");
 });

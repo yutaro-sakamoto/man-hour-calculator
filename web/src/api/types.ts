@@ -155,7 +155,33 @@ export interface Comment {
   createdAt: string;
   /** 書き直した時刻。一度も直していなければ null。 */
   updatedAt: string | null;
+  /** 添付ファイル。無ければ空。 */
+  attachments: Attachment[];
 }
+
+/**
+ * コメントに付けたファイル。
+ *
+ * 中身は base64 でそのまま JSON に載せる。この app は `Request` / `Reply` の
+ * 1 つの形を WASM と HTTP の両方で通すことで、権限の判定を 1 か所に保って
+ * いる。multipart を入れると HTTP だけが別の道を通ることになり、その前提が
+ * 崩れる。
+ */
+export interface Attachment {
+  id: string;
+  filename: string;
+  /** 申告された種類。画像として本文に出すかの判断にだけ使う。 */
+  mime: string;
+  /** 元のバイト数。 */
+  size: number;
+  /** base64 (パディングあり)。 */
+  data: string;
+}
+
+/** 1 ファイルの上限 (バイト)。サーバ側 (`crates/api`) と同じ値。 */
+export const MAX_ATTACHMENT_BYTES = 1024 * 1024;
+/** 1 コメントあたりの件数の上限。 */
+export const MAX_ATTACHMENTS_PER_COMMENT = 5;
 
 /** プロジェクトの中身。画面が編集するのはここ。 */
 export interface ProjectDocument {

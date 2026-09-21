@@ -15,6 +15,9 @@ import { PRIORITIES } from "../types.ts";
 
 export const SCHEMA = "man-hour-calculator";
 export const SCHEMA_VERSION = 1;
+/** 複数のプロジェクトを 1 つのファイルにまとめるときの印。 */
+export const BUNDLE_SCHEMA = "man-hour-calculator-bundle";
+export const BUNDLE_VERSION = 1;
 
 let counter = 0;
 
@@ -113,13 +116,18 @@ export function toFile(name: string, document: ProjectDocument): ProjectFile {
   };
 }
 
-/** 機能をひととおり触れる見本データ。 */
-export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
-  const label = (ja: string, en: string): string => (lang === "ja" ? ja : en);
+/**
+ * 機能をひととおり触れる見本データ。**中身は常に英語。**
+ *
+ * 言語の切り替えは画面の文言にだけ効かせる。データまで追従させると、
+ * 日本語で作ったプロジェクトを英語の画面で開いたとき何が出るのかが
+ * 決められないし、英語で使う人の手元に最初から日本語が出てしまう。
+ */
+export function sampleDocument(): ProjectDocument {
   const project = emptyDocument();
 
-  const alice = createMember(label("佐藤", "Alice"));
-  const bob = createMember(label("鈴木", "Bob"), {
+  const alice = createMember("Alice");
+  const bob = createMember("Bob", {
     // 時短勤務の例。9:00〜15:00 から休憩 45 分。
     workdays: [OFF, ...Array.from({ length: 5 }, () => ({ start: "09:00", end: "15:00" })), OFF],
     breakMinutes: 45,
@@ -130,7 +138,7 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
   project.calendar.events = [
     {
       id: newId(),
-      name: label("全体定例", "Team sync"),
+      name: "Team sync",
       startDate: firstMonday,
       endDate: firstMonday,
       startTime: "10:00",
@@ -142,7 +150,7 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
     },
     {
       id: newId(),
-      name: label("隔週の振り返り", "Biweekly retro"),
+      name: "Biweekly retro",
       startDate: nextWeekday(project.calendar.startDate, 5),
       endDate: nextWeekday(project.calendar.startDate, 5),
       startTime: "16:00",
@@ -155,21 +163,21 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
   ];
 
   const design = createTask({
-    name: label("設計フェーズ", "Design phase"),
-    group: label("設計", "Design"),
+    name: "Design phase",
+    group: "Design",
     priority: "high",
   });
   const build = createTask({
-    name: label("実装フェーズ", "Build phase"),
-    group: label("実装", "Build"),
+    name: "Build phase",
+    group: "Build",
   });
 
   project.tasks = [
     design,
     createTask({
-      name: label("要件定義", "Requirements"),
+      name: "Requirements",
       parentId: design.id,
-      group: label("設計", "Design"),
+      group: "Design",
       priority: "high",
       min: "5",
       likely: "8",
@@ -177,9 +185,9 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
       assigneeId: alice.id,
     }),
     createTask({
-      name: label("基本設計", "Architecture"),
+      name: "Architecture",
       parentId: design.id,
-      group: label("設計", "Design"),
+      group: "Design",
       min: "3",
       likely: "5",
       max: "12",
@@ -187,9 +195,9 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
     }),
     build,
     createTask({
-      name: label("API 実装", "API implementation"),
+      name: "API implementation",
       parentId: build.id,
-      group: label("実装", "Build"),
+      group: "Build",
       priority: "high",
       min: "2",
       likely: "3",
@@ -197,18 +205,18 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
       assigneeId: alice.id,
     }),
     createTask({
-      name: label("画面実装", "UI implementation"),
+      name: "UI implementation",
       parentId: build.id,
-      group: label("実装", "Build"),
+      group: "Build",
       min: "10",
       likely: "15",
       max: "40",
       assigneeId: bob.id,
     }),
     createTask({
-      name: label("バッチ実装", "Batch jobs"),
+      name: "Batch jobs",
       parentId: build.id,
-      group: label("実装", "Build"),
+      group: "Build",
       priority: "low",
       min: "2",
       likely: "4",
@@ -216,8 +224,8 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
       assigneeId: alice.id,
     }),
     createTask({
-      name: label("テストとリリース", "Test and release"),
-      group: label("QA", "QA"),
+      name: "Test and release",
+      group: "QA",
       min: "3",
       likely: "6",
       max: "14",
@@ -227,9 +235,9 @@ export function sampleDocument(lang: "ja" | "en"): ProjectDocument {
   return project;
 }
 
-/** 見本データの既定の名前。 */
-export function sampleName(lang: "ja" | "en"): string {
-  return lang === "ja" ? "サンプル案件" : "Sample project";
+/** 見本データの既定の名前。中身と同じく英語。 */
+export function sampleName(): string {
+  return "Sample project";
 }
 
 /* ===== 読み込んだ JSON の検証 ================================
@@ -428,6 +436,29 @@ export interface LoadedFile {
 }
 
 /**
+ * まとめて書き出すときの包み。
+ *
+ * ワークスペースまるごと (`LocalApiClient.snapshot()`) は使わない。
+ * サーバに繋いでいるときに同じ道が使えなくなるし、権限やトークンまで
+ * 持ち出すことになる。**プロジェクトの中身だけ**を並べる。
+ */
+export interface BundleFile {
+  schema: typeof BUNDLE_SCHEMA;
+  version: typeof BUNDLE_VERSION;
+  savedAt: string;
+  projects: { name: string; document: ProjectDocument }[];
+}
+
+export function toBundle(projects: readonly LoadedFile[]): BundleFile {
+  return {
+    schema: BUNDLE_SCHEMA,
+    version: BUNDLE_VERSION,
+    savedAt: new Date().toISOString(),
+    projects: projects.map((project) => ({ name: project.name, document: project.document })),
+  };
+}
+
+/**
  * ファイルから読み込む。
  *
  * 古い形式 (内容がトップレベルに並んでいるもの) も読めるようにしてある。
@@ -441,4 +472,24 @@ export function readProjectFile(raw: unknown): LoadedFile | null {
     name: asString(record.name, "project"),
     document: normalizeDocument(nested === undefined ? record : nested),
   };
+}
+
+/**
+ * まとめたファイルから読み込む。1 件も読めなければ `null`。
+ *
+ * 判別はファイルの `schema` だけで行う。拡張子は目印でしかないので、
+ * 名前を変えられても中身で決まるようにしておく。
+ */
+export function readBundle(raw: unknown): LoadedFile[] | null {
+  const record = asRecord(raw);
+  if (asString(record.schema) !== BUNDLE_SCHEMA) return null;
+  const list = Array.isArray(record.projects) ? record.projects : [];
+  const projects = list.map((entry, index) => {
+    const item = asRecord(entry);
+    return {
+      name: asString(item.name, `project ${String(index + 1)}`),
+      document: normalizeDocument(item.document),
+    };
+  });
+  return projects.length === 0 ? null : projects;
 }

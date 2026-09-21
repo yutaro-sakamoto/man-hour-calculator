@@ -45,7 +45,13 @@ import { memberLabel, resolveMembers } from "./model/members.ts";
 import { emptyDocument, newId, sampleDocument, sampleName } from "./model/project.ts";
 import { buildScheduleModel } from "./model/schedule.ts";
 import { buildStatus } from "./model/status.ts";
-import { downloadCsv, downloadProject, projectToCsv, readFile } from "./model/storage.ts";
+import {
+  downloadBundle,
+  downloadCsv,
+  downloadProject,
+  projectToCsv,
+  readAnyFile,
+} from "./model/storage.ts";
 import { csvToTasks } from "./model/storage.ts";
 import type { ResolvedMembers } from "./model/members.ts";
 import type { ScheduleModel } from "./model/schedule.ts";
@@ -112,6 +118,7 @@ const state: AppState = {
   commentDraft: "",
   commentPreview: false,
   editingCommentId: null,
+  commentAttachments: [],
   status: { text: "", tone: "info" },
   probeDate: null,
   taskDetailId: null,
@@ -413,7 +420,7 @@ function summaryBar(): HTMLElement {
 }
 
 const fileInput = h("input", {
-  attrs: { type: "file", accept: ".json,.mhc.json,application/json" },
+  attrs: { type: "file", accept: ".json,.mhc.json,.mhcall.json,application/json" },
   style: { display: "none" },
   on: {
     change: (event) => {
@@ -422,14 +429,23 @@ const fileInput = h("input", {
       input.value = "";
       if (!file) return;
       actions.run(async () => {
-        const loaded = await readFile(file);
+        // 1 件ぶんかまとめたものかは、ファイルの中身で決まる。
+        const loaded = await readAnyFile(file);
         if (loaded === null) {
           setStatus(t("file.badFile"), "error");
           return;
         }
         // 読み込んだ内容は、いまのプロジェクトを潰さずに新しい 1 件として足す。
-        await openProject(await state.client.createProject(newId(), loaded.name, loaded.document));
-        setStatus(t("file.imported", { name: file.name }));
+        let last: Awaited<ReturnType<ApiClient["createProject"]>> | null = null;
+        for (const item of loaded) {
+          last = await state.client.createProject(newId(), item.name, item.document);
+        }
+        if (last !== null) await openProject(last);
+        setStatus(
+          loaded.length === 1
+            ? t("file.imported", { name: file.name })
+            : t("file.importedMany", { name: file.name, count: loaded.length }),
+        );
       });
     },
   },
@@ -467,6 +483,27 @@ function fileMenu(): HTMLElement {
         setStatus(t("file.saved"));
         render();
       }),
+      // まとめて渡せるようにする。1 件ずつ書き出させるのは、渡す側にも
+      // 受け取る側にも手間でしかない。
+      button(
+        t("file.saveAll", { count: state.projects.length }),
+        () => {
+          actions.run(async () => {
+            const projects = [];
+            for (const summary of state.projects) {
+              const project = await state.client.getProject(summary.id);
+              projects.push({ name: project.name, document: project.document });
+            }
+            if (projects.length === 0) {
+              setStatus(t("projects.none"), "error");
+              return;
+            }
+            downloadBundle(projects);
+            setStatus(t("file.savedAll", { count: projects.length }));
+          });
+        },
+        { attrs: { disabled: state.projects.length === 0 } },
+      ),
       button(t("file.open"), () => {
         fileInput.click();
       }),
@@ -872,7 +909,8 @@ async function seed(): Promise<void> {
         users: [
           {
             id: LOCAL_OWNER,
-            name: t("members.you"),
+            // データは英語、画面は選んだ言語。持ち主の名前も中身なので英語。
+            name: "You",
             systemRole: "admin",
             createdAt: new Date().toISOString(),
           },
@@ -883,7 +921,7 @@ async function seed(): Promise<void> {
     LocalApiClient.persist();
   }
   if ((await client.listProjects()).length === 0) {
-    const created = await client.createProject(newId(), sampleName(lang()), sampleDocument(lang()));
+    const created = await client.createProject(newId(), sampleName(), sampleDocument());
     // 見本にも期限を入れておく。そうしないと一覧の「状態」が
     // 「進行中」しか出ず、何を見る欄なのか伝わらない。
     await client.updateProject(created.id, { dueDate: addDays(today, 60) });

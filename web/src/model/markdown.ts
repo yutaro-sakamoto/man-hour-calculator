@@ -36,6 +36,14 @@ export type Inline =
   | { kind: "text"; text: string }
   | { kind: "code"; text: string }
   | { kind: "link"; text: string; href: string }
+  /**
+   * 添付した画像。綴りは `![alt](attachment:<id>)` だけ。
+   *
+   * **外の URL は画像にしない。** `![](https://…)` を通すと、コメントを
+   * 開いただけでそこへ取りに行くことになる。このページは外と通信しない
+   * ことを約束していて、E2E もそれを見張っている。
+   */
+  | { kind: "image"; alt: string; id: string }
   | { kind: "strong" | "em" | "strike"; children: Inline[] };
 
 /** 行のまとまり。 */
@@ -82,6 +90,14 @@ function parseInline(source: string, depth = 0): Inline[] {
       flush();
       out.push({ kind: "code", text: code[1] });
       at += code[0].length;
+      continue;
+    }
+
+    const image = /^!\[([^\]]*)\]\(attachment:([^)\s]+)\)/.exec(rest);
+    if (image?.[1] !== undefined && image[2] !== undefined) {
+      flush();
+      out.push({ kind: "image", alt: image[1], id: image[2] });
+      at += image[0].length;
       continue;
     }
 
@@ -239,9 +255,26 @@ export function parseMarkdown(source: string): Block[] {
 
 /* ===== DOM にする ===== */
 
-function fillInline(nodes: readonly Inline[], into: Node): void {
+/** 添付の id から、画面に出せる中身を引く。 */
+export type AttachmentSource = (id: string) => { url: string; filename: string } | null;
+
+function fillInline(nodes: readonly Inline[], into: Node, source?: AttachmentSource): void {
   for (const node of nodes) {
-    if (node.kind === "text") {
+    if (node.kind === "image") {
+      const found = source?.(node.id) ?? null;
+      if (found === null) {
+        // 添付が見つからないときは、書かれたままの文字として出す。
+        // 壊れた画像の枠より、何が書いてあったかが分かるほうがよい。
+        into.appendChild(document.createTextNode(`![${node.alt}](attachment:${node.id})`));
+        continue;
+      }
+      const image = document.createElement("img");
+      image.className = "comment-image";
+      image.src = found.url;
+      image.alt = node.alt === "" ? found.filename : node.alt;
+      image.loading = "lazy";
+      into.appendChild(image);
+    } else if (node.kind === "text") {
       into.appendChild(document.createTextNode(node.text));
     } else if (node.kind === "code") {
       const code = document.createElement("code");
@@ -258,13 +291,13 @@ function fillInline(nodes: readonly Inline[], into: Node): void {
     } else {
       const tag = node.kind === "em" ? "em" : node.kind === "strike" ? "s" : "strong";
       const element = document.createElement(tag);
-      fillInline(node.children, element);
+      fillInline(node.children, element, source);
       into.appendChild(element);
     }
   }
 }
 
-function fillBlocks(blocks: readonly Block[], into: Node): void {
+function fillBlocks(blocks: readonly Block[], into: Node, source?: AttachmentSource): void {
   for (const block of blocks) {
     switch (block.kind) {
       case "rule":
@@ -281,7 +314,7 @@ function fillBlocks(blocks: readonly Block[], into: Node): void {
       case "heading": {
         // コメントのなかの見出しなので、ページの見出しより下げる。
         const element = document.createElement(`h${String(Math.min(6, block.level + 2))}`);
-        fillInline(block.children, element);
+        fillInline(block.children, element, source);
         into.appendChild(element);
         break;
       }
@@ -289,7 +322,7 @@ function fillBlocks(blocks: readonly Block[], into: Node): void {
         const list = document.createElement(block.ordered ? "ol" : "ul");
         for (const item of block.items) {
           const li = document.createElement("li");
-          fillInline(item, li);
+          fillInline(item, li, source);
           list.appendChild(li);
         }
         into.appendChild(list);
@@ -297,13 +330,13 @@ function fillBlocks(blocks: readonly Block[], into: Node): void {
       }
       case "quote": {
         const quote = document.createElement("blockquote");
-        fillBlocks(block.blocks, quote);
+        fillBlocks(block.blocks, quote, source);
         into.appendChild(quote);
         break;
       }
       default: {
         const p = document.createElement("p");
-        fillInline(block.children, p);
+        fillInline(block.children, p, source);
         into.appendChild(p);
       }
     }
@@ -316,9 +349,9 @@ function fillBlocks(blocks: readonly Block[], into: Node): void {
  * **`innerHTML` は使わない。** 文字は必ず `textContent` に入るので、
  * どんな入力が来てもスクリプトにはならない。
  */
-export function renderMarkdown(source: string): HTMLElement {
+export function renderMarkdown(source: string, attachments?: AttachmentSource): HTMLElement {
   const root = document.createElement("div");
   root.className = "markdown";
-  fillBlocks(parseMarkdown(source), root);
+  fillBlocks(parseMarkdown(source), root, attachments);
   return root;
 }

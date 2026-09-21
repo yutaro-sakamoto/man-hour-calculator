@@ -12,11 +12,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ApiError;
 use crate::model::{
-    AccessEntry, Comment, CommentId, Document, Principal, Project, ProjectGroup, ProjectGroupId,
-    ProjectId, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User, UserGroup,
-    UserGroupId, UserId,
+    AccessEntry, Attachment, Comment, CommentId, Document, Principal, Project, ProjectGroup,
+    ProjectGroupId, ProjectId, ProjectRole, ProjectStatus, ProjectSummary, SystemRole, User,
+    UserGroup, UserGroupId, UserId,
 };
-use crate::service::{NewUser, ProjectPatch, Service, UserPatch};
+use crate::service::{NewComment, NewUser, ProjectPatch, Service, UserPatch};
 use crate::store::Store;
 
 /// 操作の種類と引数。
@@ -167,11 +167,17 @@ pub enum Request {
         #[serde(default)]
         task_id: Option<String>,
         body: String,
+        /// 添付。ルートは増やさない — 1 つの形を WASM と HTTP の両方で通す。
+        #[serde(default)]
+        attachments: Vec<Attachment>,
     },
     #[serde(rename_all = "camelCase")]
     EditComment {
         comment_id: CommentId,
         body: String,
+        /// 送られたものがそのまま新しい一覧になる (足すのではなく置き換え)。
+        #[serde(default)]
+        attachments: Vec<Attachment>,
     },
     #[serde(rename_all = "camelCase")]
     DeleteComment {
@@ -536,12 +542,29 @@ fn run<S: Store>(service: &mut Service<S>, envelope: Envelope) -> crate::error::
             comment_id,
             task_id,
             body,
-        } => Reply::Comment(Box::new(
-            service.post_comment(&actor, &id, now, comment_id, task_id, &body)?,
-        )),
-        Request::EditComment { comment_id, body } => Reply::Comment(Box::new(
-            service.edit_comment(&actor, &comment_id, now, &body)?,
-        )),
+            attachments,
+        } => Reply::Comment(Box::new(service.post_comment(
+            &actor,
+            &id,
+            now,
+            NewComment {
+                id: comment_id,
+                task_id,
+                body,
+                attachments,
+            },
+        )?)),
+        Request::EditComment {
+            comment_id,
+            body,
+            attachments,
+        } => Reply::Comment(Box::new(service.edit_comment(
+            &actor,
+            &comment_id,
+            now,
+            &body,
+            attachments,
+        )?)),
         Request::DeleteComment { comment_id } => {
             service.delete_comment(&actor, &comment_id)?;
             Reply::Empty
@@ -705,10 +728,12 @@ mod tests {
                 comment_id: CommentId::new("c"),
                 task_id: None,
                 body: "やあ".into(),
+                attachments: Vec::new(),
             },
             Request::EditComment {
                 comment_id: CommentId::new("c"),
                 body: "やあ (修正)".into(),
+                attachments: Vec::new(),
             },
             Request::DeleteComment {
                 comment_id: CommentId::new("c"),

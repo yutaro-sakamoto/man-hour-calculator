@@ -213,7 +213,36 @@ pub struct Comment {
     /// 書き直した時刻。一度も直していなければ `None`。
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// 添付ファイル。既に保存されている内容には無いので `default` で空。
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
+
+/// コメントに付けたファイル。
+///
+/// 中身は base64 で JSON に載せる。この app は `Request` / `Reply` の
+/// 1 つの形を WASM と HTTP の両方で通すことで、権限の判定を 1 か所に
+/// 保っている。multipart を入れると HTTP だけが別の道を通ることになり、
+/// その前提が崩れる。1 MB × 5 件なら JSON に載せても持つ。
+///
+/// **中身は解釈しない。** 画面に出すかどうかは `mime` を見て画面が決める。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    pub id: String,
+    pub filename: String,
+    /// 申告された種類。信用せず、画面では画像として出すかの判断にだけ使う。
+    pub mime: String,
+    /// 元のバイト数。`data` の長さから引き直せるが、数えずに済むよう持つ。
+    pub size: u64,
+    /// base64 (パディングあり)。
+    pub data: String,
+}
+
+/// 1 ファイルの上限 (バイト)。
+pub const MAX_ATTACHMENT_BYTES: u64 = 1024 * 1024;
+/// 1 コメントあたりの件数の上限。
+pub const MAX_ATTACHMENTS_PER_COMMENT: usize = 5;
 
 /// アカウントのまとまり。チームや部署。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

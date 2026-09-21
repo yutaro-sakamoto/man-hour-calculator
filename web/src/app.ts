@@ -2,6 +2,7 @@
 
 import type { ApiClient } from "./api/client.ts";
 import type {
+  Attachment,
   Comment,
   Project,
   ProjectDocument,
@@ -101,6 +102,13 @@ export interface AppState {
   commentPreview: boolean;
   /** 書き直しているコメントの id。`null` なら新しく書いている。 */
   editingCommentId: string | null;
+  /**
+   * 書きかけのコメントに付けたファイル。
+   *
+   * 送るまでは状態に持つ。書き直しのときは、いまの添付がここに入っている
+   * (送られた一覧がそのまま新しい一覧になるため)。
+   */
+  commentAttachments: Attachment[];
   /** 予定をすべて出している日 (`YYYY-MM-DD`)。狭い升に収まらないとき。 */
   expandedDay: string | null;
   status: { text: string; tone: "info" | "error" };
