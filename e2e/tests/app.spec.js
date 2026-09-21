@@ -9,10 +9,23 @@ const PAGE_URL = pathToFileURL(
 ).href;
 
 /**
+ * 検査のあいだ、画面から見える「いま」。
+ *
+ * **固定しないとテストが腐る。** 見本データのカレンダーは `startDate` を
+ * 今日にし、表示範囲は `startDate` から `horizonDays` 日ぶん。ここで
+ * 直書きしている `2026-09-21` のような日付は、実際の今日がそれを追い越した
+ * 瞬間に「範囲の外」になって落ちる。実行した日によって結果が変わる検査は、
+ * 検査ではない。
+ */
+const FIXED_NOW = new Date("2026-09-01T09:00:00Z");
+
+/**
  * ページを開き、外部への通信もページ内の例外も起きていないことを保証する。
  * localStorage は毎回まっさらな状態から始める (テスト間で引きずらないため)。
  */
 async function open(page, { lang = "ja" } = {}) {
+  // 読み込みより先に時計を据える。`todayIso()` は起動時に 1 度読む。
+  await page.clock.install({ time: FIXED_NOW });
   const external = [];
   const errors = [];
   page.on("request", (request) => {
