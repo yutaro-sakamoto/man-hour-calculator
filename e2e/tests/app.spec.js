@@ -1130,6 +1130,8 @@ test("グループに配った権限はメンバー全員に効く", async ({ pa
   // 入力するとその場で保存され、画面が組み直される。行は名前で探しているので、
   // ここで blur を待つと「名前」の行はもう無い。
   await added.locator("input").fill("鈴木");
+  // 名前の変更は打ち終わってから送られる (1 打鍵ごとに API を叩かない)。
+  await added.locator("input").blur();
   await expect(
     page.locator('tr[data-account] input[value="鈴木"]'),
   ).toHaveCount(1);
@@ -1589,6 +1591,8 @@ test("閲覧しかできない人もコメントは書ける", async ({ page }) 
     .locator("tr[data-account]")
     .filter({ has: page.locator('input[value="名前"]') });
   await added.locator("input").fill("鈴木");
+  // 名前の変更は打ち終わってから送られる (1 打鍵ごとに API を叩かない)。
+  await added.locator("input").blur();
   await expect(
     page.locator('tr[data-account] input[value="鈴木"]'),
   ).toHaveCount(1);
@@ -1830,4 +1834,48 @@ test("終了が開始以下の予定は、その日の稼働を潰さない", as
     before,
     6,
   );
+});
+
+test("貼ったトークンは、描き直しで消えない", async ({ page }) => {
+  // URL を書き損じて接続を押すと、描き直しで貼ったトークンが消え、
+  // type=password なので見えないまま空で接続していた。
+  await open(page);
+  await openTab(page, "projects");
+  await openCard(page, "connection");
+
+  await page
+    .locator('input[data-focus="connection:token"]')
+    .fill("secret-token");
+  // スキームを書き忘れた URL。
+  await page
+    .locator('input[data-focus="connection:url"]')
+    .fill("mhc.example.internal");
+  await page.click('button[data-action="connect"]');
+  await expect(page.locator("#status")).toHaveAttribute("data-tone", "error");
+
+  // 書きかけは残っている。
+  await expect(
+    page.locator('input[data-focus="connection:token"]'),
+  ).toHaveValue("secret-token");
+  await expect(page.locator('input[data-focus="connection:url"]')).toHaveValue(
+    "mhc.example.internal",
+  );
+});
+
+test("名前の変更は、打ち終わってから 1 回だけ送られる", async ({ page }) => {
+  // 1 打鍵ごとに API を叩いていたので、応答の順によっては文字が落ちた。
+  await open(page);
+  await openTab(page, "projects");
+  const name = page.locator(
+    'tr[data-project][data-open="true"] input[type="text"]',
+  );
+  await name.click();
+  await name.press("ControlOrMeta+a");
+  await page.keyboard.type("Renamed project");
+  // 打っている間は反映されない (= 送られていない)。
+  await expect(name).toHaveValue("Renamed project");
+  await name.blur();
+  await expect(
+    page.locator('tr[data-project] input[value="Renamed project"]'),
+  ).toHaveCount(1);
 });
