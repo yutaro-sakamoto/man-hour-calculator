@@ -177,7 +177,7 @@ jobs:
         env:
           BINARYEN_VERSION: "123"
         run: |
-          curl -fsSL -o binaryen.tar.gz \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o binaryen.tar.gz \
             "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
           tar xzf binaryen.tar.gz
           echo "$PWD/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
@@ -280,10 +280,21 @@ jobs:
           key: kani
 
       # kani setup は自前のツールチェーンと CBMC を取りに行く (数分)。
+      #
+      # 取りに行く先は GitHub の配布で、ときどき 504 を返す。**Kani 自身の
+      # curl なので、こちらからフラグを足せない。** 手順ごと試し直す。
       - name: Install Kani
         run: |
+          set -euo pipefail
           cargo install --locked kani-verifier
-          cargo kani setup
+          for attempt in 1 2 3 4 5; do
+            if cargo kani setup; then
+              break
+            fi
+            echo "::warning::kani setup が $attempt 回目で失敗。待って試し直します" >&2
+            sleep $((attempt * 15))
+          done
+          # 5 回とも駄目ならここで落ちる。
           cargo kani --version
 
       - name: Verify

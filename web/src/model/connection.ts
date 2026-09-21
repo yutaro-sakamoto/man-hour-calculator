@@ -18,7 +18,7 @@ const STORAGE_KEY = "mhc.connection.v1";
 
 /** 保存してある接続先。無ければ `null`。 */
 export function loadConnection(): Connection | null {
-  let raw: string | null = null;
+  let raw: string | null;
   try {
     raw = localStorage.getItem(STORAGE_KEY);
   } catch {

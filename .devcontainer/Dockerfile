@@ -20,7 +20,7 @@ RUN set -eux; \
       arm64) target="aarch64-linux" ;; \
       *) echo "binaryen の配布が無い arch: $arch" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /tmp/binaryen.tar.gz \
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o /tmp/binaryen.tar.gz \
       "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-${target}.tar.gz"; \
     tar xzf /tmp/binaryen.tar.gz -C /opt; \
     mv "/opt/binaryen-version_${BINARYEN_VERSION}" /opt/binaryen; \

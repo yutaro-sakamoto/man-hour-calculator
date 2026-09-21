@@ -13,7 +13,7 @@ JAR="${TLA_JAR:-$PWD/.tla/tla2tools.jar}"
 if [ ! -f "$JAR" ]; then
   echo "==> tla2tools ${TLA_VERSION} を取得"
   mkdir -p "$(dirname "$JAR")"
-  curl -fsSL -o "$JAR" \
+  curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o "$JAR" \
     "https://github.com/tlaplus/tlaplus/releases/download/${TLA_VERSION}/tla2tools.jar"
 fi
 

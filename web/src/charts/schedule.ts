@@ -376,7 +376,7 @@ export function createScheduleChart(
   canvas.addEventListener("keydown", (event: KeyboardEvent) => {
     if (!model) return;
     const last = visibleDays() - 1;
-    let next = focusDay;
+    let next: number;
     const step = event.shiftKey ? 7 : 1;
     if (event.key === "ArrowRight") next = focusDay < 0 ? 0 : Math.min(last, focusDay + step);
     else if (event.key === "ArrowLeft") next = focusDay < 0 ? last : Math.max(0, focusDay - step);

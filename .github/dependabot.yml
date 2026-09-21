@@ -9,11 +9,27 @@ updates:
     directory: /web
     schedule:
       interval: monthly
+    # ばらばらに 5 本来ると、どれも「古い main を基にしている」だけで
+    # 落ちる。まとめて 1 本にして、同じ土台で確かめられるようにする。
+    groups:
+      web-dev-dependencies:
+        patterns: ["*"]
+    ignore:
+      # typescript-eslint が TS 7 を**実行時に拒む**
+      # ("typescript-eslint does not support TS 7.0")。型検査だけなら
+      # 通るが、型情報を使う lint が丸ごと落ちる。対応版が出るまで 5 系に
+      # 留める。`tsconfig.json` の `types` と `src/css.d.ts` は TS 7 でも
+      # 通る形にしてあるので、外すのは 1 行で済む。
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /e2e
     schedule:
       interval: monthly
+    groups:
+      e2e-dev-dependencies:
+        patterns: ["*"]
 
   - package-ecosystem: github-actions
     directory: /

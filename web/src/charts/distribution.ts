@@ -364,7 +364,7 @@ export function createDistributionChart(
   canvas.addEventListener("keydown", (event: KeyboardEvent) => {
     if (!model) return;
     const last = model.probs.length - 1;
-    let next = focusBin;
+    let next: number;
     if (event.key === "ArrowRight") next = focusBin < 0 ? 0 : Math.min(last, focusBin + 1);
     else if (event.key === "ArrowLeft") next = focusBin < 0 ? last : Math.max(0, focusBin - 1);
     else if (event.key === "Home") next = 0;
