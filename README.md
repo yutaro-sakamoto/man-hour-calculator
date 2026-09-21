@@ -112,6 +112,29 @@ The end-to-end tests open `dist/app.html` **over `file://`**. That checks the pr
 itself — one HTML file, working offline — on every run: if a single external request goes
 out, the test fails.
 
+### How much of it is actually tested
+
+```sh
+cargo llvm-cov --workspace --summary-only   # Rust; CI fails below 85% lines
+npm --prefix web run test:coverage          # TypeScript; 88% lines / 82% branches / 72% functions
+```
+
+Node's built-in coverage only counts files that the tests actually load, so `ui/` and
+`charts/` (which need a DOM) are out of scope — what is left is the pure modules, which is
+a range worth putting a number on.
+
+Coverage says which lines run, not whether anything checks them. For that there is
+**mutation testing**: change one thing and see whether a test notices.
+
+```sh
+cargo mutants -p mhc-core -p mhc-api --timeout 60
+```
+
+CI runs it nightly at 03:00 JST across four parallel shards (and on demand via
+`workflow_dispatch`). If the catch rate — `caught / (caught + missed)` — drops below the
+bar, it files an issue listing every mutant that got away. Those are lines the tests walk
+through without checking anything.
+
 ## How it works
 
 ```

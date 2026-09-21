@@ -1,0 +1,91 @@
+name: Mutation testing
+
+# テストが「通っているだけで、効いているかは分からない」を潰す。
+#
+# 変異を 1 つ入れてテストを回し、**落ちなければ見逃し**。見逃しが多いところは、
+# 行を通ってはいるが何も確かめていない。カバレッジでは見えない穴がここに出る。
+on:
+  schedule:
+    # 18:00 UTC = 03:00 JST。誰も触っていない時間に回す。
+    - cron: "0 18 * * *"
+  # 手でも起動できるようにする。基準を変えたときや、見逃しを直したあとに
+  # 翌朝まで待つ理由が無い。
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: 捕捉率の基準 (%)。空なら既定値
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # 捕捉率 = caught / (caught + missed)。unviable (組み立たない変異) と
+  # timeout は分母に入れない — テストの落ち度ではないため。
+  #
+  # 手元で 8 分の 2 を回して測った実測は **82.8%** (捕捉 77 / 見逃し 16)。
+  # その少し下に置く。上げるのは見逃しを潰してから。
+  DEFAULT_THRESHOLD: "75"
+
+jobs:
+  # core と api だけを見る。server は薄い繋ぎで、wasm は FFI の境界なので、
+  # 変異を入れても「意味のある間違い」になりにくい。
+  run:
+    name: mutants (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mutants-${{ matrix.shard }}
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      # --timeout は 1 変異あたり。無限ループに化けた変異で一晩潰さないため。
+      - name: Run
+        run: |
+          cargo mutants -p mhc-core -p mhc-api \
+            --shard ${{ matrix.shard }}/4 \
+            --timeout 60
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: mutants.out/outcomes.json
+          if-no-files-found: error
+
+  report:
+    name: report
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mutants-*
+          path: shards
+
+      - name: Aggregate and report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          THRESHOLD: ${{ inputs.threshold || env.DEFAULT_THRESHOLD }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/mutants-report.mjs shards
