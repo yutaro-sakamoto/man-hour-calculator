@@ -9,3 +9,7 @@ node_modules
 /mhc.db
 /mhc.db-shm
 /mhc.db-wal
+
+# SBOM を手元で試したときの出力。配るのは CI が作るもの。
+/out/
+*.cdx.json
