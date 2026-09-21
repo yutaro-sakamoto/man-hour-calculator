@@ -1,0 +1,165 @@
+---
+name: agent-ready-repo
+description: リポジトリを Claude Code に渡せる形に整える。AGENTS.md / CLAUDE.md の書きかた、パスごとに効く .claude/rules、頻用手順を固めた slash command、Stop フック、permissions の allow/ask/deny、サブエージェントを勝手に撒かせない取り決め。コーディングエージェントと一緒に開発するとき、指示が守られないとき、設定を整えるときに読む。CLAUDE.md, AGENTS.md, claude code settings, hooks, slash commands, subagent, permissions.
+---
+
+# リポジトリをエージェントに渡せる形にする
+
+**書いていないことは守られない。書きすぎたものも守られない。**
+効いたのは、短い `AGENTS.md` + パスごとに効く細則 + 機械の見張り、の 3 点セット。
+
+```text
+CLAUDE.md          → @AGENTS.md と書くだけ (1 行)
+AGENTS.md          → 全体の取り決め。**短く**
+.claude/rules/*.md → paths: で効く範囲を絞った細則
+.claude/commands/  → 頻用手順 (/verify, /sync)
+.claude/agents/    → 読むだけのサブエージェント
+.claude/hooks/     → 応答の終わりの機械の見張り
+.claude/settings.json → permissions と hooks
+```
+
+## `CLAUDE.md` は 1 行にする
+
+```md
+@AGENTS.md
+```
+
+エージェントごとに別の文書を置くと、片方だけ古くなる。
+
+## `AGENTS.md` に書くこと
+
+骨は `assets/AGENTS.template.md`。**節はこの 6 つで足りた。**
+
+1. **このリポジトリは何か** (3 行。成果物の形と、中核の言語)
+2. **変更したら回すもの** (コマンドをそのまま貼る)
+3. **進め方** (ブランチ → PR → CI 緑 → main)
+4. **守っていること** (禁止事項。なぜ禁止かを 1 行添える)
+5. **レビューの回し方** (何を勝手にやってよくて、何を断ってからやるか)
+6. **文書と仕様を実態から離さない** (同じ PR で直すものの一覧)
+
+### 効いた書きかた
+
+**禁止に理由を添える。** 理由の無い禁止は、次のセッションで「より良い方法」に
+置き換えられる。
+
+```md
+- **HTML の文字列を組み立てない。** 文字は必ず `textContent` に入れる。
+  `innerHTML` は使わない (.claude/rules/frontend.md)
+```
+
+**自分が踏んだ穴を、踏んだ事実ごと書く。**
+
+```md
+`npm run check` の出力を `grep` で絞りすぎない。Prettier の `[warn]` 行を
+見落として、失敗を成功と読み違えたことがある。`tail` で見ること。
+```
+
+**回す順に、コピーできる形で並べる。** 説明より効く。
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+npm --prefix web run check
+cargo xtask build
+cd e2e && npx playwright test
+./scripts/check-sync.sh
+```
+
+**重い層は「触ったときだけ」と明示する。** 書かないと毎回回すか、一度も
+回さないかのどちらかになる。
+
+## `.claude/rules/` — パスで効く細則
+
+`AGENTS.md` を長くするより、**触ったファイルのときだけ出る**細則にする。
+
+```md
+---
+paths:
+  - "web/src/**"
+---
+
+# 画面のきまり
+...
+```
+
+置いてよかったもの:
+
+| ファイル | 中身 |
+|---|---|
+| `frontend.md` | 再描画の作法、`innerHTML` 禁止、保存の失敗を捨てない |
+| `abi.md` | 3 か所が同時に動く境界。区画を足すときの手順 |
+| `permissions.md` | 権限を触るなら仕様も動かす。**過去に見つかった穴の一覧** |
+| `verification.md` | 検証の段を下げない |
+| `e2e.md` | `file://` のまま回す理由。書きかたの約束 |
+
+**「過去に見つかった穴」の節がいちばん効く。** 新しい操作を足すときに
+「この形に当てはまらないか」を考えさせられる。
+
+## `.claude/commands/` — 手順を固める
+
+`/verify` と `/sync` の 2 つで足りた。
+
+- `$ARGUMENTS` で重い層を切り替える (`/verify formal`、`/sync deep`)
+- **落ちたときにどうするかを書く。**
+  「落ちたものがあれば、何が落ちたかを**出力ごと**報告する。『たぶんこれが
+  原因』で済ませず、実際に確かめてから直す」
+- **直す向きを書く。** 「実態に合わせるのが既定。ただし実装が仕様から外れた
+  場合は実装のほうを直す (仕様を実装に合わせると、仕様が番人でなくなる)」
+
+## 重いレビューを勝手に始めさせない
+
+これを書いておかないと、毎回サブエージェントが撒かれて費用が読めなくなる。
+
+```md
+| | いつ | 誰が |
+|---|---|---|
+| `./scripts/check-sync.sh` | 応答の終わりに自動 + CI | 機械。モデルを使わない |
+| `cargo test` などの一式 | 変更のたび | 機械 |
+| ミューテーションテスト | 毎日 03:00 + 手動 | CI |
+| **`/code-review`、サブエージェント、`Workflow`** | **求められたときだけ** | 要相談 |
+
+**こちらから勝手に始めない。** レビューしたほうがよいと思ったら、
+何をどれくらいの規模で回すかを 1 行で伝えて、返事を待つ。
+利用者が「レビューして」と言ったとき、使ってよいか迷うなら、それは
+使ってよいということ。
+```
+
+最後の 2 行が要る。無いと、頼まれているのに毎回確認してくる。
+
+## `settings.json`
+
+```json
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": ["Bash(cargo test:*)", "Bash(npm --prefix web run:*)", "..."],
+    "ask":   ["Bash(gh pr merge:*)", "Bash(gh release create:*)", "Bash(git push:*)"],
+    "deny":  ["Bash(git push --force:*)", "Read(./.env)", "Read(./.env.*)"]
+  }
+}
+```
+
+- **`allow` は「検査のコマンド」。** 毎回聞かれると検証を省くようになる
+- **`ask` は「外に出るもの」。** merge / release / push
+- **`deny` は「取り返しのつかないもの」と「秘密」。** force push と `.env`
+
+## フックは黙っているのが基本
+
+Stop フックで機械の検査を回す。**ずれが無ければ何も言わない**。
+止めずに `additionalContext` だけ出す。詳しくは
+[docs-spec-drift](../docs-spec-drift/)。
+
+## Dev Container で「手元」を固定する
+
+口伝だったものを全部 `.devcontainer/` に入れて、**CI でその箱を組んで
+同じ筋書きを回す** ([ci-quality-gates](../ci-quality-gates/))。
+エージェントが「入っていない道具」で詰まることが減る。
+
+`postCreateCommand` で依存取得とブラウザの導入まで済ませ、最後に
+**次に打つコマンドを表示する**。
+
+## 関連
+
+- ずれの見張り → [docs-spec-drift](../docs-spec-drift/)
+- 知見の貯めかた → [dev-journal](../dev-journal/)
