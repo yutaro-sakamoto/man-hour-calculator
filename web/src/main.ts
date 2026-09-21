@@ -21,7 +21,14 @@ import type { ApiClient } from "./api/client.ts";
 import { HttpApiClient } from "./api/http.ts";
 import { LocalApiClient } from "./api/local.ts";
 import { ApiError, type ProjectDocument, type ProjectStatus, type User } from "./api/types.ts";
-import { TABS, canWrite, type AppActions, type AppState, type AppWidgets } from "./app.ts";
+import {
+  TABS,
+  canWrite,
+  type AppActions,
+  type AppState,
+  type AppWidgets,
+  type TabId,
+} from "./app.ts";
 import { createDistributionChart } from "./charts/distribution.ts";
 import { createScheduleChart } from "./charts/schedule.ts";
 import {
@@ -48,8 +55,8 @@ import { button, clear, h } from "./ui/dom.ts";
 import { renderMembersTab } from "./ui/members.ts";
 import { renderCommentsModal } from "./ui/comments.ts";
 import { renderProjectsTab } from "./ui/projects.ts";
-import { renderDistributionTab } from "./ui/results.ts";
-import { renderScheduleTab } from "./ui/schedule.ts";
+import { renderForecastTab } from "./ui/forecast.ts";
+import { renderTaskDetailModal } from "./ui/taskDetail.ts";
 import { renderTasksTab } from "./ui/tasks.ts";
 import {
   ComputeError,
@@ -107,6 +114,7 @@ const state: AppState = {
   editingCommentId: null,
   status: { text: "", tone: "info" },
   probeDate: null,
+  taskDetailId: null,
 };
 
 const root = document.createElement("div");
@@ -268,13 +276,7 @@ function recompute(): void {
  */
 function currentStatus(): ProjectStatus | undefined {
   if (state.result === null) return undefined;
-  return buildStatus(
-    state.document,
-    state.rows,
-    state.result,
-    state.schedule,
-    new Date().toISOString(),
-  );
+  return buildStatus(state.document, state.result, state.schedule, new Date().toISOString());
 }
 
 /**
@@ -340,7 +342,15 @@ interface FocusSnapshot {
 
 function captureFocus(): FocusSnapshot | null {
   const active = document.activeElement;
-  if (!(active instanceof HTMLInputElement || active instanceof HTMLSelectElement)) return null;
+  // ボタンも拾う。タブを矢印で移ると描き直しが走るので、拾わないと
+  // 1 回移っただけで焦点が本文へ落ちてしまう。
+  if (!(
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLSelectElement ||
+    active instanceof HTMLButtonElement
+  )) {
+    return null;
+  }
   const key = active.dataset.focus;
   if (key === undefined) return null;
   const canSelect = active instanceof HTMLInputElement && active.type !== "date";
@@ -542,24 +552,64 @@ function header(): HTMLElement {
   ]);
 }
 
+const TAB_PANEL_ID = "tab-panel";
+
+/** タブ id から、見出しとして参照するボタンの id。 */
+function tabButtonId(tab: TabId): string {
+  return `tab-${tab}`;
+}
+
+function selectTab(tab: TabId): void {
+  state.activeTab = tab;
+  render();
+  // 移った先のタブに焦点を残す。矢印で送っているときに本文へ落ちると、
+  // そのまま矢印で戻ることができなくなる。
+  root.querySelector<HTMLElement>(`[data-tab="${tab}"]`)?.focus();
+}
+
 function tabBar(): HTMLElement {
-  return h(
+  const rail = h(
     "div",
     { class: "tabs", attrs: { role: "tablist" } },
-    TABS.map((tab) =>
-      button(
+    TABS.map((tab) => {
+      const selected = state.activeTab === tab;
+      return button(
         t(`tab.${tab}`),
         () => {
-          state.activeTab = tab;
-          render();
+          selectTab(tab);
         },
         {
-          attrs: { role: "tab", "aria-selected": state.activeTab === tab },
-          dataset: { tab },
+          id: tabButtonId(tab),
+          dataset: { tab, focus: `tab:${tab}` },
+          attrs: {
+            role: "tab",
+            "aria-selected": selected,
+            "aria-controls": TAB_PANEL_ID,
+            // 選択中の 1 つだけが tab キーの止まり先。あとは矢印で移る。
+            tabindex: selected ? 0 : -1,
+          },
         },
-      ),
-    ),
+      );
+    }),
   );
+
+  rail.addEventListener("keydown", (event) => {
+    const at = TABS.indexOf(state.activeTab);
+    const next =
+      event.key === "ArrowRight"
+        ? TABS[(at + 1) % TABS.length]
+        : event.key === "ArrowLeft"
+          ? TABS[(at - 1 + TABS.length) % TABS.length]
+          : event.key === "Home"
+            ? TABS[0]
+            : event.key === "End"
+              ? TABS[TABS.length - 1]
+              : undefined;
+    if (next === undefined) return;
+    event.preventDefault();
+    selectTab(next);
+  });
+  return rail;
 }
 
 function tabContent(): HTMLElement {
@@ -572,10 +622,8 @@ function tabContent(): HTMLElement {
       return renderMembersTab(state, actions);
     case "calendar":
       return renderCalendarTab(state, actions);
-    case "distribution":
-      return renderDistributionTab(state, actions, widgets);
-    case "schedule":
-      return renderScheduleTab(state, actions, widgets);
+    case "forecast":
+      return renderForecastTab(state, actions, widgets);
   }
 }
 
@@ -587,23 +635,33 @@ function render(): void {
   clear(root);
 
   const editable = canWrite(state) || state.activeTab === "projects";
-  const panel = h("div", { class: "tab-panel", attrs: { role: "tabpanel" } }, [
-    // 閲覧権限しか無いときは、まとめて操作を止める。個々の入力に
-    // disabled を配るより取りこぼしが無い。
-    editable
-      ? tabContent()
-      : h("fieldset", { class: "readonly", attrs: { disabled: true } }, [tabContent()]),
-  ]);
+  const panel = h(
+    "div",
+    {
+      class: "tab-panel",
+      id: TAB_PANEL_ID,
+      attrs: { role: "tabpanel", "aria-labelledby": tabButtonId(state.activeTab) },
+    },
+    [
+      // 閲覧権限しか無いときは、まとめて操作を止める。個々の入力に
+      // disabled を配るより取りこぼしが無い。
+      editable
+        ? tabContent()
+        : h("fieldset", { class: "readonly", attrs: { disabled: true } }, [tabContent()]),
+    ],
+  );
 
   root.append(
     header(),
-    tabBar(),
+    // 状態表示はタブより上。全体の状態であってタブの中身ではないし、
+    // レールとパネルの間に挟まると、繋がって見えるのを邪魔する。
     h("p", {
       class: "status",
       id: "status",
       text: state.status.text,
       dataset: { tone: state.status.tone, run: String(runCount) },
     }),
+    tabBar(),
     editable
       ? panel
       : h("div", {}, [
@@ -611,14 +669,21 @@ function render(): void {
           panel,
         ]),
   );
-  // コメントの窓はどのタブからでも開くので、タブの中身の外に置く。
+  // コメントとタスクの詳細はどのタブからでも開くので、タブの中身の外に置く。
+  // (閲覧権限しか無いときの囲いも外れるため、詳細は自前で無効にする。)
+  const detail = renderTaskDetailModal(state, actions);
+  if (detail) root.append(detail);
   const comments = renderCommentsModal(state, actions);
   if (comments) root.append(comments);
 
   restoreFocus(focus);
 
-  if (state.activeTab === "distribution") distributionChart.redraw();
-  if (state.activeTab === "schedule") scheduleChart.redraw();
+  // 2 つの canvas が同じタブに並ぶので、まとめて描き直す。片方だけだと
+  // もう片方は大きさ 0 のまま白く残る。
+  if (state.activeTab === "forecast") {
+    scheduleChart.redraw();
+    distributionChart.redraw();
+  }
 }
 
 function refreshAll(): void {
@@ -737,7 +802,6 @@ async function recomputeStatuses(ids: readonly string[]): Promise<number> {
       const computed = runEngine(project.document);
       status = buildStatus(
         project.document,
-        computed.rows,
         computed.result,
         computed.schedule,
         new Date().toISOString(),

@@ -50,6 +50,14 @@ const tile = async (page, key) =>
 
 const openTab = (page, tab) => page.click(`.tabs button[data-tab="${tab}"]`);
 
+/** 畳んであるカードを id で開く。言語に依らないので、英語の画面でも使える。 */
+async function openCard(page, id) {
+  const panel = page.locator(`details.foldout#${id}`);
+  if (await panel.evaluate((node) => node.open)) return;
+  await panel.locator("summary").click();
+  await expect(panel).toHaveAttribute("open", "");
+}
+
 /** 「別のアカウントとして操作」で、名前に一致するアカウントに切り替える。 */
 async function actAs(page, name) {
   const picker = page.locator('select[aria-label="別のアカウントとして操作"]');
@@ -102,7 +110,7 @@ test("サンプルの見積もりで P80 が最可能値の合計を上回る", 
   // 葉タスクの最可能値の合計は 8+5+3+15+4+6 = 41 人日。
   await expect(page.locator(".card .status").last()).toContainText("41");
 
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   const p50 = await tile(page, "p50");
   const p80 = await tile(page, "p80");
   const p90 = await tile(page, "p90");
@@ -174,7 +182,7 @@ test("子タスクを追加すると親になり、削除は部分木ごと消�
 
 test("絞り込みは表示だけに効き、計算結果を変えない", async ({ page }) => {
   await open(page);
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   const before = await tile(page, "p80");
 
   await openTab(page, "tasks");
@@ -182,7 +190,7 @@ test("絞り込みは表示だけに効き、計算結果を変えない", async
   await expect(rows(page)).toHaveCount(4); // 実装フェーズ + 子 3 件
   await expect(page.locator(".filter-count")).toContainText("4");
 
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   expect(await tile(page, "p80")).toBe(before);
 
   await openTab(page, "tasks");
@@ -199,7 +207,7 @@ test("優先度で絞り込める", async ({ page }) => {
 
 test("使用チェックを外すと計算から除かれる", async ({ page }) => {
   await open(page);
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   const before = await tile(page, "mean");
 
   await openTab(page, "tasks");
@@ -209,19 +217,20 @@ test("使用チェックを外すと計算から除かれる", async ({ page }) 
   // 親を外すと配下もまとめて外れる。
   await expect(rows(page).nth(1)).toHaveAttribute("data-inactive", "true");
 
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   expect(await tile(page, "mean")).toBeLessThan(before);
 });
 
 test("モンテカルロと畳み込みの結果がほぼ一致する", async ({ page }) => {
   await open(page);
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   const monteCarlo = {
     p50: await tile(page, "p50"),
     p80: await tile(page, "p80"),
     p90: await tile(page, "p90"),
   };
 
+  await openCard(page, "settings");
   await recompute(page, () => page.selectOption("#engine", "1"));
   await expect(page.locator("#status")).toContainText(/畳み込み|convolution/i);
   for (const key of ["p50", "p80", "p90"]) {
@@ -234,7 +243,7 @@ test("モンテカルロと畳み込みの結果がほぼ一致する", async ({
 
 test("実績を入力すると見通しが更新される", async ({ page }) => {
   await open(page);
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   const before = await tile(page, "mean");
 
   // 実績を測るには、基準日が着手日より後にある必要がある。
@@ -253,7 +262,7 @@ test("実績を入力すると見通しが更新される", async ({ page }) => 
   });
 
   await expect(target.locator(".pill")).toHaveText("進行中");
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   // 進捗が浅いまま日数を消化しているので見通しは伸びる。
   expect(await tile(page, "mean")).toBeGreaterThan(before);
 });
@@ -432,7 +441,7 @@ test("担当者のいないタスクは未割当としてまとめられる", as
   await recompute(page, () =>
     page.locator("select.assignee").first().selectOption(""),
   );
-  await openTab(page, "schedule");
+  await openTab(page, "forecast");
   // 人員ごとの表に「未割当」が現れる。
   await expect(page.locator(".member-summary")).toContainText("未割当");
 });
@@ -454,32 +463,32 @@ test("祝日を使わない設定にすると稼働量が増える", async ({ pa
   expect(await total()).toBeGreaterThan(before);
 });
 
-test("スケジュールにタスクごとの完了予測と確率が出る", async ({ page }) => {
+test("見通しにタスクごとの完了予測と確率が出る", async ({ page }) => {
   await open(page);
-  await openTab(page, "schedule");
+  await openTab(page, "forecast");
   await expect(page.locator("#schedule-chart")).toBeVisible();
 
   // 全体を含めて 9 行。
-  const table = page.locator(".probe-table tbody tr");
+  const table = page.locator(".forecast-table tbody tr");
   await expect(table).toHaveCount(9);
   await expect(table.last()).toContainText("全体");
 
-  // 完了確率は 0〜100% の範囲で、後ろのタスクほど低い。
-  const values = await page.$$eval(".probe-table .bar-value", (cells) =>
-    cells.map((cell) => Number(cell.textContent.replace("%", ""))),
-  );
-  expect(Math.max(...values)).toBeLessThanOrEqual(100);
+  const probabilities = () =>
+    page.$$eval(".forecast-table td[data-prob]", (cells) =>
+      cells.map((cell) => Number(cell.dataset.prob)),
+    );
+
+  // 完了確率は 0〜1 の範囲で、後ろのタスクほど低い。
+  const values = await probabilities();
+  expect(Math.max(...values)).toBeLessThanOrEqual(1);
   expect(Math.min(...values)).toBeGreaterThanOrEqual(0);
   expect(values[0]).toBeGreaterThanOrEqual(values[values.length - 1]);
 
   // 日付を早めると確率は下がる。
-  await page.locator('.probe-row input[type="date"]').fill("2026-10-01");
-  const early = await page.$$eval(".probe-table .bar-value", (cells) =>
-    cells.map((cell) => Number(cell.textContent.replace("%", ""))),
-  );
-  expect(early[early.length - 1]).toBeLessThanOrEqual(
-    values[values.length - 1],
-  );
+  await page.locator('.probe-head input[type="date"]').fill("2026-10-01");
+  await expect
+    .poll(async () => (await probabilities())[values.length - 1])
+    .toBeLessThanOrEqual(values[values.length - 1]);
 });
 
 test("サマリバーが工数と完了日を常に示す", async ({ page }) => {
@@ -646,7 +655,7 @@ test("共有した相手は与えた権限の範囲でしか触れない", async
     rows(page).first().locator('input[type="text"]').first(),
   ).toBeDisabled();
   // 計算結果は見える (見るだけならできる)。
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   await expect(page.locator('.tile[data-key="p80"]')).toBeVisible();
 });
 
@@ -687,8 +696,8 @@ test("日英を切り替えても結果が保たれる", async ({ page }) => {
   await page.click('.lang-toggle button[data-lang="en"]');
   await expect(page.locator("h1")).toHaveText("Effort Estimator");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
-  await expect(page.locator('.tabs button[data-tab="schedule"]')).toHaveText(
-    "Schedule",
+  await expect(page.locator('.tabs button[data-tab="forecast"]')).toHaveText(
+    "Forecast",
   );
   await expect(rows(page)).toHaveCount(8);
 
@@ -700,14 +709,13 @@ test("未置換の i18n プレースホルダが画面に残らない", async ({
   await open(page);
   for (const language of ["en", "ja"]) {
     await page.click(`.lang-toggle button[data-lang="${language}"]`);
-    for (const tab of [
-      "tasks",
-      "members",
-      "calendar",
-      "distribution",
-      "schedule",
-    ]) {
+    for (const tab of ["tasks", "members", "calendar", "forecast"]) {
       await openTab(page, tab);
+      // 畳んである区画の中も見る。閉じたままだと差し込み漏れを見逃す。
+      if (tab === "forecast") {
+        await openCard(page, "sensitivity");
+        await openCard(page, "settings");
+      }
       const text = await page.locator("body").innerText();
       expect(text, `${language}/${tab} に差し込み漏れがある`).not.toMatch(
         /\{[a-z]+\}/,
@@ -738,7 +746,7 @@ test("入力中に再計算が走ってもフォーカスが飛ばない", async
 
 test("グラフが実際に描画され、キーボードでも読める", async ({ page }) => {
   await open(page);
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   const painted = await page.evaluate(() => {
     const canvas = document.querySelector("#chart");
     const ctx = canvas.getContext("2d");
@@ -755,6 +763,183 @@ test("グラフが実際に描画され、キーボードでも読める", async
     "data-visible",
     "true",
   );
+});
+
+test("見通しでは 2 つのグラフが両方とも描かれる", async ({ page }) => {
+  // 別々のタブだったものを 1 つにまとめたので、新しく壊れうるのはここ。
+  // 片方しか描き直さないと、もう片方は大きさ 0 のまま白く残る。
+  await open(page);
+  await openTab(page, "forecast");
+  const painted = (id) =>
+    page.evaluate((selector) => {
+      const canvas = document.querySelector(selector);
+      const { data } = canvas
+        .getContext("2d")
+        .getImageData(0, 0, canvas.width, canvas.height);
+      let opaque = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i] > 0) opaque++;
+      return opaque;
+    }, id);
+
+  expect(await painted("#chart"), "分布が真っ白").toBeGreaterThan(1000);
+  expect(await painted("#schedule-chart"), "帯グラフが真っ白").toBeGreaterThan(
+    1000,
+  );
+
+  // 区画の並びは「どこまで来たか → いつ終わるか → どれだけぶれるか」。
+  const order = await page.$$eval(".forecast [data-card]", (cards) =>
+    cards.map((card) => card.dataset.card),
+  );
+  expect(order.slice(0, 3)).toEqual(["progress", "schedule", "distribution"]);
+});
+
+test("進捗カードは summary バーと同じ進捗を出す", async ({ page }) => {
+  await open(page);
+  await openTab(page, "forecast");
+  const card = page.locator('[data-card="progress"]');
+  const ratio = Number(
+    await card.locator(".progress-meter").first().getAttribute("data-progress"),
+  );
+  const shown = Number((await summary(page, "progress")).replace("%", ""));
+  // 画面に出る進捗の出どころは 1 つ。食い違う 2 つを並べない。
+  expect(Math.abs(ratio * 100 - shown)).toBeLessThanOrEqual(1);
+
+  // 消化 + 残り = 全体。
+  const value = async (key) =>
+    Number(
+      await card.locator(`[data-key="${key}"]`).getAttribute("data-value"),
+    );
+  expect(
+    Math.abs(
+      (await value("spent")) +
+        (await value("remaining")) -
+        (await value("total")),
+    ),
+  ).toBeLessThan(0.2);
+});
+
+test("進捗 50% のタスクが 100% と出ない", async ({ page }) => {
+  // 以前は 0〜100 の進捗率を 0〜1 として読んでいたので、1% 以上が
+  // すべて完了扱いになっていた。
+  await open(page);
+  await openTab(page, "tasks");
+  await page.click('.segmented button:text("すべて")');
+  await recompute(page, () =>
+    rows(page).nth(1).locator('input[type="number"]').nth(3).fill("50"),
+  );
+
+  await openTab(page, "forecast");
+  const ratio = Number(
+    await page
+      .locator('.forecast-table tr[data-row]:not([data-row="overall"])')
+      .nth(1)
+      .locator("td[data-progress]")
+      .getAttribute("data-progress"),
+  );
+  expect(ratio).toBeGreaterThan(0.3);
+  expect(ratio).toBeLessThan(0.7);
+});
+
+test("行を押すとタスクの詳細が開き、そこで直すと予測が動く", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "forecast");
+  const before = await tile(page, "p80");
+
+  await page
+    .locator('.forecast-table button.row-open:text("API 実装")')
+    .click();
+  const detail = page.locator(".modal-card.detail-card");
+  await expect(detail).toBeVisible();
+  // 読むだけの見通しが出ている。
+  await expect(detail.locator('[data-key="remainingEstimate"]')).toHaveCount(1);
+  await expect(detail.locator(".sparkline")).toHaveCount(1);
+
+  // 最可能値を大きくすると、P80 タイルが動く。最大値も一緒に上げる
+  // (min <= likely <= max を崩すと計算そのものが止まってしまう)。
+  await detail.locator('input[data-focus$=":max"]').fill("40");
+  await recompute(page, () =>
+    detail.locator('input[data-focus$=":likely"]').fill("20"),
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".modal-card.detail-card")).toHaveCount(0);
+  expect(await tile(page, "p80")).toBeGreaterThan(before);
+});
+
+test("グループを押すと合計が読み取り専用で出て、子をたどれる", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "forecast");
+  await page
+    .locator('.forecast-table button.row-open:text("実装フェーズ")')
+    .click();
+  const detail = page.locator(".modal-card.detail-card");
+  await expect(detail).toBeVisible();
+
+  // 見積もりは配下の合計で、書き換えられない。
+  await expect(detail.locator('input[data-focus$=":likely"]')).toHaveCount(0);
+  await expect(detail.locator(".rollup").first()).toBeVisible();
+  await expect(detail.locator('[data-key="done"]')).toHaveCount(1);
+
+  // 子を押すと、窓がその子に移る。
+  await detail
+    .locator('[data-section="children"] button:text("API 実装")')
+    .click();
+  await expect(page.locator(".detail-heading")).toHaveText("API 実装");
+  await expect(
+    page.locator('.modal-card.detail-card input[data-focus$=":likely"]'),
+  ).toHaveCount(1);
+});
+
+test("タスク一覧からも同じ詳細が開く", async ({ page }) => {
+  await open(page);
+  await rows(page).nth(1).locator('button[title*="の詳細を開く"]').click();
+  await expect(page.locator(".modal-card.detail-card")).toBeVisible();
+});
+
+test("いま選んでいるタブが分かり、矢印でも移れる", async ({ page }) => {
+  await open(page);
+  const selected = page.locator('.tabs button[aria-selected="true"]');
+  await expect(selected).toHaveCount(1);
+  await expect(selected).toHaveAttribute("data-tab", "tasks");
+
+  // 選択中だけが tab キーの止まり先。あとは矢印で移る。
+  await expect(selected).toHaveAttribute("tabindex", "0");
+  await expect(page.locator('.tabs button[tabindex="0"]')).toHaveCount(1);
+
+  await selected.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    page.locator('.tabs button[aria-selected="true"]'),
+  ).toHaveAttribute("data-tab", "members");
+  await page.keyboard.press("End");
+  await expect(
+    page.locator('.tabs button[aria-selected="true"]'),
+  ).toHaveAttribute("data-tab", "forecast");
+  await page.keyboard.press("Home");
+  await expect(
+    page.locator('.tabs button[aria-selected="true"]'),
+  ).toHaveAttribute("data-tab", "projects");
+
+  // 色だけに頼らない。選択中は面が変わり、上辺に帯が付く。
+  const marks = await page.$$eval(".tabs button", (buttons) =>
+    buttons.map((button) => {
+      const style = getComputedStyle(button);
+      return {
+        selected: button.getAttribute("aria-selected") === "true",
+        background: style.backgroundColor,
+        borderTop: style.borderTopColor,
+        weight: style.fontWeight,
+      };
+    }),
+  );
+  const on = marks.find((mark) => mark.selected);
+  const off = marks.find((mark) => !mark.selected);
+  expect(on.background).not.toBe(off.background);
+  expect(on.borderTop).not.toBe(off.borderTop);
+  expect(Number(on.weight)).toBeGreaterThan(Number(off.weight));
 });
 
 /* ===== プロジェクト一覧 ===== */
@@ -1204,7 +1389,7 @@ test("予定が多い日は畳まれ、開くと全部出る", async ({ page }) 
 
 test("進捗率を入れると、その分だけ完了が早まる", async ({ page }) => {
   await open(page);
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   const meanBefore = await tile(page, "mean");
 
   await openTab(page, "tasks");
@@ -1235,7 +1420,7 @@ test("進捗率を入れると、その分だけ完了が早まる", async ({ pa
   );
 
   // 総工数の中心は動かない。進んだだけで見積もりが縮むわけではない。
-  await openTab(page, "distribution");
+  await openTab(page, "forecast");
   const meanAfter = await tile(page, "mean");
   expect(Math.abs(meanAfter - meanBefore)).toBeLessThan(meanBefore * 0.02);
 });

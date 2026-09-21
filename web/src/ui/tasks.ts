@@ -15,20 +15,22 @@ import {
   type TreeRow,
 } from "../model/tree.ts";
 import { memberLabel, UNASSIGNED_ID } from "../model/members.ts";
-import { PRIORITIES, type ColumnMode, type Priority, type Task, type TaskState } from "../types.ts";
-import {
-  button,
-  card,
-  checkbox,
-  dateInput,
-  h,
-  headerRow,
-  iconButton,
-  numberInput,
-  select,
-  textInput,
-} from "./dom.ts";
+import type { ColumnMode, Priority, TaskState } from "../types.ts";
+import { button, card, checkbox, h, headerRow, iconButton, select } from "./dom.ts";
 import { commentButton } from "./comments.ts";
+import {
+  assigneeField,
+  endField,
+  estimateField,
+  groupField,
+  nameField,
+  priorityChoices,
+  priorityField,
+  progressField,
+  startField,
+  taskWriter,
+  type FieldOptions,
+} from "./taskFields.ts";
 
 const STATE_ORDER: readonly TaskState[] = ["notStarted", "inProgress", "done"];
 
@@ -87,10 +89,6 @@ function visibleRows(state: AppState): TreeRow[] {
     }
   }
   return state.rows.filter((row) => keep.has(row.task.id));
-}
-
-function priorityChoices(): { value: Priority; label: string }[] {
-  return PRIORITIES.map((value) => ({ value, label: t(`priority.${value}`) }));
 }
 
 function columnsFor(mode: ColumnMode): { estimate: boolean; actual: boolean } {
@@ -209,12 +207,10 @@ function renderRow(
   const columns = columnsFor(state.columnMode);
   const label = task.name.trim() === "" ? t("tasks.untitled") : task.name;
   const index = row.index;
-  const setTask = (change: Partial<Task>): void => {
-    actions.mutate((document) => {
-      const target = document.tasks[index];
-      if (target) Object.assign(target, change);
-    });
-  };
+  // 書き込み口も入力欄も詳細の窓と共用する。2 か所に同じ丸めを書くと、
+  // 片方だけ直したときに静かにずれる。
+  const setTask = taskWriter(actions, task.id);
+  const fields: FieldOptions = { focusPrefix: task.id, label };
 
   const cells: HTMLElement[] = [];
 
@@ -238,49 +234,15 @@ function renderRow(
       h("div", { class: "name-inner" }, [
         h("span", { class: "indent", style: { width: `${String(row.depth * 16)}px` } }),
         h("span", { class: "twisty", text: row.hasChildren ? "▾" : "" }),
-        textInput(
-          task.name,
-          (value) => {
-            setTask({ name: value });
-          },
-          {
-            dataset: { focus: `${task.id}:name` },
-            attrs: { placeholder: t("col.name"), "aria-label": t("col.name") },
-          },
-        ),
+        nameField(task, setTask, fields),
       ]),
     ]),
   );
 
   if (columns.estimate) {
     cells.push(
-      h("td", {}, [
-        select(
-          task.priority,
-          priorityChoices(),
-          (value) => {
-            setTask({ priority: value });
-          },
-          {
-            class: `priority priority-${task.priority}`,
-            dataset: { focus: `${task.id}:priority` },
-            attrs: { "aria-label": t("col.priority") },
-          },
-        ),
-      ]),
-      h("td", {}, [
-        textInput(
-          task.group,
-          (value) => {
-            setTask({ group: value });
-          },
-          {
-            class: "group",
-            dataset: { focus: `${task.id}:group` },
-            attrs: { "aria-label": t("col.group"), list: "group-options" },
-          },
-        ),
-      ]),
+      h("td", {}, [priorityField(task, setTask, fields)]),
+      h("td", {}, [groupField(task, setTask, fields)]),
     );
 
     for (const key of ["min", "likely", "max"] as const) {
@@ -292,21 +254,10 @@ function renderRow(
                 text: formatNumber(row.rollup[key], lang()),
                 title: t("tasks.rollupHint"),
               })
-            : numberInput(
-                task[key],
-                (value) => {
-                  setTask({ [key]: value });
-                },
-                {
-                  dataset: { focus: `${task.id}:${key}` },
-                  attrs: {
-                    min: 0,
-                    step: 0.5,
-                    "aria-label": `${label} — ${t(`col.${key}`)}`,
-                    "aria-invalid": row.active && !row.valid,
-                  },
-                },
-              ),
+            : estimateField(task, key, setTask, {
+                ...fields,
+                invalid: row.active && !row.valid,
+              }),
         ]),
       );
     }
@@ -319,49 +270,17 @@ function renderRow(
       h("td", {}, [
         row.hasChildren
           ? h("span", { class: "muted", text: "—" })
-          : dateInput(
-              task.startDate,
-              (value) => {
-                setTask({ startDate: value });
-              },
-              {
-                dataset: { focus: `${task.id}:start` },
-                attrs: { "aria-label": `${label} — ${t("col.start")}` },
-              },
-            ),
+          : startField(task, setTask, fields),
       ]),
       h("td", { class: "num" }, [
         row.hasChildren
           ? h("span", { class: "muted", text: "—" })
-          : numberInput(
-              task.progress,
-              (value) => {
-                setTask({ progress: Math.min(100, Math.max(0, Number(value) || 0)) });
-              },
-              {
-                dataset: { focus: `${task.id}:progress` },
-                attrs: {
-                  min: 0,
-                  max: 100,
-                  step: 5,
-                  "aria-label": `${label} — ${t("col.progress")}`,
-                },
-              },
-            ),
+          : progressField(task, setTask, fields),
       ]),
       h("td", {}, [
         row.hasChildren
           ? h("span", { class: "muted", text: "—" })
-          : dateInput(
-              task.endDate,
-              (value) => {
-                setTask({ endDate: value });
-              },
-              {
-                dataset: { focus: `${task.id}:end` },
-                attrs: { "aria-label": `${label} — ${t("col.end")}` },
-              },
-            ),
+          : endField(task, setTask, fields),
       ]),
       h("td", { class: "num" }, [
         h("span", {
@@ -379,24 +298,7 @@ function renderRow(
     h("td", {}, [
       row.hasChildren
         ? h("span", { class: "muted", text: "—" })
-        : select(
-            task.assigneeId ?? "",
-            [
-              { value: "", label: t("members.unassigned") },
-              ...state.document.calendar.members.map((member, memberIndex) => ({
-                value: member.id,
-                label: memberLabel(member, memberIndex),
-              })),
-            ],
-            (value) => {
-              setTask({ assigneeId: value === "" ? null : value });
-            },
-            {
-              class: "assignee",
-              dataset: { focus: `${task.id}:assignee` },
-              attrs: { "aria-label": `${label} — ${t("col.assignee")}` },
-            },
-          ),
+        : assigneeField(state, task, setTask, fields),
     ]),
   );
 
@@ -464,6 +366,13 @@ function renderRow(
         });
       }),
       // 並べ替えや階層とは別の話なので、削除の手前にまとめて置く。
+      // 「…」は残りの見積もり・寄与・確率の線を出す窓。16 列目を増やさずに
+      // 見せられるようにする。
+      iconButton("…", t("detail.open", { name: label }), () => {
+        actions.patch((s) => {
+          s.taskDetailId = task.id;
+        });
+      }),
       commentButton(state, actions, row.task.id, t("comments.taskButton")),
       iconButton("×", t("tasks.removeRow", { name: label }), () => {
         // 配下ごと消えるときだけ問う。1 行ずつ消していく作業で毎回問われるのは

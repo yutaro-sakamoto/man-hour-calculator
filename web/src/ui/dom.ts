@@ -36,6 +36,13 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   if (options.html !== undefined) element.innerHTML = options.html;
 
   for (const [name, value] of Object.entries(options.attrs ?? {})) {
+    // ARIA の真偽は文字列の "true" / "false"。`disabled` のような本物の
+    // 真偽属性と違い、**付いているだけでは true にならず**、`false` を
+    // 省くと「値なし」として読み上げに伝わらない。
+    if (typeof value === "boolean" && name.startsWith("aria-")) {
+      element.setAttribute(name, String(value));
+      continue;
+    }
     if (value === null || value === false) continue;
     element.setAttribute(name, value === true ? "" : String(value));
   }
@@ -232,7 +239,12 @@ export function foldout(
       attrs: { open: options.open },
       on: {
         toggle: (event) => {
-          options.onToggle((event.target as HTMLDetailsElement).open);
+          const open = (event.target as HTMLDetailsElement).open;
+          // 自分で書き戻した `open` の通知は捨てる。`<details open>` を組み立て
+          // 直すたびにブラウザは `toggle` を投げるので、素直に受けると
+          // 「開いた → 状態を変える → 描き直す → また開いた通知」で回り続ける。
+          if (open === options.open) return;
+          options.onToggle(open);
         },
       },
     },

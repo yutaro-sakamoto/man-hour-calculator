@@ -10,12 +10,9 @@
 import { P50_INDEX, P80_INDEX } from "../abi.ts";
 import { dayFromIso } from "../format.ts";
 import type { ProjectDocument, ProjectStatus, ProjectSummary } from "../api/types.ts";
+import { progressOverall } from "./progress.ts";
 import type { ScheduleModel } from "./schedule.ts";
-import type { TreeRow } from "./tree.ts";
 import type { ComputeResult } from "../wasm.ts";
-
-/** 完了を表す状態コード (`crates/core` の `TaskState`)。 */
-const STATE_DONE = 2;
 
 /**
  * 計算結果から控えを作る。
@@ -26,7 +23,6 @@ const STATE_DONE = 2;
  */
 export function buildStatus(
   document: ProjectDocument,
-  rows: readonly TreeRow[],
   result: ComputeResult,
   schedule: ScheduleModel | null,
   computedAt: string,
@@ -34,18 +30,9 @@ export function buildStatus(
   const absolute = (day: number | null): number | null =>
     day === null || schedule === null ? null : schedule.startDay + day;
 
-  // 進捗は「予定の大きさで重みを付けた平均」。件数で数えると、
-  // 小さなタスクをたくさん終えただけで進んだように見えてしまう。
-  let weight = 0;
-  let weighted = 0;
-  let done = 0;
-  for (const row of rows) {
-    if (row.leafIndex === null) continue;
-    const size = Number(row.task.likely) || 0;
-    weight += size;
-    weighted += size * clamp01(row.task.progress);
-    if (result.states[row.leafIndex] === STATE_DONE) done += 1;
-  }
+  // 進捗の定義は 1 か所 (`progress.ts`)。画面に出るものと、サーバが
+  // 遅延を判定するのに使うものが食い違ってはいけない。
+  const progress = progressOverall(result);
 
   return {
     computedAt,
@@ -55,15 +42,10 @@ export function buildStatus(
     finishP50: absolute(schedule?.overallMarks.p50 ?? null),
     finishP80: absolute(schedule?.overallMarks.p80 ?? null),
     spent: result.totalSpent,
-    progress: weight > 0 ? weighted / weight : 0,
+    progress: progress.ratio,
     taskCount: document.tasks.length,
-    doneCount: done,
+    doneCount: progress.doneCount,
   };
-}
-
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
 }
 
 /**
