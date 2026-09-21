@@ -289,6 +289,30 @@ jobs:
       - name: Verify
         run: cargo kani --workspace
 
+  # 設計そのものを検査する。単体テストは「この操作でこうなる」を 1 本ずつ
+  # 確かめるが、所有者の不変条件は**操作の順序**で破れる。TLC は到達しうる
+  # 状態を全部たどるので、破れ方を思いつく必要がない。
+  tla:
+    name: TLA+ — the access design
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # tla2tools.jar は版を固定して取りに行く。
+      - name: Cache tla2tools
+        uses: actions/cache@v4
+        with:
+          path: spec/.tla
+          key: tla2tools-v1.7.4
+
+      - name: Check
+        run: ./spec/check.sh
+
   # 「どこを通っていないか分からない」を潰す。閾値は全体で 1 つだけ置き、
   # 内訳はログに出す。crates/xtask と crates/wasm (ビルド道具と FFI) は
   # 数字を押し下げるが、除くと「除いたところが腐る」ので入れたまま。
