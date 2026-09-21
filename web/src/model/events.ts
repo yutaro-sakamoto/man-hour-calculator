@@ -10,12 +10,26 @@
 import { dayFromIso } from "../format.ts";
 import type { CalendarEventItem } from "../types.ts";
 
+/** 休みにした回の初日の集合。読めない日付は無視する。 */
+function excludedDays(event: CalendarEventItem): Set<number> {
+  const out = new Set<number>();
+  for (const iso of event.excludedDates) {
+    const day = dayFromIso(iso);
+    if (day !== null) out.add(day);
+  }
+  return out;
+}
+
 /** その日にこの予定が発生するか。`day` は 1970-01-01 からの日数。 */
 export function occursOn(event: CalendarEventItem, day: number): boolean {
   const start = dayFromIso(event.startDate);
   const end = dayFromIso(event.endDate);
   if (start === null || end === null || day < start) return false;
-  if (event.repeatWeeks === 0) return day <= end;
+
+  const skipped = excludedDays(event);
+  if (event.repeatWeeks === 0) {
+    return day <= end && !skipped.has(start);
+  }
 
   const period = 7 * event.repeatWeeks;
   const span = end - start;
@@ -27,6 +41,8 @@ export function occursOn(event: CalendarEventItem, day: number): boolean {
     if (index < 0) continue;
     const from = start + period * index;
     if (until !== null && from > until) continue;
+    // 休みにするのは回の初日で指定する。その回はまるごと消える。
+    if (skipped.has(from)) continue;
     if (day >= from && day <= from + span) return true;
   }
   return false;
@@ -43,6 +59,12 @@ export interface Occurrence {
   starts: boolean;
   /** その日が、この回の最終日か。 */
   ends: boolean;
+  /**
+   * この回の初日 (1970-01-01 からの日数)。
+   *
+   * 「この回だけ休みにする」はこの日で指定する。
+   */
+  firstDay: number;
 }
 
 /** 分に直す。読めなければ `null`。 */
@@ -75,6 +97,7 @@ export function occurrencesOn(events: readonly CalendarEventItem[], day: number)
       allDay: event.startTime === null || event.endTime === null,
       starts: offset === 0,
       ends: offset === span,
+      firstDay: day - offset,
     });
   }
 

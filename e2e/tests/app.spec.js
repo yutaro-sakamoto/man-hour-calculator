@@ -67,6 +67,14 @@ async function openEvent(page, name) {
   await expect(page.locator(".modal-card")).toBeVisible();
 }
 
+/** その日の升にある予定を押して、編集の窓を開く。 */
+async function openEventOn(page, date, name) {
+  await page
+    .locator(`.day[data-day="${date}"] .event-chip:has-text("${name}")`)
+    .click();
+  await expect(page.locator(".modal-card")).toBeVisible();
+}
+
 /** 編集の窓を閉じる。開いたままだと後ろの操作が届かない。 */
 async function closeEditor(page) {
   await page.locator('.modal-card button[title="閉じる"]').click();
@@ -156,7 +164,8 @@ test("子タスクを追加すると親になり、削除は部分木ごと消�
   await expect(rows(page)).toHaveCount(9);
   await expect(rows(page).nth(1)).toHaveAttribute("data-parent", "true");
 
-  // 「設計フェーズ」を消すと配下 3 件ごと消える。
+  // 「設計フェーズ」を消すと配下 3 件ごと消える。部分木なので問い返される。
+  page.once("dialog", (dialog) => dialog.accept());
   await recompute(page, () =>
     rows(page).first().locator('button[title*="を削除"]').click(),
   );
@@ -1053,13 +1062,81 @@ test("予定を押すと編集でき、消すと升からも消える", async ({
   ).toContainText("朝会");
 
   await openEvent(page, "朝会");
+  page.once("dialog", (dialog) => dialog.accept());
   await recompute(page, () =>
-    page.click('.modal-card button:text("この予定を削除")'),
+    page.click('.modal-card button:text("すべての回を削除")'),
   );
   await expect(page.locator(".modal-card")).toHaveCount(0);
   await expect(
     page.locator('.day[data-day="2026-09-21"] .event-chip'),
   ).toHaveCount(0);
+});
+
+test("繰り返す予定は、その回だけ休みにでき、あとから戻せる", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "calendar");
+  await page.selectOption('select[aria-label="表示する人員"]', "0");
+  const capacityOn = async (date) => {
+    const label = await page
+      .locator(`.day[aria-label*="${date}"]`)
+      .getAttribute("aria-label");
+    return Number(label.match(/: ([\d.]+)/)[1]);
+  };
+  const before = await capacityOn("2026-09-28");
+  // 同じ月曜の別の回。休みにした回の巻き添えになっていないかを見る。
+  const beforeOther = await capacityOn("2026-09-21");
+
+  // 9/28 の升から開いて、その回だけ休みにする。
+  await openEventOn(page, "2026-09-28", "全体定例");
+  await recompute(page, () =>
+    page.click('.modal-card button[data-action="skip-occurrence"]'),
+  );
+  await expect(page.locator(".modal-card")).toHaveCount(0);
+
+  // 休みにした回だけが升から消え、前後の回は残る。
+  await expect(
+    page.locator('.day[data-day="2026-09-28"] .event-chip'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator(
+      '.day[data-day="2026-09-21"] .event-chip:has-text("全体定例")',
+    ),
+  ).toHaveCount(1);
+  // その日の稼働はまるごと戻る。
+  expect(await capacityOn("2026-09-28")).toBeGreaterThan(before);
+  // 休みにしていない回の稼働は動かない。
+  expect(await capacityOn("2026-09-21")).toBeCloseTo(beforeOther, 6);
+
+  // 残っている回から窓を開くと、休みにした日が一覧に出ていて戻せる。
+  await openEventOn(page, "2026-09-21", "全体定例");
+  await expect(
+    page.locator('.modal-card .skipped-list [data-skipped="2026-09-28"]'),
+  ).toHaveCount(1);
+  await recompute(page, () =>
+    page.click('.modal-card [data-skipped="2026-09-28"] button'),
+  );
+  await closeEditor(page);
+  await expect(
+    page.locator(
+      '.day[data-day="2026-09-28"] .event-chip:has-text("全体定例")',
+    ),
+  ).toHaveCount(1);
+  expect(await capacityOn("2026-09-28")).toBeCloseTo(before, 6);
+});
+
+test("繰り返さない予定には、休みにする道は出ない", async ({ page }) => {
+  await open(page);
+  await openTab(page, "calendar");
+  await page.locator('.day[data-day="2026-09-29"] .day-add').click();
+  await page.locator('.modal-card input[aria-label="内容"]').fill("面談");
+  await expect(
+    page.locator('.modal-card button[data-action="skip-occurrence"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('.modal-card button[data-action="remove-event"]'),
+  ).toHaveText("この予定を削除");
 });
 
 test("編集の窓は背景と Esc でも閉じる", async ({ page }) => {

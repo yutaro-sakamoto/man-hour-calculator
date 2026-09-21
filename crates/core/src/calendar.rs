@@ -35,7 +35,10 @@ pub const MAX_HORIZON_DAYS: usize = 20_000;
 ///
 /// `repeat_weeks` が 1 以上なら、その週数ごとに同じ曜日・同じ時刻で繰り返す
 /// (1 = 毎週、2 = 隔週)。`until_day` まで続き、`None` なら期間いっぱい。
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// `excluded_days` は**休みにした回の初日**。繰り返しのうち 1 回だけを外す
+/// ために使う。回の初日で指定するので、複数日にまたがる回はまるごと消える。
+#[derive(Debug, Clone, PartialEq)]
 pub struct CalendarEvent {
     pub start_day: i64,
     pub end_day: i64,
@@ -45,6 +48,8 @@ pub struct CalendarEvent {
     pub end_minute: Option<i32>,
     pub repeat_weeks: u32,
     pub until_day: Option<i64>,
+    /// 休みにした回の初日。**昇順**であること (二分探索で引く)。
+    pub excluded_days: Vec<i64>,
 }
 
 impl CalendarEvent {
@@ -57,7 +62,13 @@ impl CalendarEvent {
             end_minute: None,
             repeat_weeks: 0,
             until_day: None,
+            excluded_days: Vec::new(),
         }
+    }
+
+    /// その回が休みにされているか。
+    fn skipped(&self, first_day: i64) -> bool {
+        self.excluded_days.binary_search(&first_day).is_ok()
     }
 
     /// その日にこの予定が発生するか。
@@ -66,7 +77,7 @@ impl CalendarEvent {
             return false;
         }
         if self.repeat_weeks == 0 {
-            return day <= self.end_day;
+            return day <= self.end_day && !self.skipped(self.start_day);
         }
 
         let period = 7 * self.repeat_weeks as i64;
@@ -83,6 +94,10 @@ impl CalendarEvent {
                 if from > until {
                     continue;
                 }
+            }
+            // 休みにするのは回の初日で指定する。その回はまるごと消える。
+            if self.skipped(from) {
+                continue;
             }
             if day >= from && day <= from + span {
                 return true;
@@ -361,6 +376,7 @@ mod tests {
                 end_minute: Some(10 * 60 + 45),
                 repeat_weeks: 0,
                 until_day: None,
+                excluded_days: Vec::new(),
             }],
         );
         assert!((cal.capacity()[0] - (480.0 - 45.0) / 480.0).abs() < 1e-12);
@@ -379,6 +395,7 @@ mod tests {
                 end_minute: Some(9 * 60),
                 repeat_weeks: 0,
                 until_day: None,
+                excluded_days: Vec::new(),
             }],
         );
         assert_eq!(cal.capacity()[0], 1.0, "稼働時間を 1 分も削らない");
@@ -397,6 +414,7 @@ mod tests {
                 end_minute: Some(19 * 60),
                 repeat_weeks: 0,
                 until_day: None,
+                excluded_days: Vec::new(),
             }],
         );
         assert!((cal.capacity()[0] - 420.0 / 480.0).abs() < 1e-12);
@@ -412,6 +430,7 @@ mod tests {
                 end_minute: Some(11 * 60),
                 repeat_weeks: 0,
                 until_day: None,
+                excluded_days: Vec::new(),
             },
             CalendarEvent {
                 start_day: day(0),
@@ -420,6 +439,7 @@ mod tests {
                 end_minute: Some(11 * 60 + 30),
                 repeat_weeks: 0,
                 until_day: None,
+                excluded_days: Vec::new(),
             },
         ];
         let cal = build(2, &overlapping);
@@ -443,6 +463,7 @@ mod tests {
             end_minute: Some(11 * 60),
             repeat_weeks: 1,
             until_day: None,
+            excluded_days: Vec::new(),
         };
         let cal = build(21, &[weekly]);
         for week in 0..3 {
@@ -468,6 +489,7 @@ mod tests {
             end_minute: Some(14 * 60),
             repeat_weeks: 2,
             until_day: None,
+            excluded_days: Vec::new(),
         };
         let cal = build(28, &[biweekly]);
         for week in 0..4 {
@@ -490,6 +512,7 @@ mod tests {
             end_minute: Some(11 * 60),
             repeat_weeks: 1,
             until_day: Some(day(8)),
+            excluded_days: Vec::new(),
         };
         let cal = build(28, &[weekly]);
         assert!(cal.capacity()[0] < 1.0, "1 回目");
@@ -507,12 +530,80 @@ mod tests {
             end_minute: None,
             repeat_weeks: 2,
             until_day: None,
+            excluded_days: Vec::new(),
         };
         let cal = build(28, &[block]);
         assert_eq!(&cal.capacity()[0..3], &[0.0; 3], "1 回目");
         assert_eq!(&cal.capacity()[3..5], &[1.0; 2], "木金は通常どおり");
         assert_eq!(&cal.capacity()[7..10], &[1.0; 3], "翌週は無い");
         assert_eq!(&cal.capacity()[14..17], &[0.0; 3], "2 回目");
+    }
+
+    #[test]
+    fn one_occurrence_can_be_skipped() {
+        // 毎週の定例のうち、2 回目だけを休みにする。
+        let weekly = CalendarEvent {
+            start_day: day(0),
+            end_day: day(0),
+            start_minute: None,
+            end_minute: None,
+            repeat_weeks: 1,
+            until_day: None,
+            excluded_days: vec![day(7)],
+        };
+        let cal = build(28, &[weekly]);
+        assert_eq!(cal.capacity()[0], 0.0, "1 回目は残る");
+        assert_eq!(cal.capacity()[7], 1.0, "休みにした回");
+        assert_eq!(cal.capacity()[14], 0.0, "3 回目も残る");
+    }
+
+    #[test]
+    fn skipping_is_keyed_on_the_first_day_of_the_occurrence() {
+        // 月〜水の合宿。初日で休みにすると、その回はまるごと消える。
+        let block = CalendarEvent {
+            start_day: day(0),
+            end_day: day(2),
+            start_minute: None,
+            end_minute: None,
+            repeat_weeks: 1,
+            until_day: None,
+            excluded_days: vec![day(7)],
+        };
+        let cal = build(28, &[block]);
+        assert_eq!(&cal.capacity()[0..3], &[0.0; 3], "1 回目は残る");
+        assert_eq!(&cal.capacity()[7..10], &[1.0; 3], "2 回目はまるごと消える");
+        assert_eq!(&cal.capacity()[14..17], &[0.0; 3], "3 回目は残る");
+    }
+
+    #[test]
+    fn a_day_in_the_middle_does_not_skip_the_occurrence() {
+        // 初日以外を渡しても効かない。回を消すか残すかの 2 択にしてある。
+        let block = CalendarEvent {
+            start_day: day(0),
+            end_day: day(2),
+            start_minute: None,
+            end_minute: None,
+            repeat_weeks: 1,
+            until_day: None,
+            excluded_days: vec![day(8)],
+        };
+        let cal = build(28, &[block]);
+        assert_eq!(&cal.capacity()[7..10], &[0.0; 3], "2 回目は残ったまま");
+    }
+
+    #[test]
+    fn a_one_off_event_can_be_skipped_too() {
+        let once = CalendarEvent {
+            start_day: day(0),
+            end_day: day(0),
+            start_minute: None,
+            end_minute: None,
+            repeat_weeks: 0,
+            until_day: None,
+            excluded_days: vec![day(0)],
+        };
+        let cal = build(7, &[once]);
+        assert_eq!(cal.capacity()[0], 1.0, "休みにしたので稼働は削られない");
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::stats::{self, PCT_LEVELS};
 /// リクエストが正しいバッファであることを確認するための印。
 pub const MAGIC: f64 = 20_250_920.0;
 /// ABI のバージョン。レイアウトを変えたら上げる。
-pub const VERSION: f64 = 3.0;
+pub const VERSION: f64 = 4.0;
 
 /// リクエストのヘッダ長 (f64 の個数)。
 pub const REQ_HEADER: usize = 32;
@@ -37,11 +37,14 @@ pub const REQ_MEMBER_STRIDE: usize = 15;
 pub const REQ_EVENT_STRIDE: usize = 6;
 /// 予定と人員の割当 1 件が占める要素数。
 pub const REQ_EVENT_MEMBER_STRIDE: usize = 2;
+/// 休みにした回 1 件が占める要素数 (`[予定の添字, 回の初日]`)。
+pub const REQ_EVENT_EXCEPTION_STRIDE: usize = 2;
 
 pub const MAX_TASKS: usize = 500;
 pub const MAX_MEMBERS: usize = 30;
 pub const MAX_EVENTS: usize = 1_000;
 pub const MAX_EVENT_MEMBERS: usize = 10_000;
+pub const MAX_EVENT_EXCEPTIONS: usize = 10_000;
 pub const MAX_FORCED_WORKDAYS: usize = 2_000;
 pub const MAX_ITERATIONS: usize = 2_000_000;
 pub const MIN_BINS: usize = 4;
@@ -168,7 +171,17 @@ pub struct Request {
     pub members: Vec<MemberSchedule>,
     pub events: Vec<CalendarEvent>,
     pub event_members: Vec<EventMember>,
+    /// 休みにした回。`(予定の添字, 回の初日)`。
+    pub event_exceptions: Vec<EventException>,
     pub forced_workdays: Vec<i64>,
+}
+
+/// 繰り返しのうち、休みにした 1 回。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventException {
+    pub event: usize,
+    /// その回の初日 (1970-01-01 からの日数)。
+    pub day: i64,
 }
 
 impl Default for Request {
@@ -194,6 +207,7 @@ impl Default for Request {
             members: vec![MemberSchedule::default()],
             events: Vec::new(),
             event_members: Vec::new(),
+            event_exceptions: Vec::new(),
             forced_workdays: Vec::new(),
         }
     }
@@ -260,6 +274,7 @@ impl Request {
         out[18] = self.event_members.len() as f64;
         out[19] = f64::from(self.use_japanese_holidays);
         out[20] = self.today_day as f64;
+        out[21] = self.event_exceptions.len() as f64;
 
         for task in &self.tasks {
             out.extend_from_slice(&[
@@ -290,6 +305,9 @@ impl Request {
         for link in &self.event_members {
             out.extend_from_slice(&[link.event as f64, link.member as f64]);
         }
+        for skip in &self.event_exceptions {
+            out.extend_from_slice(&[skip.event as f64, skip.day as f64]);
+        }
         for &day in &self.forced_workdays {
             out.push(day as f64);
         }
@@ -315,6 +333,7 @@ impl Request {
         let n_forced = as_index(buf[13]).ok_or((Status::BadCalendar, buf[13]))?;
         let n_members = as_index(buf[16]).ok_or((Status::BadMembers, buf[16]))?;
         let n_event_members = as_index(buf[18]).ok_or((Status::BadCalendar, buf[18]))?;
+        let n_exceptions = as_index(buf[21]).ok_or((Status::BadCalendar, buf[21]))?;
 
         if n_tasks == 0 || n_tasks > MAX_TASKS {
             return Err((Status::BadTaskCount, n_tasks as f64));
@@ -325,6 +344,7 @@ impl Request {
         if n_events > MAX_EVENTS
             || n_forced > MAX_FORCED_WORKDAYS
             || n_event_members > MAX_EVENT_MEMBERS
+            || n_exceptions > MAX_EVENT_EXCEPTIONS
         {
             return Err((Status::BadCalendar, 0.0));
         }
@@ -333,7 +353,8 @@ impl Request {
         let members_at = tasks_at + n_tasks * REQ_TASK_STRIDE;
         let events_at = members_at + n_members * REQ_MEMBER_STRIDE;
         let links_at = events_at + n_events * REQ_EVENT_STRIDE;
-        let forced_at = links_at + n_event_members * REQ_EVENT_MEMBER_STRIDE;
+        let skips_at = links_at + n_event_members * REQ_EVENT_MEMBER_STRIDE;
+        let forced_at = skips_at + n_exceptions * REQ_EVENT_EXCEPTION_STRIDE;
         if buf.len() < forced_at + n_forced {
             return Err((Status::BadTaskCount, n_tasks as f64));
         }
@@ -413,8 +434,27 @@ impl Request {
             members.push(MemberSchedule::with_break(start, end, break_minutes));
         }
 
+        // 休みにした回を先に集める。予定ごとに昇順で持たせたいので、
+        // 予定を組み立てるより前に読む。
+        let mut event_exceptions = Vec::with_capacity(n_exceptions);
+        let mut skipped_per_event: Vec<Vec<i64>> = vec![Vec::new(); n_events];
+        for i in 0..n_exceptions {
+            let at = skips_at + i * REQ_EVENT_EXCEPTION_STRIDE;
+            let (Some(event), Some(day)) = (as_index(buf[at]), f64_to_day(buf[at + 1])) else {
+                continue;
+            };
+            if event < n_events {
+                event_exceptions.push(EventException { event, day });
+                skipped_per_event[event].push(day);
+            }
+        }
+        for list in &mut skipped_per_event {
+            list.sort_unstable();
+            list.dedup();
+        }
+
         let mut events = Vec::with_capacity(n_events);
-        for i in 0..n_events {
+        for (i, skipped) in skipped_per_event.into_iter().enumerate() {
             let at = events_at + i * REQ_EVENT_STRIDE;
             let (Some(from), Some(to)) = (f64_to_day(buf[at]), f64_to_day(buf[at + 1])) else {
                 return Err((Status::BadCalendar, i as f64));
@@ -426,6 +466,7 @@ impl Request {
                 end_minute: f64_to_minute(buf[at + 3]),
                 repeat_weeks: as_index(buf[at + 4]).unwrap_or(0).min(52) as u32,
                 until_day: f64_to_day(buf[at + 5]),
+                excluded_days: skipped,
             });
         }
 
@@ -465,6 +506,7 @@ impl Request {
             members,
             events,
             event_members,
+            event_exceptions,
             forced_workdays,
         })
     }
@@ -477,7 +519,7 @@ impl Request {
             if let (Some(event), Some(list)) =
                 (self.events.get(link.event), per_member.get_mut(link.member))
             {
-                list.push(*event);
+                list.push(event.clone());
             }
         }
         per_member
@@ -874,6 +916,60 @@ mod tests {
     }
 
     #[test]
+    fn a_skipped_occurrence_survives_the_round_trip() {
+        // 休みにした回は `[予定の添字, 回の初日]` の組で運ばれ、
+        // 読み取り側で予定ごとの昇順の一覧に組み直される。
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.events = vec![CalendarEvent {
+            start_day: monday(),
+            end_day: monday(),
+            start_minute: None,
+            end_minute: None,
+            repeat_weeks: 1,
+            until_day: None,
+            excluded_days: Vec::new(),
+        }];
+        // わざと降順・重複つきで渡す。
+        r.event_exceptions = vec![
+            EventException {
+                event: 0,
+                day: monday() + 14,
+            },
+            EventException {
+                event: 0,
+                day: monday() + 7,
+            },
+            EventException {
+                event: 0,
+                day: monday() + 7,
+            },
+        ];
+
+        let back = Request::decode(&r.encode()).expect("読める");
+        assert_eq!(
+            back.events[0].excluded_days,
+            vec![monday() + 7, monday() + 14],
+            "昇順に整えて重複を畳む (二分探索で引くため)"
+        );
+    }
+
+    #[test]
+    fn a_skip_pointing_at_no_event_is_dropped() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.events = vec![CalendarEvent::all_day(monday(), monday())];
+        r.event_exceptions = vec![EventException {
+            event: 9,
+            day: monday(),
+        }];
+
+        let back = Request::decode(&r.encode()).expect("読める");
+        assert!(back.event_exceptions.is_empty(), "行き先の無い指定は落とす");
+        assert!(back.events[0].excluded_days.is_empty());
+    }
+
+    #[test]
     fn encoding_a_request_round_trips() {
         let mut r = request(Engine::Convolution);
         r.kind = DistKind::Triangular;
@@ -887,8 +983,13 @@ mod tests {
                 end_minute: Some(10 * 60 + 50),
                 repeat_weeks: 2,
                 until_day: Some(monday() + 60),
+                excluded_days: vec![monday() + 15],
             },
         ];
+        r.event_exceptions = vec![EventException {
+            event: 1,
+            day: monday() + 15,
+        }];
         r.event_members = vec![
             EventMember {
                 event: 0,
@@ -1052,6 +1153,7 @@ mod tests {
             end_minute: Some(11 * 60),
             repeat_weeks: 0,
             until_day: None,
+            excluded_days: Vec::new(),
         }];
         r.event_members = vec![
             EventMember {
@@ -1084,6 +1186,7 @@ mod tests {
             end_minute: Some(11 * 60),
             repeat_weeks: 2,
             until_day: None,
+            excluded_days: Vec::new(),
         }];
         r.event_members = vec![EventMember {
             event: 0,
@@ -1113,6 +1216,7 @@ mod tests {
             end_minute: Some(10 * 60),
             repeat_weeks: 0,
             until_day: None,
+            excluded_days: Vec::new(),
         }];
         r.event_members = vec![EventMember {
             event: 0,

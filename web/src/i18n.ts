@@ -162,6 +162,8 @@ const ja = {
   "accounts.email": "メールアドレス",
   "accounts.systemRole": "システム権限",
   "accounts.remove": "{name} を削除",
+  "accounts.confirmDelete":
+    "アカウント「{name}」を削除しますか？ 配られていた権限とグループ所属も一緒に消えます。",
   "accounts.actAs": "別のアカウントとして操作",
   "accounts.actAsHint":
     "ローカルで権限の効き方を確かめるための切り替えです。サーバに接続するとログインした本人に固定されます。",
@@ -222,6 +224,8 @@ const ja = {
   "tasks.down": "下へ",
   "tasks.remove": "削除",
   "tasks.removeRow": "{name} を削除",
+  "tasks.confirmRemoveSubtree":
+    "「{name}」とその配下 (あわせて {count} 件) を削除しますか？ 元に戻せません。",
   "tasks.enableShown": "表示中を使用する",
   "tasks.disableShown": "表示中を除外する",
   "tasks.empty": "タスクがありません。「行を追加」か「サンプルを読み込む」から始めてください。",
@@ -281,6 +285,11 @@ const ja = {
   "cal.eventTo": "終了",
   "cal.allDay": "終日",
   "cal.removeEvent": "この予定を削除",
+  "cal.removeAllOccurrences": "すべての回を削除",
+  "cal.confirmRemoveEvent": "予定「{name}」をすべての回で削除しますか？ 元に戻せません。",
+  "cal.skipOccurrence": "この回だけ休みにする",
+  "cal.skippedHeading": "休みにした回",
+  "cal.restoreOccurrence": "{date} を元に戻す",
   "cal.noEvents": "予定はまだありません。会議や休暇を入れると、その分だけ日程が後ろにずれます。",
   "cal.monthView": "月表示",
   "cal.prevMonth": "前の月",
@@ -394,6 +403,8 @@ const ja = {
   "members.heading": "人員",
   "members.add": "人員を追加",
   "members.remove": "{name} を削除",
+  "members.confirmDelete":
+    "人員「{name}」を削除しますか？ 担当していた {count} 件のタスクは未割当に戻り、予定の参加者からも外れます。",
   "members.name": "名前",
   "members.schedule": "稼働時間",
   "members.break": "休憩 (分)",
@@ -599,6 +610,8 @@ const en: Dictionary = {
   "accounts.email": "Email",
   "accounts.systemRole": "System role",
   "accounts.remove": "Remove {name}",
+  "accounts.confirmDelete":
+    "Delete the account \u201c{name}\u201d? The access it was granted and its group memberships go away too.",
   "accounts.actAs": "Act as another account",
   "accounts.actAsHint":
     "A local-only switch for seeing how permissions behave. On a server you are whoever signed in.",
@@ -659,6 +672,8 @@ const en: Dictionary = {
   "tasks.down": "Move down",
   "tasks.remove": "Remove",
   "tasks.removeRow": "Remove {name}",
+  "tasks.confirmRemoveSubtree":
+    "Delete \u201c{name}\u201d and everything under it ({count} in total)? This cannot be undone.",
   "tasks.enableShown": "Use all shown",
   "tasks.disableShown": "Exclude all shown",
   "tasks.empty": "No tasks yet. Start with “Add row” or “Load sample”.",
@@ -718,6 +733,11 @@ const en: Dictionary = {
   "cal.eventTo": "To",
   "cal.allDay": "All day",
   "cal.removeEvent": "Remove this event",
+  "cal.removeAllOccurrences": "Remove every occurrence",
+  "cal.confirmRemoveEvent": "Remove every occurrence of \u201c{name}\u201d? This cannot be undone.",
+  "cal.skipOccurrence": "Skip just this one",
+  "cal.skippedHeading": "Skipped",
+  "cal.restoreOccurrence": "Bring {date} back",
   "cal.noEvents":
     "No events yet. Meetings and time off push the schedule out by exactly that much.",
   "cal.monthView": "Month view",
@@ -835,6 +855,8 @@ const en: Dictionary = {
   "members.heading": "People",
   "members.add": "Add person",
   "members.remove": "Remove {name}",
+  "members.confirmDelete":
+    "Remove \u201c{name}\u201d? Their {count} task(s) go back to unassigned and they are dropped from every event.",
   "members.name": "Name",
   "members.schedule": "Working hours",
   "members.break": "Break (min)",

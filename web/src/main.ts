@@ -98,6 +98,7 @@ const state: AppState = {
   calendarMonth: { year: startMonth.getUTCFullYear(), month: startMonth.getUTCMonth() + 1 },
   calendarMember: null,
   editingEventId: null,
+  editingEventDay: null,
   expandedDay: null,
   comments: [],
   commentScope: null,

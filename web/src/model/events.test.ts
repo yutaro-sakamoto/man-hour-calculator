@@ -22,6 +22,7 @@ function event(over: Partial<CalendarEventItem> = {}): CalendarEventItem {
     repeatWeeks: 0,
     until: null,
     memberIds: [],
+    excludedDates: [],
     ...over,
   };
 }
@@ -111,4 +112,54 @@ test("升に出す時刻は先頭の 0 を落とす", () => {
   assert.equal(shortTime(event({ startTime: "09:30" })), "9:30");
   assert.equal(shortTime(event({ startTime: "14:00" })), "14:00");
   assert.equal(shortTime(event({ startTime: null })), "");
+});
+
+/* ===== 1 回だけ休みにする ===== */
+
+test("休みにした回だけが出なくなる", () => {
+  const weekly = event({ repeatWeeks: 1, excludedDates: ["2026-09-14"] });
+  assert.equal(occursOn(weekly, day("2026-09-07")), true, "前の回は残る");
+  assert.equal(occursOn(weekly, day("2026-09-14")), false, "休みにした回");
+  assert.equal(occursOn(weekly, day("2026-09-21")), true, "次の回も残る");
+});
+
+test("休みにするのは回の初日で指定する", () => {
+  // 月曜から水曜の合宿。初日で休みにすると、その回はまるごと消える。
+  const camp = event({ startDate: "2026-09-07", endDate: "2026-09-09", repeatWeeks: 1 });
+  const skipped = { ...camp, excludedDates: ["2026-09-14"] };
+  for (const iso of ["2026-09-14", "2026-09-15", "2026-09-16"]) {
+    assert.equal(occursOn(skipped, day(iso)), false, iso);
+  }
+  for (const iso of ["2026-09-07", "2026-09-21"]) {
+    assert.equal(occursOn(skipped, day(iso)), true, iso);
+  }
+});
+
+test("途中の日を指定しても、その回は消えない", () => {
+  // 初日以外を渡しても効かない。回を消すか残すかの 2 択にしてある。
+  const camp = event({
+    startDate: "2026-09-07",
+    endDate: "2026-09-09",
+    repeatWeeks: 1,
+    excludedDates: ["2026-09-15"],
+  });
+  assert.equal(occursOn(camp, day("2026-09-14")), true);
+  assert.equal(occursOn(camp, day("2026-09-15")), true);
+});
+
+test("繰り返さない予定も休みにできる", () => {
+  const once = event({ excludedDates: ["2026-09-07"] });
+  assert.equal(occursOn(once, day("2026-09-07")), false);
+});
+
+test("読めない日付が混ざっていても止まらない", () => {
+  const weekly = event({ repeatWeeks: 1, excludedDates: ["2026/09/14", "2026-09-14"] });
+  assert.equal(occursOn(weekly, day("2026-09-14")), false, "読めるほうは効く");
+  assert.equal(occursOn(weekly, day("2026-09-21")), true);
+});
+
+test("休みにした回は升にも出ない", () => {
+  const weekly = event({ repeatWeeks: 1, excludedDates: ["2026-09-14"] });
+  assert.equal(occurrencesOn([weekly], day("2026-09-14")).length, 0);
+  assert.equal(occurrencesOn([weekly], day("2026-09-21")).length, 1);
 });

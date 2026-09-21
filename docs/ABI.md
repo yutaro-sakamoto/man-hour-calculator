@@ -1,4 +1,4 @@
-# JS ↔ WASM の ABI (version 3)
+# JS ↔ WASM の ABI (version 4)
 
 `crates/core/src/abi.rs` と `web/src/wasm.ts` / `web/src/abi.ts` は、この文書の表どおりの
 バッファをやり取りする。どちらかを変えたら `VERSION` を上げること。起動時に
@@ -32,7 +32,7 @@ new Float64Array(memory.buffer, ptr, length)
 | `dealloc` | `(ptr: *mut u8, len_bytes: usize)` | `alloc` した領域を解放する |
 | `compute` | `(ptr: *const f64, len: usize) -> *const f64` | 計算してレスポンス先頭を返す |
 | `last_response_len` | `() -> usize` | 直前のレスポンスの長さ (`f64` の個数) |
-| `abi_version` | `() -> u32` | この文書のバージョン (= 3) |
+| `abi_version` | `() -> u32` | この文書のバージョン (= 4) |
 
 `compute` が返すポインタは**次に `compute` を呼ぶまで**しか有効でない。
 JS 側は必ずコピーしてから使う。また `compute` の内部で線形メモリが伸びると
@@ -52,14 +52,15 @@ wasm.dealloc(ptr, bytes);
 ## リクエスト
 
 長さは
-`32 + 7 * n_tasks + 15 * n_members + 6 * n_events + 2 * n_event_members + n_forced_workdays`。
+`32 + 7 * n_tasks + 15 * n_members + 6 * n_events + 2 * n_event_members
++ 2 * n_event_exceptions + n_forced_workdays`。
 
 ### ヘッダ (32 要素)
 
 | 添字 | 名前 | 値 |
 |---:|---|---|
 | 0 | `magic` | `20250920` 固定 |
-| 1 | `version` | `3` |
+| 1 | `version` | `4` |
 | 2 | `engine` | `0` = モンテカルロ、`1` = 数値畳み込み |
 | 3 | `dist_kind` | `0` = PERT、`1` = 三角分布 (未知の値は PERT にフォールバック) |
 | 4 | `lambda` | PERT の形状パラメータ。`0..=100` に丸められる。既定 `4` |
@@ -79,7 +80,8 @@ wasm.dealloc(ptr, bytes);
 | 18 | `n_event_members` | 予定と人員の割当件数。`0..=10000` |
 | 19 | `use_japanese_holidays` | `0` / `1` |
 | 20 | `today_day` | 進捗を測る基準日 (日数) |
-| 21..31 | — | 予約 (`0`) |
+| 21 | `n_event_exceptions` | 予定の除外日の件数。`0..=10000` |
+| 22..31 | — | 予約 (`0`) |
 
 ### 本体 (この順に連結)
 
@@ -89,6 +91,7 @@ wasm.dealloc(ptr, bytes);
 | 人員 | `15 * n_members` | 稼働開始 × 7、稼働終了 × 7、休憩分数 |
 | 予定 | `6 * n_events` | `start_day, end_day, start_minute, end_minute, repeat_weeks, until_day` |
 | 予定の参加者 | `2 * n_event_members` | `event_index, member_index` |
+| 予定の除外日 | `2 * n_event_exceptions` | `event_index, day` |
 | 休日出勤 | `n_forced_workdays` | `day` |
 
 - `start_day` / `end_day` / `until_day` は未入力なら `NaN`。
@@ -98,6 +101,8 @@ wasm.dealloc(ptr, bytes);
 - 予定の `start_minute` / `end_minute` が `NaN` なら終日 (稼働時間をまるごと潰す)。
 - `repeat_weeks` は繰り返しの週数。`0` = 繰り返さない、`1` = 毎週、`2` = 隔週。
   `until_day` まで続く。
+- 予定の除外日は、休みにする回の**初日**を指す。複数日にまたがる回はまるごと消える。
+  並び順は問わない (受け取った側で整列して重複を落とす)。範囲外の `event_index` は捨てる。
 - 予定は複数の人員に割り当てられる。同じ `event_index` が複数行に現れてよい。
 
 制限値は `crates/core/src/abi.rs` の定数がすべて。ほかに
@@ -128,7 +133,7 @@ wasm.dealloc(ptr, bytes);
 | 添字 | 名前 | 内容 |
 |---:|---|---|
 | 0 | `status` | `0` なら成功。それ以外はエラー (下表) |
-| 1 | `version` | `3` |
+| 1 | `version` | `4` |
 | 2 | `n_bins` | 本体のビン数 |
 | 3 | `n_percentiles` | 分位点の個数 (現在は 7) |
 | 4 | `n_tasks` | タスク数 |

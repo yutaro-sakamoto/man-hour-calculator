@@ -13,6 +13,7 @@ import { DAY_FLAG } from "../abi.ts";
 import type { AppActions, AppState } from "../app.ts";
 import {
   dayFromIso,
+  formatDayShort,
   formatMonth,
   formatNumber,
   isoFromDay,
@@ -134,6 +135,7 @@ function renderEditor(state: AppState, actions: AppActions): HTMLElement | null 
   const close = (): void => {
     actions.patch((draft) => {
       draft.editingEventId = null;
+      draft.editingEventDay = null;
     });
   };
   const patch = (change: Partial<CalendarEventItem>): void => {
@@ -144,6 +146,10 @@ function renderEditor(state: AppState, actions: AppActions): HTMLElement | null 
   };
   const allDay = event.startTime === null || event.endTime === null;
   const members = state.document.calendar.members;
+  const title = event.name.trim() === "" ? t("cal.untitledEvent") : event.name;
+  // 押した回の初日。ここからしか「どの回か」は決まらない。
+  const skipDay = state.editingEventDay;
+  const alreadySkipped = skipDay !== null && event.excludedDates.includes(skipDay);
 
   const timeInput = (value: string, which: "startTime" | "endTime") =>
     h("input", {
@@ -256,13 +262,50 @@ function renderEditor(state: AppState, actions: AppActions): HTMLElement | null 
           ? h("span", { class: "chip muted", text: t("cal.allMembers") })
           : null,
       ]),
+      // 休みにした回。黙って消えるだけだと戻せないので、一覧にして返せるようにする。
+      event.excludedDates.length === 0
+        ? null
+        : h("div", { class: "skipped-list" }, [
+            h("span", { class: "field-label", text: t("cal.skippedHeading") }),
+            h(
+              "div",
+              { class: "inline-row" },
+              event.excludedDates.map((iso) =>
+                h("span", { class: "chip", dataset: { skipped: iso } }, [
+                  formatDayShort(dayFromIso(iso) ?? 0, lang()),
+                  iconButton("↺", t("cal.restoreOccurrence", { date: iso }), () => {
+                    patch({
+                      excludedDates: event.excludedDates.filter((day) => day !== iso),
+                    });
+                  }),
+                ]),
+              ),
+            ),
+          ]),
       h("div", { class: "row-actions" }, [
-        button(t("cal.removeEvent"), () => {
-          actions.mutate((document) => {
-            document.calendar.events.splice(index, 1);
-          });
-          close();
-        }),
+        // 繰り返す予定は、1 回だけ休みにするのと全部消すのを分ける。
+        // 「今週だけ休み」に全消しを使わせてはいけない。
+        event.repeatWeeks !== 0 && skipDay !== null && !alreadySkipped
+          ? button(
+              t("cal.skipOccurrence"),
+              () => {
+                patch({ excludedDates: [...event.excludedDates, skipDay].sort() });
+                close();
+              },
+              { dataset: { action: "skip-occurrence" } },
+            )
+          : null,
+        button(
+          event.repeatWeeks === 0 ? t("cal.removeEvent") : t("cal.removeAllOccurrences"),
+          () => {
+            if (!confirm(t("cal.confirmRemoveEvent", { name: title }))) return;
+            actions.mutate((document) => {
+              document.calendar.events.splice(index, 1);
+            });
+            close();
+          },
+          { dataset: { action: "remove-event" } },
+        ),
         button(t("cal.doneEditing"), close, { class: "primary" }),
       ]),
     ],
@@ -295,7 +338,7 @@ function renderEditor(state: AppState, actions: AppActions): HTMLElement | null 
 
 /** 升のなかに出す予定 1 件。押すと編集できる。 */
 function renderChip(actions: AppActions, occurrence: Occurrence): HTMLElement {
-  const { event, allDay, starts, ends } = occurrence;
+  const { event, allDay, starts, ends, firstDay } = occurrence;
   const name = event.name.trim() === "" ? t("cal.untitledEvent") : event.name;
   const classes = ["event-chip"];
   if (allDay) classes.push("all-day");
@@ -314,6 +357,8 @@ function renderChip(actions: AppActions, occurrence: Occurrence): HTMLElement {
           domEvent.stopPropagation();
           actions.patch((draft) => {
             draft.editingEventId = event.id;
+            // どの回を押したかは、この升でしか分からない。
+            draft.editingEventDay = isoFromDay(firstDay);
           });
         },
       },
@@ -372,10 +417,12 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
         repeatWeeks: 0,
         until: null,
         memberIds: document.calendar.members.map((member) => member.id),
+        excludedDates: [],
       });
     });
     actions.patch((draft) => {
       draft.editingEventId = id;
+      draft.editingEventDay = iso;
     });
   };
 

@@ -4,6 +4,7 @@ import {
   ABI_VERSION,
   MAGIC,
   PCT_LEVELS,
+  REQ_EVENT_EXCEPTION_STRIDE,
   REQ_EVENT_MEMBER_STRIDE,
   REQ_EVENT_STRIDE,
   REQ_HEADER,
@@ -144,6 +145,8 @@ interface EncodedEvent {
   repeatWeeks: number;
   untilDay: number;
   members: number[];
+  /** 休みにした回の初日 (1970-01-01 からの日数)。 */
+  skipped: number[];
 }
 
 function encodeEvents(calendar: CalendarSettings, members: ResolvedMembers): EncodedEvent[] {
@@ -164,6 +167,9 @@ function encodeEvents(calendar: CalendarSettings, members: ResolvedMembers): Enc
       repeatWeeks: Math.max(0, Math.round(event.repeatWeeks)),
       untilDay: dayFromIso(event.until) ?? NOT_SET,
       members: participantsOf(members, event.memberIds),
+      skipped: event.excludedDates
+        .map((iso) => dayFromIso(iso))
+        .filter((day): day is number => day !== null),
     });
   }
   return encoded;
@@ -182,6 +188,9 @@ export function buildRequest(
   const links = events.flatMap((event, index) =>
     event.members.map((member) => [index, member] as const),
   );
+  // 日付が読めない予定は encodeEvents で落ちているので、添字は
+  // `calendar.events` ではなく**絞り込んだあとの一覧**で数える。
+  const skips = events.flatMap((event, index) => event.skipped.map((day) => [index, day] as const));
   const forced = calendar.forcedWorkdays
     .map((day) => dayFromIso(day))
     .filter((day): day is number => day !== null);
@@ -192,6 +201,7 @@ export function buildRequest(
       members.all.length * REQ_MEMBER_STRIDE +
       events.length * REQ_EVENT_STRIDE +
       links.length * REQ_EVENT_MEMBER_STRIDE +
+      skips.length * REQ_EVENT_EXCEPTION_STRIDE +
       forced.length,
   );
   request[0] = MAGIC;
@@ -215,6 +225,7 @@ export function buildRequest(
   request[18] = links.length;
   request[19] = calendar.useJapaneseHolidays ? 1 : 0;
   request[20] = today;
+  request[21] = skips.length;
 
   let at = REQ_HEADER;
   for (const leaf of leaves) {
@@ -242,6 +253,10 @@ export function buildRequest(
   for (const [event, member] of links) {
     request[at++] = event;
     request[at++] = member;
+  }
+  for (const [event, day] of skips) {
+    request[at++] = event;
+    request[at++] = day;
   }
   for (const day of forced) request[at++] = day;
   return request;
