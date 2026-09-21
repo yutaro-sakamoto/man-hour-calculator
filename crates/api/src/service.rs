@@ -354,6 +354,14 @@ impl<S: Store> Service<S> {
             }
         } else {
             group.members.retain(|existing| existing != user_id);
+            // 抜けたあとも所有者が残ること。所有権がこのグループ経由だけに
+            // なっているプロジェクトは、ここで置き去りになる。
+            // (TLC が見つけた筋: グループに owner を配る → 直接の owner を
+            //  外す → 最後のメンバーが抜ける)
+            let after = group.members.clone();
+            self.ensure_owners_survive(|service, meta, parent| {
+                service.owner_users_with(meta, parent, id, &after)
+            })?;
         }
         self.store.put_user_group(group.clone())?;
         Ok(group)
@@ -449,6 +457,20 @@ impl<S: Store> Service<S> {
             return Err(ApiError::conflict(
                 "グループの所有者がいなくなります。先に別の所有者を立ててください",
             ));
+        }
+        // 付与が 1 つ残っているだけでは足りない。**実在のアカウント**が
+        // 所有者として残ることを、配下のプロジェクトごとに確かめる。
+        // (TLC が見つけた筋: 入れ物の owner を空のグループに付け替える)
+        for meta in self.store.project_metas()? {
+            if meta.group_id.as_ref() != Some(id) {
+                continue;
+            }
+            if self.owner_users(&meta, Some(&group))?.is_empty() {
+                return Err(ApiError::conflict(format!(
+                    "プロジェクト「{}」の所有者が居なくなります。先に別の所有者を立ててください",
+                    meta.name
+                )));
+            }
         }
         self.store.put_project_group(group.clone())?;
         Ok(group)
@@ -592,6 +614,18 @@ impl<S: Store> Service<S> {
                 }
             }
             project.meta.group_id = group_id;
+            // 入れ物を変えると、継いでいた所有者が付いてこない。
+            // (TLC が見つけた筋: 入れ物の owner だけを頼りにしている
+            //  プロジェクトを、入れ物から出す)
+            let parent = match &project.meta.group_id {
+                Some(id) => self.store.project_group(id)?,
+                None => None,
+            };
+            if self.owner_users(&project.meta, parent.as_ref())?.is_empty() {
+                return Err(ApiError::conflict(
+                    "この入れ物から出すと所有者が居なくなります。先に別の所有者を立ててください",
+                ));
+            }
         }
         if let Some(due_date) = patch.due_date {
             if let Some(text) = &due_date {
@@ -812,11 +846,59 @@ impl<S: Store> Service<S> {
         Ok(actor.effective_role(meta, parent.as_ref()))
     }
 
+    /// この変更のあと、どのプロジェクトにも実在の所有者が残るか。
+    ///
+    /// `spec/Permissions.tla` が守らせている不変条件で、**状態を書き換える
+    /// 前に**通す。所有者が居なくなったプロジェクトは、誰も権限を配り直せず
+    /// 誰も消せない — データは残るのに手の出しようが無くなる。
+    ///
+    /// `owners_of` は「そのプロジェクトについて、変更後の所有者は誰か」を
+    /// 返す。呼び出し側が、まだ保存していない変更を織り込んで渡す。
+    fn ensure_owners_survive(
+        &self,
+        mut owners_of: impl FnMut(&Self, &ProjectMeta, Option<&ProjectGroup>) -> ApiResult<Owners>,
+    ) -> ApiResult<()> {
+        let groups = self.store.project_groups()?;
+        for meta in self.store.project_metas()? {
+            let parent = Self::parent_of(&meta, &groups);
+            if owners_of(self, &meta, parent)?.is_empty() {
+                return Err(ApiError::conflict(format!(
+                    "プロジェクト「{}」の所有者が居なくなります。先に別の所有者を立ててください",
+                    meta.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// 実際に所有者として振る舞えるアカウントの集合。
     ///
     /// 付与の相手がグループなら、そのメンバーに展開する。存在しない
     /// アカウントは数えない。
     fn owner_users(&self, meta: &ProjectMeta, parent: Option<&ProjectGroup>) -> ApiResult<Owners> {
+        self.owner_users_inner(meta, parent, None)
+    }
+
+    /// `group` の構成員が `members` に変わったとみなして数える。
+    ///
+    /// まだ保存していない変更を織り込んで「このあと所有者が残るか」を
+    /// 問うために要る。
+    fn owner_users_with(
+        &self,
+        meta: &ProjectMeta,
+        parent: Option<&ProjectGroup>,
+        group: &UserGroupId,
+        members: &[UserId],
+    ) -> ApiResult<Owners> {
+        self.owner_users_inner(meta, parent, Some((group, members)))
+    }
+
+    fn owner_users_inner(
+        &self,
+        meta: &ProjectMeta,
+        parent: Option<&ProjectGroup>,
+        override_group: Option<(&UserGroupId, &[UserId])>,
+    ) -> ApiResult<Owners> {
         let mut out = Owners::default();
         let entries = meta
             .access
@@ -833,11 +915,13 @@ impl<S: Store> Service<S> {
                     }
                 }
                 Principal::Group(id) => {
-                    if let Some(group) = self.store.user_group(id)? {
-                        for member in group.members {
-                            if self.store.user(&member)?.is_some() {
-                                out.insert(member);
-                            }
+                    let members = match override_group {
+                        Some((target, members)) if target == id => Some(members.to_vec()),
+                        _ => self.store.user_group(id)?.map(|group| group.members),
+                    };
+                    for member in members.into_iter().flatten() {
+                        if self.store.user(&member)?.is_some() {
+                            out.insert(member);
                         }
                     }
                 }
@@ -1386,6 +1470,172 @@ mod tests {
         );
         let root = actor(&service, "root");
         assert!(service.delete_user(&root, &UserId::new("alice")).is_ok());
+    }
+
+    /* ===== 不変条件: 所有者 =====
+    以下の 3 本は `spec/Permissions.tla` を TLC に回して出た反例を
+    そのまま写したもの。どれも単体テストでは思いつかれていなかった。 */
+
+    /// グループに所有権を預けたまま、最後のメンバーが抜ける筋。
+    #[test]
+    fn removing_the_last_group_member_cannot_orphan_a_project() {
+        let mut service = setup();
+        let root = actor(&service, "root");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("g1"), "チーム")
+            .unwrap();
+        service
+            .set_group_member(&root, &UserGroupId::new("g1"), &UserId::new("bob"), true)
+            .unwrap();
+
+        make_project(&mut service, "alice", "p1");
+        share(
+            &mut service,
+            "alice",
+            "p1",
+            Principal::group("g1"),
+            ProjectRole::Owner,
+        );
+        // 直接の所有者を外す。所有権はグループ経由だけになる。
+        let alice = actor(&service, "alice");
+        service
+            .set_access(
+                &alice,
+                &ProjectId::new("p1"),
+                &Principal::user("alice"),
+                None,
+            )
+            .unwrap();
+
+        // ここで bob が抜けると、所有者が誰も居なくなる。
+        assert_eq!(
+            service
+                .set_group_member(&root, &UserGroupId::new("g1"), &UserId::new("bob"), false)
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict,
+        );
+
+        // 別の所有者を立ててからなら抜けられる。
+        share(
+            &mut service,
+            "bob",
+            "p1",
+            Principal::user("carol"),
+            ProjectRole::Owner,
+        );
+        assert!(service
+            .set_group_member(&root, &UserGroupId::new("g1"), &UserId::new("bob"), false)
+            .is_ok());
+    }
+
+    /// 入れ物から継いだ所有権だけを頼りに、その入れ物から出る筋。
+    #[test]
+    fn moving_out_of_a_project_group_cannot_orphan_a_project() {
+        let mut service = setup();
+        let alice = actor(&service, "alice");
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("pg1"), "部門")
+            .unwrap();
+        make_project(&mut service, "alice", "p1");
+
+        // 入れ物に入れて、直接の所有者を外す。所有権は継承だけになる。
+        service
+            .update_project(
+                &alice,
+                &ProjectId::new("p1"),
+                NOW,
+                ProjectPatch {
+                    group_id: Some(Some(ProjectGroupId::new("pg1"))),
+                    ..ProjectPatch::default()
+                },
+            )
+            .unwrap();
+        service
+            .set_access(
+                &alice,
+                &ProjectId::new("p1"),
+                &Principal::user("alice"),
+                None,
+            )
+            .unwrap();
+
+        // ここで入れ物から出すと、所有者が誰も居なくなる。
+        assert_eq!(
+            service
+                .update_project(
+                    &alice,
+                    &ProjectId::new("p1"),
+                    NOW,
+                    ProjectPatch {
+                        group_id: Some(None),
+                        ..ProjectPatch::default()
+                    },
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict,
+        );
+    }
+
+    /// 入れ物の所有者を、**構成員の居ないグループ**に付け替える筋。
+    ///
+    /// 「付与が 1 つ残っている」ことだけを見ていると通ってしまう。
+    #[test]
+    fn handing_a_folder_to_an_empty_group_cannot_orphan_its_projects() {
+        let mut service = setup();
+        let root = actor(&service, "root");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("empty"), "空のチーム")
+            .unwrap();
+
+        let alice = actor(&service, "alice");
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("pg1"), "部門")
+            .unwrap();
+        make_project(&mut service, "alice", "p1");
+        service
+            .update_project(
+                &alice,
+                &ProjectId::new("p1"),
+                NOW,
+                ProjectPatch {
+                    group_id: Some(Some(ProjectGroupId::new("pg1"))),
+                    ..ProjectPatch::default()
+                },
+            )
+            .unwrap();
+        service
+            .set_access(
+                &alice,
+                &ProjectId::new("p1"),
+                &Principal::user("alice"),
+                None,
+            )
+            .unwrap();
+
+        // 空のグループに所有者を移すと、実在の所有者が居なくなる。
+        let alice = actor(&service, "alice");
+        service
+            .set_group_access(
+                &alice,
+                &ProjectGroupId::new("pg1"),
+                &Principal::group("empty"),
+                Some(ProjectRole::Owner),
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .set_group_access(
+                    &alice,
+                    &ProjectGroupId::new("pg1"),
+                    &Principal::user("alice"),
+                    None,
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict,
+        );
     }
 
     /* ===== 不変条件: 所有者 ===== */
