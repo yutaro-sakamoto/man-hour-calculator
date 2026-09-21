@@ -22,30 +22,43 @@ function excludedDays(event: CalendarEventItem): Set<number> {
 
 /** その日にこの予定が発生するか。`day` は 1970-01-01 からの日数。 */
 export function occursOn(event: CalendarEventItem, day: number): boolean {
+  return occurrenceStart(event, day) !== null;
+}
+
+/**
+ * その日を覆っている回の**初日**。覆う回が無ければ `null`。
+ *
+ * 1 回の長さが繰り返しの周期より長いと、同じ日を複数の回が覆いうる。
+ * **候補を全部見る。** 直近の 2 回だけを見ていたころは、長い予定の後半が
+ * 「起きない」ことになり、その日の稼働が削られないまま残った。
+ *
+ * `crates/core/src/calendar.rs` の `occurrence_start` と同じ規則。
+ */
+export function occurrenceStart(event: CalendarEventItem, day: number): number | null {
   const start = dayFromIso(event.startDate);
   const end = dayFromIso(event.endDate);
-  if (start === null || end === null || day < start) return false;
+  if (start === null || end === null || day < start) return null;
 
   const skipped = excludedDays(event);
+  const span = end - start;
   if (event.repeatWeeks === 0) {
-    return day <= end && !skipped.has(start);
+    return day <= end && !skipped.has(start) ? start : null;
   }
 
   const period = 7 * event.repeatWeeks;
-  const span = end - start;
   const until = dayFromIso(event.until);
-  // 期間より長い予定も扱えるよう、直近の 2 回ぶんを見る。
+  // `day` を覆えるのは、初日が `day - span` 以上 `day` 以下の回だけ。
   const latest = Math.floor((day - start) / period);
-  for (let back = 0; back <= 1; back++) {
-    const index = latest - back;
-    if (index < 0) continue;
+  const earliest = Math.ceil(Math.max(0, day - start - span) / period);
+  // **新しい回から**見る。重なっているときに「いまの回」を指したい。
+  for (let index = latest; index >= earliest; index--) {
     const from = start + period * index;
     if (until !== null && from > until) continue;
     // 休みにするのは回の初日で指定する。その回はまるごと消える。
     if (skipped.has(from)) continue;
-    if (day >= from && day <= from + span) return true;
+    if (day >= from && day <= from + span) return from;
   }
-  return false;
+  return null;
 }
 
 /** カレンダーの升に並べる 1 件ぶん。 */
@@ -84,20 +97,23 @@ function minutesOf(time: string | null): number | null {
 export function occurrencesOn(events: readonly CalendarEventItem[], day: number): Occurrence[] {
   const out: Occurrence[] = [];
   for (const [index, event] of events.entries()) {
-    if (!occursOn(event, day)) continue;
+    // **実際に覆っている回**を聞く。周期の格子から割り出すと、長い予定では
+    // 休みにしたはずの回を指してしまい、「この回だけ休みにする」が
+    // 効かなくなる。
+    const firstDay = occurrenceStart(event, day);
+    if (firstDay === null) continue;
     const start = dayFromIso(event.startDate);
     const end = dayFromIso(event.endDate);
     if (start === null || end === null) continue;
     const span = end - start;
-    // 繰り返す予定は、その回の初日からの位置で見る。
-    const offset = event.repeatWeeks === 0 ? day - start : (day - start) % (7 * event.repeatWeeks);
+    const offset = day - firstDay;
     out.push({
       event,
       index,
       allDay: event.startTime === null || event.endTime === null,
       starts: offset === 0,
       ends: offset === span,
-      firstDay: day - offset,
+      firstDay,
     });
   }
 

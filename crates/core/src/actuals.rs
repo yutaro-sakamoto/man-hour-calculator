@@ -205,6 +205,11 @@ pub fn forecast(
     // 外にあって測れないときは、予定どおりに進んだものとみなす。
     // そうしないと「タダで 25% 進んだ」= 総工数が減った、と読めてしまう。
     let measured = match actual.start_day {
+        // 着手日が計算期間より前だと、測れるのは窓のなかだけになる。
+        // 切り詰めた値をそのまま使うと、**窓の外で使った工数が黙って消える**
+        // (3 か月前に着手したタスクが、今日着手したものと同じ数字になる)。
+        // 測れないものとして扱い、下の `progress * baseline` に倒す。
+        Some(start) if start < calendar.start_day() => 0.0,
         Some(start) => calendar.capacity_between(start, today),
         None => 0.0,
     };
@@ -278,6 +283,40 @@ mod tests {
 
     fn est(a: f64, m: f64, b: f64) -> TaskEstimate {
         TaskEstimate::new(a, m, b).unwrap()
+    }
+
+    /// 着手日がカレンダーの期間より前なら、測れないものとして扱う。
+    ///
+    /// レビューで見つかったもの。`capacity_between` が開始日を窓の内側へ
+    /// 丸めるので、切り詰めた値がそのまま「消化工数」になり、窓の外で
+    /// 使った工数が黙って消えていた。
+    #[test]
+    fn effort_spent_before_the_window_is_not_silently_dropped() {
+        let original = est(5.0, 8.0, 20.0);
+        let cal = calendar();
+        let today = day(9); // 2 週間ぶん進んだところ
+
+        let long_ago = Actual {
+            start_day: Some(day(-80)),
+            progress: 0.5,
+            ..Actual::default()
+        };
+        let just_started = Actual {
+            start_day: Some(day(0)),
+            progress: 0.5,
+            ..Actual::default()
+        };
+
+        let old = plan(original, &long_ago, &cal, today);
+        let fresh = plan(original, &just_started, &cal, today);
+        assert_ne!(
+            old.spent, fresh.spent,
+            "80 日前に着手したものが、今日着手したものと同じ消化工数になっている"
+        );
+
+        // 測れないので「予定どおり進んだ」とみなす = p × 期待値。
+        let mean = (original.min() + 4.0 * original.likely() + original.max()) / 6.0;
+        assert!((old.spent - 0.5 * mean).abs() < 1e-9, "{}", old.spent);
     }
 
     #[test]

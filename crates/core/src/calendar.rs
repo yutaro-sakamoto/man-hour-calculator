@@ -73,22 +73,35 @@ impl CalendarEvent {
 
     /// その日にこの予定が発生するか。
     pub fn occurs_on(&self, day: i64) -> bool {
+        self.occurrence_start(day).is_some()
+    }
+
+    /// その日を覆っている回の**初日**。覆う回が無ければ `None`。
+    ///
+    /// 1 回の長さが繰り返しの周期より長いと、同じ日を複数の回が覆いうる。
+    /// **候補を全部見る。** 直近の 2 回だけを見ていたころは、長い予定の
+    /// 後半が「発生しない」ことになり、その日の稼働が削られないまま残った。
+    pub fn occurrence_start(&self, day: i64) -> Option<i64> {
         if day < self.start_day {
-            return false;
+            return None;
         }
+        let span = self.end_day - self.start_day;
         if self.repeat_weeks == 0 {
-            return day <= self.end_day && !self.skipped(self.start_day);
+            let covered = day <= self.end_day && !self.skipped(self.start_day);
+            return covered.then_some(self.start_day);
         }
 
         let period = 7 * self.repeat_weeks as i64;
-        let span = self.end_day - self.start_day;
-        // 期間より長い予定も扱えるよう、直近の 2 回ぶんを見る。
+        // `day` を覆えるのは、初日が `day - span` 以上 `day` 以下の回だけ。
         let latest = (day - self.start_day) / period;
-        for back in 0..=1 {
-            let index = latest - back;
-            if index < 0 {
-                continue;
-            }
+        let earliest = {
+            let behind = (day - self.start_day - span).max(0);
+            // 切り上げ。`behind` は非負、`period` は正なのでこの形でよい。
+            (behind + period - 1) / period
+        };
+        // **新しい回から**見る。重なっているときに「いまの回」を指したい
+        // (画面の「この回だけ休みにする」が、直近の回を指すように)。
+        for index in (earliest..=latest).rev() {
             let from = self.start_day + period * index;
             if let Some(until) = self.until_day {
                 if from > until {
@@ -100,10 +113,10 @@ impl CalendarEvent {
                 continue;
             }
             if day >= from && day <= from + span {
-                return true;
+                return Some(from);
             }
         }
-        false
+        None
     }
 
     /// その日に失われる時間帯。終日なら稼働時間帯そのもの。
@@ -171,6 +184,15 @@ impl Calendar {
                 mark |= FLAG_FORCED_WORKDAY;
             }
 
+            // 特別稼働日は、平日の標準的な時間帯で働くとみなす。予定を
+            // 差し引くには「時間帯」が要るので、ここで決めてしまう。
+            // これが無いと、特別稼働日の予定が 1 分も削られなかった。
+            let effective = match window {
+                Some(work) => Some(work),
+                None if forced => standard_window(schedule),
+                None => None,
+            };
+
             // 予定は稼働日でなくても「入っている」ことは示す (画面で見えるように)。
             busy.clear();
             for event in events {
@@ -178,7 +200,7 @@ impl Calendar {
                     continue;
                 }
                 mark |= FLAG_EVENT;
-                if let Some(work) = window {
+                if let Some(work) = effective {
                     let (from, to) = event.busy_window(work);
                     if to > from {
                         busy.push((from, to));
@@ -195,13 +217,15 @@ impl Calendar {
                     minutes as f64 / minutes_per_person_day
                 }
                 // 非稼働曜日でも、特別稼働日なら平日の標準的な稼働時間で働くとみなす。
-                None if forced => {
-                    let weekday_minutes = (0..7)
-                        .map(|w| schedule.working_minutes(w))
-                        .max()
-                        .unwrap_or(0);
-                    weekday_minutes as f64 / minutes_per_person_day
-                }
+                // 予定はその時間帯から差し引く (稼働日と同じ扱い)。
+                None if forced => match effective {
+                    Some((from, to)) => {
+                        let minutes =
+                            (to - from - schedule.break_minutes() - union_length(&mut busy)).max(0);
+                        minutes as f64 / minutes_per_person_day
+                    }
+                    None => 0.0,
+                },
                 None => 0.0,
             };
 
@@ -294,6 +318,21 @@ impl Calendar {
     }
 }
 
+/// 平日の標準的な稼働時間帯。いちばん長く働く曜日のものを採る。
+///
+/// 特別稼働日 (本来は非稼働の曜日) に「何時から何時まで働くか」を決めるために
+/// 要る。時間帯が無いと、その日の予定を差し引けない。
+fn standard_window(schedule: &MemberSchedule) -> Option<(i32, i32)> {
+    (0..7)
+        .filter_map(|w| {
+            schedule
+                .window(w)
+                .map(|win| (schedule.working_minutes(w), win))
+        })
+        .max_by_key(|(minutes, _)| *minutes)
+        .map(|(_, win)| win)
+}
+
 /// 期間にかかる年の日本の祝日を、昇順に並べて返す。
 pub fn japanese_holidays_for(start_day: i64, horizon_days: usize) -> Vec<i64> {
     use crate::date::{civil_from_days, japanese_holidays};
@@ -340,6 +379,69 @@ mod tests {
 
     fn build(horizon: usize, events: &[CalendarEvent]) -> Calendar {
         Calendar::build(&config(horizon), &eight_hour_weekdays(), events, &[], &[])
+    }
+
+    /* ===== レビューで見つかったもの ===== */
+
+    /// 1 回の長さが繰り返しの周期より長いと、同じ日を古い回が覆う。
+    /// 直近 2 回しか見ていなかったころは、その日が「発生しない」ことになった。
+    #[test]
+    fn an_occurrence_longer_than_its_period_still_covers_its_tail() {
+        let mut event = CalendarEvent::all_day(0, 20);
+        event.repeat_weeks = 1;
+        event.until_day = Some(7);
+
+        // 7 日目に始まった回は 7..=27 を覆う。
+        for day in 0..=27 {
+            assert!(event.occurs_on(day), "{day} 日目が抜けている");
+        }
+        assert!(!event.occurs_on(28), "until を越えた回は起きない");
+
+        // 覆っているのがどの回かも正しく分かる。
+        assert_eq!(event.occurrence_start(6), Some(0));
+        assert_eq!(event.occurrence_start(21), Some(7));
+    }
+
+    /// 休みにした回があっても、別の回が覆っていれば予定は残る。
+    #[test]
+    fn skipping_one_occurrence_does_not_uncover_days_another_one_spans() {
+        let mut event = CalendarEvent::all_day(0, 20);
+        event.repeat_weeks = 1;
+        event.excluded_days = vec![14, 21];
+
+        for day in 0..=27 {
+            assert!(event.occurs_on(day), "{day} 日目が抜けている");
+        }
+        // 14 と 21 に始まる回は消えているので、覆っているのは 7 の回。
+        assert_eq!(event.occurrence_start(21), Some(7));
+    }
+
+    /// 特別稼働日でも、予定はその日の稼働から差し引かれる。
+    #[test]
+    fn an_event_on_a_forced_workday_still_costs_time() {
+        // 土曜 (本来は非稼働) を特別稼働日にして、終日の予定を置く。
+        let saturday = day(5);
+        let event = CalendarEvent::all_day(saturday, saturday);
+        let cal = Calendar::build(
+            &config(7),
+            &eight_hour_weekdays(),
+            &[event],
+            &[saturday],
+            &[],
+        );
+
+        let at = (saturday - day(0)) as usize;
+        assert_eq!(cal.flags()[at] & FLAG_FORCED_WORKDAY, FLAG_FORCED_WORKDAY);
+        assert_eq!(cal.flags()[at] & FLAG_EVENT, FLAG_EVENT);
+        assert_eq!(
+            cal.capacity()[at],
+            0.0,
+            "終日の予定があるのに丸一日ぶん数えている"
+        );
+
+        // 予定が無ければ、これまでどおり 1 人日ぶん働く。
+        let empty = Calendar::build(&config(7), &eight_hour_weekdays(), &[], &[saturday], &[]);
+        assert_eq!(empty.capacity()[at], 1.0);
     }
 
     #[test]
