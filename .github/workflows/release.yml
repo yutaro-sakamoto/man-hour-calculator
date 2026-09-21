@@ -262,10 +262,15 @@ jobs:
         run: |
           set -euo pipefail
           npm --prefix web ci
-          # npm の依存は**ビルド時だけ**で、配布物には 1 行も入らない。
-          # それでも供給網の一部なので出しておく。
-          (cd web && npm sbom --sbom-format cyclonedx --omit dev > "../out/sbom-web-${VERSION}.cdx.json") \
-            || (cd web && npm sbom --sbom-format cyclonedx > "../out/sbom-web-${VERSION}.cdx.json")
+          # npm の依存は**すべてビルド時だけ**のもので、配布物には 1 行も
+          # 入らない。`--omit dev` を付けると中身が空になってしまうので、
+          # 付けずに全部出す。「何で組み立てたか」こそが知りたいこと。
+          (cd web && npm sbom --sbom-format cyclonedx > "../out/sbom-web-${VERSION}.cdx.json")
+          node -e '
+            const d = require("./out/sbom-web-'"${VERSION}"'.cdx.json");
+            console.log("web SBOM:", (d.components ?? []).length, "件");
+            if ((d.components ?? []).length === 0) { console.error("空です"); process.exit(1); }
+          ' 
 
       - name: Vulnerability scan
         env:
@@ -280,6 +285,8 @@ jobs:
       - name: Dependency and licence inventory
         env:
           VERSION: ${{ needs.meta.outputs.version }}
+          # 色の escape が文書に混ざらないようにする。
+          CARGO_TERM_COLOR: never
         run: |
           set -euo pipefail
           {
@@ -288,6 +295,26 @@ jobs:
             echo "計算コア (crates/core) と API (crates/api) の依存は **serde だけ**。"
             echo "下に出るのはサーバ (crates/server) が使うものが大半です。"
             echo "ローカル版の 1 枚 HTML には、この表のものは入っていません。"
+            echo
+            echo "## ライセンス"
+            echo
+            echo '```'
+            cargo metadata --format-version 1 --all-features \
+              | node -e '
+                  let raw = "";
+                  process.stdin.on("data", (c) => (raw += c));
+                  process.stdin.on("end", () => {
+                    const meta = JSON.parse(raw);
+                    const seen = new Map();
+                    for (const p of meta.packages) seen.set(p.license ?? "(記載なし)", (seen.get(p.license ?? "(記載なし)") ?? 0) + 1);
+                    for (const [name, n] of [...seen].sort((a, b) => b[1] - a[1])) {
+                      console.log(String(n).padStart(4), name);
+                    }
+                  });
+                '
+            echo '```'
+            echo
+            echo "## 依存の木"
             echo
             echo '```'
             cargo tree --workspace --edges normal
