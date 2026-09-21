@@ -18,7 +18,7 @@
   --band-outer: #86b6ef;
   --band-inner: #3987e5;
   --band-marker: #184f95;
-  --offday: rgba(11, 11, 11, 0.035);
+  --offday: rgba(11, 11, 11, 0.09);
   --critical: #d03b3b;
   --warning: #fab219;
   --serious: #ec835a;
@@ -49,7 +49,7 @@
     --band-outer: #1c5cab;
     --band-inner: #3987e5;
     --band-marker: #86b6ef;
-    --offday: rgba(255, 255, 255, 0.045);
+    --offday: rgba(255, 255, 255, 0.1);
     --critical: #e66767;
     --serious: #ec835a;
     --good: #0ca30c;
@@ -813,6 +813,9 @@ select.assignee {
   color: var(--ink-muted);
 }
 .day.holiday {
+  /* 枠だけでは弱い。13px の見本に至っては 1px の枠しか違わず、
+     凡例として何も伝えていなかった。地色も薄く変える。 */
+  background: color-mix(in srgb, var(--critical) 9%, var(--surface-sunken));
   border-color: color-mix(in srgb, var(--critical) 45%, var(--border));
 }
 .day.forced {
@@ -994,7 +997,9 @@ select.assignee {
   background: var(--offday);
 }
 .swatch.holiday {
-  border-color: var(--critical);
+  /* 升と同じ見た目にする。凡例が升と違って見えるなら、凡例ではない。 */
+  background: color-mix(in srgb, var(--critical) 9%, var(--surface-sunken));
+  border-color: color-mix(in srgb, var(--critical) 45%, var(--border));
 }
 .swatch.forced {
   background: var(--series-soft);
@@ -1064,6 +1069,11 @@ select.assignee {
   height: 100%;
   display: block;
 }
+/* 中身の高さに合わせて伸びる入れ物。`.chart-box` の固定高のままだと、
+   背の高い図がはみ出して、下に来るものの上に重なる。 */
+.chart-box.grows {
+  height: auto;
+}
 #schedule-chart {
   height: auto;
   min-height: 260px;
@@ -1129,6 +1139,46 @@ tr[data-highlight="true"] :is(td, th) {
 }
 tr[data-strong="true"] td {
   font-weight: 620;
+}
+
+/* カードのなかの折りたたみ。見出しは h3 と同じ見た目のまま、押せるようにする。 */
+details.subfold {
+  margin-top: 20px;
+}
+details.subfold > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+}
+details.subfold > summary::-webkit-details-marker {
+  display: none;
+}
+details.subfold > summary .section-title {
+  display: inline-block;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink);
+}
+/* 開閉の向きが分かる小さな印。文字ではなく形で出す。 */
+details.subfold > summary .section-title::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 8px;
+  vertical-align: 2px;
+  border-right: 1.5px solid var(--ink-muted);
+  border-bottom: 1.5px solid var(--ink-muted);
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+details.subfold[open] > summary .section-title::after {
+  transform: rotate(-135deg);
+  vertical-align: 4px;
+}
+details.subfold > summary:hover .section-title::after {
+  border-color: var(--ink);
 }
 
 details.data-view {
