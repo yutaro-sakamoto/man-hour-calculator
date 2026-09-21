@@ -649,6 +649,34 @@ function tabBar(): HTMLElement {
   return rail;
 }
 
+/** このリポジトリの置き場所。不具合の報告先もここから組み立てる。 */
+const REPOSITORY = "https://github.com/yutaro-sakamoto/man-hour-calculator";
+
+/**
+ * 画面の下の案内。
+ *
+ * **素の `<a>` だけを置く。** 押すまで通信は起きないので、外と繋がらない
+ * という約束は保たれる。外のアイコンや画像は置けない (E2E が
+ * 「`file://` 以外へのリクエストが 1 件でもあれば落ちる」ことを見張っている)。
+ */
+function footer(): HTMLElement {
+  const link = (label: string, href: string, kind: string): HTMLElement =>
+    h("a", {
+      text: label,
+      attrs: { href, target: "_blank", rel: "noopener noreferrer" },
+      dataset: { feedback: kind },
+    });
+
+  return h("footer", { class: "app-footer" }, [
+    h("span", { text: t("feedback.lead") }),
+    link(t("feedback.bug"), `${REPOSITORY}/issues/new?labels=bug`, "bug"),
+    h("span", { class: "sep", text: "·" }),
+    link(t("feedback.idea"), `${REPOSITORY}/issues/new`, "idea"),
+    h("span", { class: "sep", text: "·" }),
+    link(t("feedback.repo"), REPOSITORY, "repo"),
+  ]);
+}
+
 function tabContent(): HTMLElement {
   switch (state.activeTab) {
     case "projects":
@@ -705,6 +733,7 @@ function render(): void {
           h("p", { id: "readonly-banner", class: "hint warn", text: t("role.readOnly") }),
           panel,
         ]),
+    footer(),
   );
   // コメントとタスクの詳細はどのタブからでも開くので、タブの中身の外に置く。
   // (閲覧権限しか無いときの囲いも外れるため、詳細は自前で無効にする。)

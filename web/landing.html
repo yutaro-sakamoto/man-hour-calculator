@@ -201,6 +201,13 @@
         font-size: 13px;
         color: var(--ink-muted);
       }
+      /* 2 行に分ける。ライセンスと、意見の出しどころは別の話。 */
+      footer span {
+        display: block;
+      }
+      footer span + span {
+        margin-top: 6px;
+      }
 
       /* 言語の切り替え。既定は英語で、JS が無くてもそのまま読める。 */
       body[data-lang="en"] [lang="ja"],
@@ -369,6 +376,34 @@ cargo build --profile server -p mhc-server
           <a href="https://github.com/yutaro-sakamoto/man-hour-calculator">GitHub</a> ·
           <a href="https://github.com/yutaro-sakamoto/man-hour-calculator/blob/main/README_JP.md"
             >README (日本語)</a
+          ></span
+        >
+        <span lang="en"
+          >Something wrong, or something missing?
+          <a
+            href="https://github.com/yutaro-sakamoto/man-hour-calculator/issues/new?labels=bug"
+            data-feedback="bug"
+            >Report a bug</a
+          >
+          ·
+          <a
+            href="https://github.com/yutaro-sakamoto/man-hour-calculator/issues/new"
+            data-feedback="idea"
+            >Suggest something</a
+          ></span
+        >
+        <span lang="ja"
+          >おかしなところ、足りないものがあれば
+          <a
+            href="https://github.com/yutaro-sakamoto/man-hour-calculator/issues/new?labels=bug"
+            data-feedback="bug"
+            >不具合を報告</a
+          >
+          ·
+          <a
+            href="https://github.com/yutaro-sakamoto/man-hour-calculator/issues/new"
+            data-feedback="idea"
+            >ご意見・ご要望</a
           ></span
         >
       </footer>

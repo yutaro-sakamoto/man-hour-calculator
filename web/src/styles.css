@@ -1332,6 +1332,28 @@ details.data-view .scroll {
   vector-effect: non-scaling-stroke;
 }
 
+/* ===== 画面の下の案内 ===== */
+.app-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 36px;
+  padding-top: 16px;
+  border-top: 1px solid var(--grid);
+  font-size: 13px;
+  color: var(--ink-muted);
+}
+.app-footer a {
+  color: var(--ink-secondary);
+}
+.app-footer a:hover {
+  color: var(--series);
+}
+.app-footer .sep {
+  color: var(--grid);
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

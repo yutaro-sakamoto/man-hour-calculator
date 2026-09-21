@@ -91,6 +91,14 @@ You need:
 There are **no Rust dependencies**. The Node dependencies are build-time only (TypeScript,
 esbuild, ESLint, Prettier) and none of them end up in what is shipped.
 
+### Or use the dev container
+
+`.devcontainer/` has all of the above already in it — the toolchain, Node 22, the right
+binaryen, a C compiler for the bundled SQLite, and Playwright's Chromium. Open the repo in
+a dev container and `cargo xtask build && cargo test --workspace` works with nothing else
+to install. CI builds the same container and runs a smoke test inside it, so what is
+written here and what actually works do not drift apart.
+
 ## Checking
 
 ```sh

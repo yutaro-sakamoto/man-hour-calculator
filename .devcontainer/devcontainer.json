@@ -1,0 +1,35 @@
+{
+  "name": "man-hour-calculator",
+  "build": { "dockerfile": "Dockerfile" },
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "22" },
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+
+  // 箱を作ったあとに 1 回だけ。ここまで済ませておけば、開いてすぐ
+  // `cargo xtask build` と `npx playwright test` が通る。
+  "postCreateCommand": ".devcontainer/setup.sh",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "ms-playwright.playwright"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "[rust]": { "editor.defaultFormatter": "rust-lang.rust-analyzer" }
+      }
+    }
+  },
+
+  // サーバを立てて試すとき用。使わなければ開かれない。
+  "forwardPorts": [8080],
+  "portsAttributes": { "8080": { "label": "mhc-server" } },
+
+  "remoteUser": "vscode"
+}
