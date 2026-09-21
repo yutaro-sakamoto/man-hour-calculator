@@ -9,12 +9,63 @@
  * (`web/src/model/markdown.ts` を参照)。
  */
 
-import type { Comment } from "../api/types.ts";
+import { LocalApiClient } from "../api/local.ts";
+import {
+  MAX_ATTACHMENTS_PER_COMMENT,
+  MAX_ATTACHMENT_BYTES,
+  type Attachment,
+  type Comment,
+} from "../api/types.ts";
 import type { AppActions, AppState } from "../app.ts";
 import { lang, t } from "../i18n.ts";
-import { renderMarkdown } from "../model/markdown.ts";
+import {
+  attachmentMarkdown,
+  attachmentUrl,
+  formatBytes,
+  isImage,
+  readAttachments,
+  type RejectReason,
+} from "../model/attachments.ts";
+import { renderMarkdown, type AttachmentSource } from "../model/markdown.ts";
 import { newId } from "../model/project.ts";
 import { button, h, iconButton } from "./dom.ts";
+
+/** 添付を id で引く口。本文のなかの `![](attachment:<id>)` を解く。 */
+function sourceOf(attachments: readonly Attachment[]): AttachmentSource {
+  return (id) => {
+    const found = attachments.find((item) => item.id === id);
+    return found === undefined ? null : { url: attachmentUrl(found), filename: found.filename };
+  };
+}
+
+/**
+ * 本文に出てこなかった添付の一覧。
+ *
+ * 画像は本文のなかに出るので、ここには出さない。二重に出すと、同じものが
+ * 上下に並んで何が起きたのか分からなくなる。
+ */
+function renderAttachmentList(
+  body: string,
+  attachments: readonly Attachment[],
+): HTMLElement | null {
+  const left = attachments.filter((item) => !body.includes(`attachment:${item.id}`));
+  if (left.length === 0) return null;
+  return h(
+    "div",
+    { class: "attachment-list" },
+    left.map((item) =>
+      h("a", {
+        class: "attachment-chip",
+        text: `${item.filename} (${formatBytes(item.size)})`,
+        attrs: {
+          href: attachmentUrl(item),
+          download: item.filename,
+          "data-attachment": item.id,
+        },
+      }),
+    ),
+  );
+}
 
 /** その宛先に付いているコメントの数。 */
 export function commentCount(state: AppState, taskId: string | null): number {
@@ -35,6 +86,7 @@ export function commentButton(
       actions.patch((draft) => {
         draft.commentScope = { taskId };
         draft.commentDraft = "";
+        draft.commentAttachments = [];
         draft.commentPreview = false;
         draft.editingCommentId = null;
       });
@@ -88,6 +140,9 @@ function renderComment(state: AppState, actions: AppActions, comment: Comment): 
                 draft.editingCommentId = comment.id;
                 draft.commentDraft = comment.body;
                 draft.commentPreview = false;
+                // 書き直しでは、いまの添付がそのまま書きかけの添付になる。
+                // 送られた一覧が新しい一覧になるので、持ち越さないと消える。
+                draft.commentAttachments = [...comment.attachments];
               });
             },
             { class: "icon-text" },
@@ -103,7 +158,8 @@ function renderComment(state: AppState, actions: AppActions, comment: Comment): 
           })
         : null,
     ]),
-    renderMarkdown(comment.body),
+    renderMarkdown(comment.body, sourceOf(comment.attachments)),
+    renderAttachmentList(comment.body, comment.attachments),
   ]);
 }
 
@@ -117,6 +173,49 @@ function renderComposer(state: AppState, actions: AppActions, taskId: string | n
     if (open === null) return;
     state.comments = await state.client.listComments(open.id);
   };
+
+  /** 選ばれたファイルを書きかけの添付に足す。断った理由は状態表示に出す。 */
+  const attach = (files: readonly File[]): void => {
+    if (files.length === 0) return;
+    actions.run(async () => {
+      const { accepted, rejected } = await readAttachments(
+        files,
+        state.commentAttachments,
+        newId,
+        // サーバに繋いでいるときは手元の容量は関係ない。
+        state.client.remote ? null : LocalApiClient.remainingBytes(),
+      );
+      state.commentAttachments = [...state.commentAttachments, ...accepted];
+      // 画像だけ本文に差し込む。それ以外はコメントの下に、
+      // 押せば落とせるリンクとして出る。
+      const marks = accepted
+        .map(attachmentMarkdown)
+        .filter((mark): mark is string => mark !== null)
+        .join("\n");
+      if (marks !== "") {
+        const body = state.commentDraft;
+        state.commentDraft = body === "" ? marks : `${body}\n\n${marks}`;
+      }
+      if (rejected.length > 0) {
+        const first = rejected[0];
+        if (first !== undefined) throw new AttachRejected(first.filename, first.reason);
+      }
+    });
+  };
+
+  const fileInput = h("input", {
+    class: "attach-input",
+    attrs: { type: "file", multiple: true, "aria-label": t("comments.attach") },
+    style: { display: "none" },
+    on: {
+      change: (event) => {
+        const input = event.target as HTMLInputElement;
+        const files = Array.from(input.files ?? []);
+        input.value = "";
+        attach(files);
+      },
+    },
+  });
 
   const area = h("textarea", {
     class: "comment-input",
@@ -132,21 +231,45 @@ function renderComposer(state: AppState, actions: AppActions, taskId: string | n
         // 入力欄の位置も乱れる。値は状態に控えるだけにする。
         state.commentDraft = (event.target as HTMLTextAreaElement).value;
       },
+      // 画面の写真は、たいてい貼り付けで渡ってくる。
+      paste: (event) => {
+        const files = Array.from(event.clipboardData?.files ?? []);
+        if (files.length === 0) return;
+        event.preventDefault();
+        attach(files);
+      },
+      dragover: (event) => {
+        event.preventDefault();
+      },
+      drop: (event) => {
+        const files = Array.from(event.dataTransfer?.files ?? []);
+        if (files.length === 0) return;
+        event.preventDefault();
+        attach(files);
+      },
     },
   });
   area.value = draft;
 
   const submit = (): void => {
     const body = state.commentDraft.trim();
-    if (body === "" || open === null) return;
+    if (open === null) return;
+    // 添付だけを送ることはできない。黙って何も起きないと、押したのに
+    // 反応が無いようにしか見えないので、理由を出す。
+    if (body === "") {
+      actions.run(() => Promise.reject(new Error(t("comments.needBody"))));
+      return;
+    }
     actions.run(async () => {
+      const attachments = state.commentAttachments;
       if (editing === null) {
-        await state.client.postComment(open.id, newId(), body, taskId ?? undefined);
+        await state.client.postComment(open.id, newId(), body, taskId ?? undefined, attachments);
       } else {
-        await state.client.editComment(editing, body);
+        await state.client.editComment(editing, body, attachments);
       }
       await reload();
       state.commentDraft = "";
+      state.commentAttachments = [];
       state.editingCommentId = null;
       state.commentPreview = false;
     });
@@ -179,10 +302,58 @@ function renderComposer(state: AppState, actions: AppActions, taskId: string | n
       ? h("div", { class: "comment-preview" }, [
           draft.trim() === ""
             ? h("p", { class: "empty", text: t("comments.nothingToPreview") })
-            : renderMarkdown(draft),
+            : renderMarkdown(draft, sourceOf(state.commentAttachments)),
         ])
       : area,
+    fileInput,
+    // 付けたものを一覧にする。外すと本文の差し込みも一緒に消す
+    // (本文に綴りだけ残ると、出どころの無い壊れた印になる)。
+    state.commentAttachments.length === 0
+      ? null
+      : h(
+          "div",
+          { class: "attachment-drafts" },
+          state.commentAttachments.map((item) =>
+            h("span", { class: "chip", dataset: { draftAttachment: item.id } }, [
+              isImage(item)
+                ? h("img", {
+                    class: "attachment-thumb",
+                    attrs: { src: attachmentUrl(item), alt: item.filename },
+                  })
+                : null,
+              `${item.filename} (${formatBytes(item.size)})`,
+              iconButton("×", t("comments.detach", { name: item.filename }), () => {
+                actions.patch((d) => {
+                  d.commentAttachments = d.commentAttachments.filter(
+                    (other) => other.id !== item.id,
+                  );
+                  d.commentDraft = d.commentDraft
+                    .split("\n")
+                    .filter((line) => !line.includes(`attachment:${item.id}`))
+                    .join("\n")
+                    .trim();
+                });
+              }),
+            ]),
+          ),
+        ),
     h("div", { class: "row-actions" }, [
+      button(
+        t("comments.attach"),
+        () => {
+          fileInput.click();
+        },
+        {
+          dataset: { action: "attach" },
+          attrs: {
+            disabled: state.commentAttachments.length >= MAX_ATTACHMENTS_PER_COMMENT,
+          },
+          title: t("comments.attachHint", {
+            count: MAX_ATTACHMENTS_PER_COMMENT,
+            size: formatBytes(MAX_ATTACHMENT_BYTES),
+          }),
+        },
+      ),
       button(editing === null ? t("comments.post") : t("comments.update"), submit, {
         class: "primary",
         dataset: { action: "post-comment" },
@@ -193,6 +364,7 @@ function renderComposer(state: AppState, actions: AppActions, taskId: string | n
             actions.patch((d) => {
               d.editingCommentId = null;
               d.commentDraft = "";
+              d.commentAttachments = [];
             });
           }),
     ]),
@@ -220,6 +392,7 @@ export function renderCommentsModal(state: AppState, actions: AppActions): HTMLE
       draft.commentScope = null;
       draft.editingCommentId = null;
       draft.commentDraft = "";
+      draft.commentAttachments = [];
     });
   };
 
@@ -260,4 +433,16 @@ export function renderCommentsModal(state: AppState, actions: AppActions): HTMLE
     },
     [panel],
   );
+}
+
+/**
+ * 付けられなかったことを伝えるための失敗。
+ *
+ * `actions.run` が受け取って状態表示に出す。ここで `alert` を出さないのは、
+ * 残りの添付は受け付けているため (全部が駄目だったとは限らない)。
+ */
+class AttachRejected extends Error {
+  constructor(filename: string, reason: RejectReason) {
+    super(t(`comments.reject.${reason}`, { name: filename }));
+  }
 }

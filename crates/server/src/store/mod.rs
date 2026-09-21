@@ -18,13 +18,14 @@ pub mod postgres;
 pub mod schema;
 pub mod sqlite;
 
+use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
 use mhc_api::error::{ApiError, ApiResult};
 use mhc_api::model::{
-    AccessEntry, Comment, CommentId, Document, Principal, Project, ProjectGroup, ProjectGroupId,
-    ProjectId, ProjectMeta, ProjectRole, ProjectStatus, SystemRole, User, UserGroup, UserGroupId,
-    UserId,
+    AccessEntry, Attachment, Comment, CommentId, Document, Principal, Project, ProjectGroup,
+    ProjectGroupId, ProjectId, ProjectMeta, ProjectRole, ProjectStatus, SystemRole, User,
+    UserGroup, UserGroupId, UserId,
 };
 use mhc_api::store::Store;
 
@@ -104,6 +105,15 @@ impl<'a> Reader<'a> {
             Value::Text(text) => Ok(Some(text.clone())),
             other => Err(ApiError::internal(format!(
                 "文字列か NULL のはずの列が {other:?} でした"
+            ))),
+        }
+    }
+
+    fn int(&mut self) -> ApiResult<i64> {
+        match self.next()? {
+            Value::Int(value) => Ok(*value),
+            other => Err(ApiError::internal(format!(
+                "整数のはずの列が {other:?} でした"
             ))),
         }
     }
@@ -587,7 +597,13 @@ impl<C: Sql> Store for &SqlStore<C> {
             "DELETE FROM project_access WHERE project_id = ?",
             std::slice::from_ref(&key),
         )?;
-        // 行き先の無いコメントを残さない。
+        // 行き先の無いコメントと添付を残さない。添付を先に消す
+        // (コメントが消えたあとでは、どれを消せばよいか引けない)。
+        self.sql().execute(
+            "DELETE FROM attachments WHERE comment_id IN \
+             (SELECT id FROM comments WHERE project_id = ?)",
+            std::slice::from_ref(&key),
+        )?;
         self.sql().execute(
             "DELETE FROM comments WHERE project_id = ?",
             std::slice::from_ref(&key),
@@ -607,7 +623,14 @@ impl<C: Sql> Store for &SqlStore<C> {
             ),
             &[Value::text(project.as_str())],
         )?;
-        rows.iter().map(read_comment).collect()
+        let mut comments: Vec<Comment> = rows.iter().map(read_comment).collect::<ApiResult<_>>()?;
+        // 添付はプロジェクトぶんをまとめて 1 回で引く。コメントごとに
+        // 問い合わせると、一覧を開くだけで件数ぶんの往復になる。
+        let mut by_comment = self.attachments_of_project(project)?;
+        for comment in &mut comments {
+            comment.attachments = by_comment.remove(comment.id.as_str()).unwrap_or_default();
+        }
+        Ok(comments)
     }
 
     fn comment(&self, id: &CommentId) -> ApiResult<Option<Comment>> {
@@ -615,7 +638,12 @@ impl<C: Sql> Store for &SqlStore<C> {
             &format!("SELECT {COMMENT_COLUMNS} FROM comments WHERE id = ?"),
             &[Value::text(id.as_str())],
         )?;
-        rows.first().map(read_comment).transpose()
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        let mut comment = read_comment(row)?;
+        comment.attachments = self.attachments_of(id)?;
+        Ok(Some(comment))
     }
 
     fn put_comment(&mut self, comment: Comment) -> ApiResult<()> {
@@ -637,18 +665,87 @@ impl<C: Sql> Store for &SqlStore<C> {
                 Value::text(&comment.created_at),
                 Value::opt_text(comment.updated_at.as_deref()),
             ],
-        )
+        )?;
+        // 添付は毎回まるごと置き換える。`edit_comment` が送られた一覧を
+        // そのまま新しい一覧とするので、差分を取る意味が無い。
+        self.replace_attachments(&comment.id, &comment.attachments)
     }
 
     fn remove_comment(&mut self, id: &CommentId) -> ApiResult<bool> {
         if self.comment(id)?.is_none() {
             return Ok(false);
         }
+        let key = Value::text(id.as_str());
         self.sql().execute(
-            "DELETE FROM comments WHERE id = ?",
+            "DELETE FROM attachments WHERE comment_id = ?",
+            std::slice::from_ref(&key),
+        )?;
+        self.sql()
+            .execute("DELETE FROM comments WHERE id = ?", &[key])?;
+        Ok(true)
+    }
+}
+
+impl<C: Sql> SqlStore<C> {
+    fn attachments_of(&self, id: &CommentId) -> ApiResult<Vec<Attachment>> {
+        let rows = self.sql().query(
+            &format!(
+                "SELECT {ATTACHMENT_COLUMNS} FROM attachments WHERE comment_id = ? \
+                 ORDER BY position"
+            ),
             &[Value::text(id.as_str())],
         )?;
-        Ok(true)
+        rows.iter().map(read_attachment).collect()
+    }
+
+    fn attachments_of_project(
+        &self,
+        project: &ProjectId,
+    ) -> ApiResult<BTreeMap<String, Vec<Attachment>>> {
+        let rows = self.sql().query(
+            &format!(
+                "SELECT comment_id, {ATTACHMENT_COLUMNS} FROM attachments \
+                 WHERE comment_id IN (SELECT id FROM comments WHERE project_id = ?) \
+                 ORDER BY comment_id, position"
+            ),
+            &[Value::text(project.as_str())],
+        )?;
+        let mut grouped: BTreeMap<String, Vec<Attachment>> = BTreeMap::new();
+        for row in &rows {
+            let comment_id = match row.first() {
+                Some(Value::Text(text)) => text.clone(),
+                _ => return Err(ApiError::internal("添付の comment_id が読めません")),
+            };
+            grouped
+                .entry(comment_id)
+                .or_default()
+                .push(read_attachment(&row[1..].to_vec())?);
+        }
+        Ok(grouped)
+    }
+
+    fn replace_attachments(&self, id: &CommentId, attachments: &[Attachment]) -> ApiResult<()> {
+        self.sql().execute(
+            "DELETE FROM attachments WHERE comment_id = ?",
+            &[Value::text(id.as_str())],
+        )?;
+        for (position, attachment) in attachments.iter().enumerate() {
+            self.sql().execute(
+                "INSERT INTO attachments \
+                 (id, comment_id, position, filename, mime, size, data) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                &[
+                    Value::text(&attachment.id),
+                    Value::text(id.as_str()),
+                    Value::Int(position as i64),
+                    Value::text(&attachment.filename),
+                    Value::text(&attachment.mime),
+                    Value::Int(attachment.size as i64),
+                    Value::text(&attachment.data),
+                ],
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -664,6 +761,21 @@ fn read_comment(row: &Row) -> ApiResult<Comment> {
         body: read.text()?,
         created_at: read.text()?,
         updated_at: read.opt_text()?,
+        // 添付は別の表なので、呼び出し側が埋める。
+        attachments: Vec::new(),
+    })
+}
+
+const ATTACHMENT_COLUMNS: &str = "id, filename, mime, size, data";
+
+fn read_attachment(row: &Row) -> ApiResult<Attachment> {
+    let mut read = Reader::new(row);
+    Ok(Attachment {
+        id: read.text()?,
+        filename: read.text()?,
+        mime: read.text()?,
+        size: read.int()?.max(0) as u64,
+        data: read.text()?,
     })
 }
 

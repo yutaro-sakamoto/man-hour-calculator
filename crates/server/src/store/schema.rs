@@ -95,6 +95,22 @@ const STEPS: &[&[&str]] = &[
         )",
         "CREATE INDEX comments_by_project ON comments (project_id, created_at)",
     ],
+    // 版 3: コメントの添付。
+    //
+    // これも行に分ける。コメントの本文に混ぜると、本文を直すたびに
+    // 添付のバイト列まで読み書きすることになる。
+    &[
+        "CREATE TABLE attachments (
+            id TEXT PRIMARY KEY,
+            comment_id TEXT NOT NULL,
+            position BIGINT NOT NULL,
+            filename TEXT NOT NULL,
+            mime TEXT NOT NULL,
+            size BIGINT NOT NULL,
+            data TEXT NOT NULL
+        )",
+        "CREATE INDEX attachments_by_comment ON attachments (comment_id, position)",
+    ],
 ];
 
 /// いま入っている版。まだ何も無ければ 0。

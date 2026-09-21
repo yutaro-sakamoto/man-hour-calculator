@@ -138,7 +138,12 @@ impl<T: Store + ?Sized> Store for &mut T {
     }
 }
 
-pub const STORE_VERSION: u32 = 2;
+/// 保存データの版。
+///
+/// 3 はコメントの添付が入った版。`Attachment` は `#[serde(default)]` なので、
+/// 版 2 の中身は**そのまま読める** (添付が空として入る)。版を上げるのは、
+/// 新しい版で書いたものを古いバイナリに読ませないため。
+pub const STORE_VERSION: u32 = 3;
 
 impl MemoryStore {
     pub fn new() -> Self {

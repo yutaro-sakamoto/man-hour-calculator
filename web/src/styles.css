@@ -1682,6 +1682,55 @@ td.num.short {
  * コメントの本文。他人が書いた Markdown を組み立てたもの。
  * 周りより一段小さくして、画面の見出しと張り合わないようにする。
  */
+/* ===== コメントの添付 ===== */
+.attachment-drafts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.attachment-drafts .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.attachment-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--grid);
+}
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.attachment-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border: 1px solid var(--grid);
+  border-radius: 999px;
+  font-size: 12px;
+  text-decoration: none;
+  color: var(--ink-secondary);
+  background: var(--surface-sunken);
+}
+.attachment-chip:hover {
+  color: var(--series);
+  border-color: var(--series);
+}
+/* 本文のなかの画像。窓の幅を超えて広がらないようにする。 */
+.comment-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  border: 1px solid var(--grid);
+  display: block;
+  margin: 8px 0;
+}
+
 .markdown {
   font-size: 14px;
   line-height: 1.7;

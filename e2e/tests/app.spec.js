@@ -124,7 +124,7 @@ test("親タスクは配下の合計を表示し、直接は編集できない",
   await open(page);
   const parent = rows(page).first();
   await expect(parent).toHaveAttribute("data-parent", "true");
-  // 要件定義 (5/8/20) と基本設計 (3/5/12) の合計。
+  // Requirements (5/8/20) とArchitecture (3/5/12) の合計。
   await expect(parent.locator("td.num").nth(0)).toHaveText("8.0");
   await expect(parent.locator("td.num").nth(1)).toHaveText("13.0");
   await expect(parent.locator("td.num").nth(2)).toHaveText("32.0");
@@ -141,13 +141,13 @@ test("階層の上げ下げと並べ替えができる", async ({ page }) => {
   const cellText = async (index) =>
     rows(page).nth(index).locator('input[type="text"]').first().inputValue();
 
-  // 「テストとリリース」を 1 つ上げると「実装フェーズ」の直前に来る。
+  // 「Test and release」を 1 つ上げると「Build phase」の直前に来る。
   await recompute(page, () =>
     rows(page).nth(7).locator('button[title="上へ"]').click(),
   );
-  expect(await cellText(3)).toBe("テストとリリース");
+  expect(await cellText(3)).toBe("Test and release");
 
-  // 階層を下げると「設計フェーズ」の子になる。
+  // 階層を下げると「Design phase」の子になる。
   await recompute(page, () =>
     rows(page).nth(3).locator('button[title="階層を下げる"]').click(),
   );
@@ -172,7 +172,7 @@ test("子タスクを追加すると親になり、削除は部分木ごと消�
   await expect(rows(page)).toHaveCount(9);
   await expect(rows(page).nth(1)).toHaveAttribute("data-parent", "true");
 
-  // 「設計フェーズ」を消すと配下 3 件ごと消える。部分木なので問い返される。
+  // 「Design phase」を消すと配下 3 件ごと消える。部分木なので問い返される。
   page.once("dialog", (dialog) => dialog.accept());
   await recompute(page, () =>
     rows(page).first().locator('button[title*="を削除"]').click(),
@@ -186,9 +186,10 @@ test("絞り込みは表示だけに効き、計算結果を変えない", async
   const before = await tile(page, "p80");
 
   await openTab(page, "tasks");
-  await page.fill(".filter-text", "実装");
-  await expect(rows(page)).toHaveCount(4); // 実装フェーズ + 子 3 件
-  await expect(page.locator(".filter-count")).toContainText("4");
+  await page.fill(".filter-text", "implementation");
+  // API / UI の 2 件と、文脈として残る親の Build phase。
+  await expect(rows(page)).toHaveCount(3);
+  await expect(page.locator(".filter-count")).toContainText("3");
 
   await openTab(page, "forecast");
   expect(await tile(page, "p80")).toBe(before);
@@ -201,7 +202,7 @@ test("絞り込みは表示だけに効き、計算結果を変えない", async
 test("優先度で絞り込める", async ({ page }) => {
   await open(page);
   await page.selectOption('select[aria-label="優先度"]', "high");
-  // 高: 設計フェーズ・要件定義・API 実装 + 文脈として残る実装フェーズ。
+  // 高: Design phase・Requirements・API implementation + 文脈として残るBuild phase。
   await expect(rows(page)).toHaveCount(4);
 });
 
@@ -254,7 +255,7 @@ test("実績を入力すると見通しが更新される", async ({ page }) => 
 
   await openTab(page, "tasks");
   await page.click('.segmented button:text("すべて")');
-  const target = rows(page).nth(1); // 要件定義
+  const target = rows(page).nth(1); // Requirements
 
   await recompute(page, async () => {
     await target.locator('input[type="date"]').first().fill("2026-09-21");
@@ -281,7 +282,7 @@ test("完了日を入れると実績工数に置き換わる", async ({ page }) 
 
   await expect(target.locator(".pill")).toHaveText("完了");
   // 9/24(木)・9/25(金)・9/28〜9/30 の 5 稼働日ぶん。ただしサンプルには
-  // 毎週の定例 (45 分) と隔週の振り返り (60 分) が入っているので、
+  // 毎週の Team sync (45 分) と Biweekly retro (60 分) が入っているので、
   // そのぶんだけ 5.0 人日を下回る。
   // 「すべて」表示の数値列は 最小・最可能・最大・進捗・消化・完了予測 の順。
   const spent = Number(await target.locator("td.num").nth(4).innerText());
@@ -364,7 +365,7 @@ test("共有した予定は参加者全員の稼働を削る", async ({ page }) 
   const before = await capacityFor("0");
 
   // 参加者から 1 人目を外すと、その人の稼働は戻る。
-  await openEvent(page, "全体定例");
+  await openEvent(page, "Team sync");
   await recompute(page, () =>
     page
       .locator('.modal-card .participant-list input[type="checkbox"]')
@@ -378,8 +379,8 @@ test("共有した予定は参加者全員の稼働を削る", async ({ page }) 
 test("隔週の予定は 1 週おきにしか効かない", async ({ page }) => {
   await open(page);
   await openTab(page, "calendar");
-  // 「隔週の振り返り」はサンプルで隔週に設定してある。
-  await openEvent(page, "隔週の振り返り");
+  // 「Biweekly retro」はサンプルで隔週に設定してある。
+  await openEvent(page, "Biweekly retro");
   await expect(page.locator(".modal-card select").first()).toHaveValue("2");
   await closeEditor(page);
 
@@ -393,7 +394,7 @@ test("隔週の予定は 1 週おきにしか効かない", async ({ page }) => 
   // 開始日が日曜なので、隔週の予定は日曜にしか当たらない (= 稼働日には影響しない)。
   // 毎週の定例だけが平日の稼働を削っていることを、繰り返しを切って確かめる。
   const before = await capacityOn("2026-09-28");
-  await openEvent(page, "全体定例");
+  await openEvent(page, "Team sync");
   await recompute(page, () =>
     page.locator(".modal-card select").first().selectOption("0"),
   );
@@ -414,7 +415,7 @@ test("予定の時刻は 5 分単位で効く", async ({ page }) => {
   const before = await capacityOn("2026-09-28");
 
   // 10:00〜10:45 を 10:00〜10:05 に縮めると、その 40 分ぶん稼働が戻る。
-  await openEvent(page, "全体定例");
+  await openEvent(page, "Team sync");
   await recompute(page, () =>
     page.locator('.modal-card input[type="time"]').nth(1).fill("10:05"),
   );
@@ -508,7 +509,7 @@ test("ファイルに保存して読み込み直すと新しいプロジェク�
 
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    fileMenu(page, "ファイルに保存"),
+    fileMenu(page, "このプロジェクトを保存"),
   ]);
   const file = path.join(os.tmpdir(), `mhc-${Date.now()}.mhc.json`);
   await download.saveAs(file);
@@ -524,6 +525,33 @@ test("ファイルに保存して読み込み直すと新しいプロジェク�
   await fs.unlink(file);
 });
 
+test("まとめて書き出すと、全部のプロジェクトが 1 つのファイルに入る", async ({
+  page,
+}) => {
+  await open(page);
+  await openTab(page, "projects");
+  await addProject(page, "二件目");
+  await addProject(page, "三件目");
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    fileMenu(page, "すべて保存"),
+  ]);
+  const file = path.join(os.tmpdir(), `mhc-${Date.now()}.mhcall.json`);
+  await download.saveAs(file);
+  const saved = JSON.parse(await fs.readFile(file, "utf8"));
+  expect(saved.schema).toBe("man-hour-calculator-bundle");
+  expect(saved.projects).toHaveLength(3);
+  expect(saved.projects.map((item) => item.name)).toContain("三件目");
+
+  // 読み込むと 3 件とも足される (いまの 3 件は消えないので 6 件になる)。
+  await page.setInputFiles('input[type="file"][accept*="json"]', file);
+  await expect(page.locator("#status")).toContainText("3 件");
+  await openTab(page, "projects");
+  await expect(page.locator("tr[data-project]")).toHaveCount(6);
+  await fs.unlink(file);
+});
+
 test("CSV で書き出して読み込み直せる", async ({ page }) => {
   await open(page);
   const [download] = await Promise.all([
@@ -534,7 +562,7 @@ test("CSV で書き出して読み込み直せる", async ({ page }) => {
   await download.saveAs(file);
   const csv = await fs.readFile(file, "utf8");
   expect(csv).toContain("level,name,group");
-  expect(csv).toContain("要件定義");
+  expect(csv).toContain("Requirements");
 
   await page.setInputFiles('input[type="file"][accept*="csv"]', file);
   await expect(rows(page)).toHaveCount(8);
@@ -571,7 +599,7 @@ test("プロジェクトを増やして切り替えられる", async ({ page }) 
   );
 
   // ヘッダの切り替えで元に戻れる。
-  await page.selectOption(".project-picker", { label: "サンプル案件" });
+  await page.selectOption(".project-picker", { label: "Sample project" });
   await expect(page.locator("#status")).toContainText(/ms\)/);
   await openTab(page, "tasks");
   await expect(rows(page)).toHaveCount(8);
@@ -587,7 +615,7 @@ test("プロジェクトの内容は互いに混ざらない", async ({ page }) 
   await recompute(page, () => page.click("#add-row"));
   await expect(rows(page)).toHaveCount(1);
 
-  await page.selectOption(".project-picker", { label: "サンプル案件" });
+  await page.selectOption(".project-picker", { label: "Sample project" });
   await expect(rows(page)).toHaveCount(8, { timeout: 5000 });
 });
 
@@ -737,11 +765,11 @@ test("入力中に再計算が走ってもフォーカスが飛ばない", async
   await open(page);
   const input = rows(page).nth(1).locator('input[type="text"]').first();
   await input.click();
-  await input.fill("要件定義と調査");
+  await input.fill("Requirements and research");
   // 再計算のデバウンスをまたぐ。
   await page.waitForTimeout(600);
   await expect(input).toBeFocused();
-  await expect(input).toHaveValue("要件定義と調査");
+  await expect(input).toHaveValue("Requirements and research");
 });
 
 test("グラフが実際に描画され、キーボードでも読める", async ({ page }) => {
@@ -848,7 +876,7 @@ test("行を押すとタスクの詳細が開き、そこで直すと予測が�
   const before = await tile(page, "p80");
 
   await page
-    .locator('.forecast-table button.row-open:text("API 実装")')
+    .locator('.forecast-table button.row-open:text("API implementation")')
     .click();
   const detail = page.locator(".modal-card.detail-card");
   await expect(detail).toBeVisible();
@@ -873,7 +901,7 @@ test("グループを押すと合計が読み取り専用で出て、子をた�
   await open(page);
   await openTab(page, "forecast");
   await page
-    .locator('.forecast-table button.row-open:text("実装フェーズ")')
+    .locator('.forecast-table button.row-open:text("Build phase")')
     .click();
   const detail = page.locator(".modal-card.detail-card");
   await expect(detail).toBeVisible();
@@ -885,9 +913,11 @@ test("グループを押すと合計が読み取り専用で出て、子をた�
 
   // 子を押すと、窓がその子に移る。
   await detail
-    .locator('[data-section="children"] button:text("API 実装")')
+    .locator('[data-section="children"] button:text("API implementation")')
     .click();
-  await expect(page.locator(".detail-heading")).toHaveText("API 実装");
+  await expect(page.locator(".detail-heading")).toHaveText(
+    "API implementation",
+  );
   await expect(
     page.locator('.modal-card.detail-card input[data-focus$=":likely"]'),
   ).toHaveCount(1);
@@ -989,7 +1019,7 @@ test("一覧に状態が出て、遅れているものが先頭に来る", async
   await openTab(page, "projects");
 
   // 見本には期限が入っているので、状態が「—」ではなく判定として出る。
-  const sample = listRow(page, "サンプル案件");
+  const sample = listRow(page, "Sample project");
   await expect(sample).toHaveAttribute(
     "data-health",
     /atRisk|late|onTrack|behindPace|inProgress/,
@@ -1073,7 +1103,7 @@ test("期限とグループは一覧から直せる", async ({ page }) => {
     page.locator('[data-project-group] input[value="第一部"]'),
   ).toHaveCount(1);
 
-  const row = listRow(page, "サンプル案件");
+  const row = listRow(page, "Sample project");
   await row
     .locator('select[aria-label="グループ"]')
     .selectOption({ label: "第一部" });
@@ -1139,7 +1169,7 @@ test("グループに配った権限はメンバー全員に効く", async ({ pa
 
   // チームから外すと、一覧からも消える。
   await openTab(page, "projects");
-  await actAs(page, "あなた");
+  await actAs(page, "You");
   await openPanel(page, "アカウントのグループ");
   await page
     .locator("[data-user-group] .member-pick")
@@ -1194,7 +1224,7 @@ test("予定はカレンダーの升のなかに出る", async ({ page }) => {
   for (const date of ["2026-09-21", "2026-09-28"]) {
     const cell = page.locator(`.day[data-day="${date}"]`);
     await expect(cell.locator(".event-chip")).toHaveCount(1);
-    await expect(cell.locator(".event-chip")).toContainText("全体定例");
+    await expect(cell.locator(".event-chip")).toContainText("Team sync");
     await expect(cell.locator(".chip-time")).toContainText("10:00");
   }
   // 予定の無い日には何も出ない。
@@ -1233,7 +1263,7 @@ test("予定を押すと編集でき、消すと升からも消える", async ({
   await open(page);
   await openTab(page, "calendar");
 
-  await openEvent(page, "全体定例");
+  await openEvent(page, "Team sync");
   await recompute(page, () =>
     page.locator('.modal-card input[aria-label="内容"]').fill("朝会"),
   );
@@ -1274,7 +1304,7 @@ test("繰り返す予定は、その回だけ休みにでき、あとから戻�
   const beforeOther = await capacityOn("2026-09-21");
 
   // 9/28 の升から開いて、その回だけ休みにする。
-  await openEventOn(page, "2026-09-28", "全体定例");
+  await openEventOn(page, "2026-09-28", "Team sync");
   await recompute(page, () =>
     page.click('.modal-card button[data-action="skip-occurrence"]'),
   );
@@ -1286,7 +1316,7 @@ test("繰り返す予定は、その回だけ休みにでき、あとから戻�
   ).toHaveCount(0);
   await expect(
     page.locator(
-      '.day[data-day="2026-09-21"] .event-chip:has-text("全体定例")',
+      '.day[data-day="2026-09-21"] .event-chip:has-text("Team sync")',
     ),
   ).toHaveCount(1);
   // その日の稼働はまるごと戻る。
@@ -1295,7 +1325,7 @@ test("繰り返す予定は、その回だけ休みにでき、あとから戻�
   expect(await capacityOn("2026-09-21")).toBeCloseTo(beforeOther, 6);
 
   // 残っている回から窓を開くと、休みにした日が一覧に出ていて戻せる。
-  await openEventOn(page, "2026-09-21", "全体定例");
+  await openEventOn(page, "2026-09-21", "Team sync");
   await expect(
     page.locator('.modal-card .skipped-list [data-skipped="2026-09-28"]'),
   ).toHaveCount(1);
@@ -1305,7 +1335,7 @@ test("繰り返す予定は、その回だけ休みにでき、あとから戻�
   await closeEditor(page);
   await expect(
     page.locator(
-      '.day[data-day="2026-09-28"] .event-chip:has-text("全体定例")',
+      '.day[data-day="2026-09-28"] .event-chip:has-text("Team sync")',
     ),
   ).toHaveCount(1);
   expect(await capacityOn("2026-09-28")).toBeCloseTo(before, 6);
@@ -1328,11 +1358,11 @@ test("編集の窓は背景と Esc でも閉じる", async ({ page }) => {
   await open(page);
   await openTab(page, "calendar");
 
-  await openEvent(page, "全体定例");
+  await openEvent(page, "Team sync");
   await page.keyboard.press("Escape");
   await expect(page.locator(".modal-card")).toHaveCount(0);
 
-  await openEvent(page, "全体定例");
+  await openEvent(page, "Team sync");
   // 窓の外 (背景) を押す。
   await page.locator(".modal-backdrop").click({ position: { x: 5, y: 5 } });
   await expect(page.locator(".modal-card")).toHaveCount(0);
@@ -1580,4 +1610,116 @@ test("閲覧しかできない人もコメントは書ける", async ({ page }) 
   await page.click('button[data-action="post-comment"]');
   await expect(page.locator(".comment .markdown")).toContainText("楽観的");
   await expect(page.locator(".comment-author")).toHaveText("鈴木");
+});
+
+/** 1x1 の PNG。小さいが本物の画像なので、ブラウザが実際に描ける。 */
+const TINY_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+test("コメントに画像を添付すると本文のなかに出る", async ({ page }) => {
+  const { external } = await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+
+  await page
+    .locator(".comments-card .attach-input")
+    .setInputFiles({
+      name: "screen.png",
+      mimeType: "image/png",
+      buffer: TINY_PNG,
+    });
+  // 付けたものは一覧に出て、本文にも綴りが差し込まれる。
+  await expect(page.locator(".attachment-drafts .chip")).toHaveCount(1);
+  await expect(page.locator(".comment-input")).toHaveValue(/attachment:/);
+
+  await page
+    .locator(".comment-input")
+    .fill("この画面が変です\n\n![](attachment:X)");
+  // 差し込んだ綴りの id は書き換えてしまったので、付け直す。
+  await page.locator(".attachment-drafts button").click();
+  await expect(page.locator(".attachment-drafts")).toHaveCount(0);
+  await page
+    .locator(".comments-card .attach-input")
+    .setInputFiles({
+      name: "screen.png",
+      mimeType: "image/png",
+      buffer: TINY_PNG,
+    });
+
+  await page.click('button[data-action="post-comment"]');
+  const image = page.locator(".comment .markdown img.comment-image");
+  await expect(image).toHaveCount(1);
+  // 中身は data: URL なので、外へ取りに行かない。
+  await expect(image).toHaveAttribute("src", /^data:image\/png;base64,/);
+  expect(external, "外へ取りに行っている").toEqual([]);
+
+  // 書き直しの窓に入っても添付は残り、外せば消える。
+  await page.click('.comment button:text("編集")');
+  await expect(page.locator(".attachment-drafts .chip")).toHaveCount(1);
+  await page.locator(".attachment-drafts button").click();
+  await page.click('button[data-action="post-comment"]');
+  await expect(page.locator(".comment .markdown img")).toHaveCount(0);
+});
+
+test("画像でない添付は名前付きのリンクになる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+
+  await page.locator(".comments-card .attach-input").setInputFiles({
+    name: "log.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("2026-09-21 つまずいた箇所\n"),
+  });
+
+  // 添付だけでは送れない。押しても何も起きないのでは分からないので、
+  // 理由が出る。
+  await page.click('button[data-action="post-comment"]');
+  await expect(page.locator("#status")).toContainText("本文を書いて");
+  await expect(page.locator(".comment")).toHaveCount(0);
+
+  await page.locator(".comment-input").fill("ログを付けます");
+  await page.click('button[data-action="post-comment"]');
+
+  // 本文には入らない。コメントの下に、押せば落とせるリンクとして出る。
+  await expect(page.locator(".comment .markdown img")).toHaveCount(0);
+  const link = page.locator('.comment .attachment-list a[data-attachment]');
+  await expect(link).toContainText("log.txt");
+  await expect(link).toHaveAttribute("href", /^data:text\/plain/);
+  await expect(link).toHaveAttribute("download", "log.txt");
+});
+
+test("大きすぎる添付は付ける時点で断られる", async ({ page }) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+
+  // 1 MB を超えるファイル。保存に失敗してからでは遅いので、ここで断る。
+  await page.locator(".comments-card .attach-input").setInputFiles({
+    name: "big.png",
+    mimeType: "image/png",
+    buffer: Buffer.alloc(1024 * 1024 + 1),
+  });
+  await expect(page.locator("#status")).toHaveAttribute("data-tone", "error");
+  await expect(page.locator("#status")).toContainText("big.png");
+  await expect(page.locator(".attachment-drafts")).toHaveCount(0);
+});
+
+test("添付は 1 コメントにつき 5 件まで", async ({ page }) => {
+  await open(page);
+  await openTab(page, "tasks");
+  await openTaskComments(page, 1);
+
+  const files = Array.from({ length: 6 }, (_, index) => ({
+    name: `a${String(index)}.png`,
+    mimeType: "image/png",
+    buffer: TINY_PNG,
+  }));
+  await page.locator(".comments-card .attach-input").setInputFiles(files);
+  await expect(page.locator(".attachment-drafts .chip")).toHaveCount(5);
+  await expect(page.locator("#status")).toContainText("a5.png");
+  // 上限まで付いたら、付けるボタン自体が止まる。
+  await expect(page.locator('button[data-action="attach"]')).toBeDisabled();
 });

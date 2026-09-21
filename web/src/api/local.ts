@@ -15,6 +15,7 @@ import type { ApiClient, NewUserInput, ProjectPatchInput, UserPatchInput } from 
 import {
   ApiError,
   type AccessEntry,
+  type Attachment,
   type Comment,
   type CommentId,
   type ApiErrorCode,
@@ -78,6 +79,24 @@ export class LocalApiClient implements ApiClient {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * あと何バイト書けそうか。分からなければ `null`。
+   *
+   * 添付する**前に**見る。localStorage は変更のたびにワークスペース全体を
+   * 書き直すので、溢れるときは保存そのものが落ちる。付け終わってから
+   * 「保存できませんでした」と言われても、もう遅い。
+   */
+  static remainingBytes(): number | null {
+    try {
+      const used = exportState().length;
+      // だいたい 5 MiB。UTF-16 で数える実装があるので、文字数を
+      // そのままバイト数とみなして辛めに見ておく。
+      return Math.max(0, 5 * 1024 * 1024 - used);
+    } catch {
+      return null;
     }
   }
 
@@ -231,18 +250,24 @@ export class LocalApiClient implements ApiClient {
     commentId: CommentId,
     body: string,
     taskId?: string,
+    attachments: Attachment[] = [],
   ): Promise<Comment> {
     return this.write({
       op: "postComment",
       id,
       commentId,
       body,
+      attachments,
       ...(taskId === undefined ? {} : { taskId }),
     });
   }
 
-  editComment(commentId: CommentId, body: string): Promise<Comment> {
-    return this.write({ op: "editComment", commentId, body });
+  editComment(
+    commentId: CommentId,
+    body: string,
+    attachments: Attachment[] = [],
+  ): Promise<Comment> {
+    return this.write({ op: "editComment", commentId, body, attachments });
   }
 
   async deleteComment(commentId: CommentId): Promise<void> {

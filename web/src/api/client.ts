@@ -12,6 +12,7 @@
 
 import type {
   AccessEntry,
+  Attachment,
   Comment,
   CommentId,
   Principal,
@@ -112,9 +113,10 @@ export interface ApiClient {
     commentId: CommentId,
     body: string,
     taskId?: string,
+    attachments?: Attachment[],
   ) => Promise<Comment>;
-  /** 書き直せるのは本人だけ。 */
-  editComment: (commentId: CommentId, body: string) => Promise<Comment>;
+  /** 書き直せるのは本人だけ。`attachments` はそのまま新しい一覧になる。 */
+  editComment: (commentId: CommentId, body: string, attachments?: Attachment[]) => Promise<Comment>;
   /** 消せるのは本人か、プロジェクトの所有者。 */
   deleteComment: (commentId: CommentId) => Promise<void>;
 

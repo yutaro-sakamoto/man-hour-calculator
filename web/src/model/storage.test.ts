@@ -5,15 +5,18 @@ import { at } from "../testing.ts";
 import {
   emptyDocument,
   normalizeDocument,
+  readBundle,
   readProjectFile,
   sampleDocument,
+  sampleName,
+  toBundle,
   toFile,
 } from "./project.ts";
 import { csvToTasks, projectToCsv } from "./storage.ts";
 import { buildRows } from "./tree.ts";
 
 test("CSV に書き出して読み直すと階層と値が戻る", () => {
-  const project = sampleDocument("ja");
+  const project = sampleDocument();
   const csv = projectToCsv(buildRows(project.tasks));
   const restored = csvToTasks(csv);
 
@@ -66,7 +69,7 @@ test("スキーマが違うファイルは受け付けない", () => {
 });
 
 test("書き出したファイルをそのまま読み戻せる", () => {
-  const document = sampleDocument("ja");
+  const document = sampleDocument();
   const loaded = readProjectFile(JSON.parse(JSON.stringify(toFile("案件A", document))));
   assert.ok(loaded);
   assert.equal(loaded.name, "案件A");
@@ -130,17 +133,68 @@ test("壊れた項目は既定値に落として読み込む", () => {
 });
 
 test("サンプルは一貫している", () => {
-  for (const language of ["ja", "en"] as const) {
-    const project = sampleDocument(language);
-    const rows = buildRows(project.tasks);
-    assert.ok(
-      rows.some((row) => row.hasChildren),
-      "親子関係を含む",
-    );
-    assert.ok(
-      rows.every((row) => row.valid),
-      "すべて妥当な見積もり",
-    );
-    assert.ok(new Set(project.tasks.map((task) => task.id)).size === project.tasks.length);
-  }
+  const project = sampleDocument();
+  const rows = buildRows(project.tasks);
+  assert.ok(
+    rows.some((row) => row.hasChildren),
+    "親子関係を含む",
+  );
+  assert.ok(
+    rows.every((row) => row.valid),
+    "すべて妥当な見積もり",
+  );
+  assert.ok(new Set(project.tasks.map((task) => task.id)).size === project.tasks.length);
+});
+
+test("サンプルの中身は英語", () => {
+  // 表示言語を切り替えても、データは英語のまま。英語で使う人の手元に
+  // 最初から日本語が出ないようにする。
+  const project = sampleDocument();
+  const text = [
+    sampleName(),
+    ...project.tasks.map((task) => `${task.name} ${task.group}`),
+    ...project.calendar.members.map((member) => member.name),
+    ...project.calendar.events.map((event) => event.name),
+  ].join(" ");
+  const nonAscii = Array.from(text, (ch) => ch).filter((ch) => (ch.codePointAt(0) ?? 0) > 127);
+  assert.deepEqual(nonAscii, [], `英語以外が混じっている: ${nonAscii.join("")}`);
+});
+
+test("まとめて書き出したファイルを読み戻せる", () => {
+  const projects = [
+    { name: "A", document: sampleDocument() },
+    { name: "B", document: emptyDocument() },
+  ];
+  const loaded = readBundle(JSON.parse(JSON.stringify(toBundle(projects))));
+  assert.ok(loaded);
+  assert.equal(loaded.length, 2);
+  assert.deepEqual(
+    loaded.map((item) => item.name),
+    ["A", "B"],
+  );
+  assert.equal(loaded[0]?.document.tasks.length, projects[0]?.document.tasks.length);
+});
+
+test("1 件ぶんとまとめたものは印で見分ける", () => {
+  // 拡張子は目印でしかない。中身の schema だけで決める。
+  const one = toFile("A", sampleDocument());
+  assert.equal(readBundle(one), null, "1 件ぶんを束ねとして読まない");
+  assert.equal(readProjectFile(toBundle([{ name: "A", document: sampleDocument() }])), null);
+  assert.equal(readBundle({ schema: "man-hour-calculator-bundle", projects: [] }), null, "空");
+  assert.equal(readBundle(null), null);
+});
+
+test("まとめたファイルの壊れた 1 件は既定値に落ちる", () => {
+  // 外から来たファイルは何が入っているか分からない。1 件が壊れていても、
+  // 残りが読めるなら読む。
+  const loaded = readBundle({
+    schema: "man-hour-calculator-bundle",
+    version: 1,
+    projects: [{ name: "A", document: sampleDocument() }, { document: "壊れている" }],
+  });
+  assert.ok(loaded);
+  assert.equal(loaded.length, 2);
+  const broken = at(loaded, 1);
+  assert.equal(broken.name, "project 2");
+  assert.deepEqual(broken.document.tasks, []);
 });

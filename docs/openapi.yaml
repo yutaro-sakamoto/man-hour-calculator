@@ -592,6 +592,11 @@ paths:
 
         `taskId` を付けるとそのタスク宛てになる。本文は Markdown として
         保存するが、組み立てる (HTML にする) のは画面側。
+
+        添付は **1 ファイル 1 MiB・1 コメント 5 件まで**。中身は base64 で
+        この JSON に載せる。multipart を使わないのは、`Request` / `Reply` の
+        1 つの形を WASM と HTTP の両方で通すことで権限の判定を 1 か所に
+        保っているため (HTTP だけが別の道を通ると、その前提が崩れる)。
       operationId: postComment
       requestBody:
         required: true
@@ -604,6 +609,10 @@ paths:
                 commentId: { type: string }
                 taskId: { type: string }
                 body: { type: string, minLength: 1 }
+                attachments:
+                  type: array
+                  maxItems: 5
+                  items: { $ref: "#/components/schemas/Attachment" }
       responses:
         "201":
           description: 書き込んだ
@@ -628,6 +637,9 @@ paths:
       description: |
         **書いた本人だけ。** 所有者でも他人の発言は直せない
         (消すことはできるが、書き換えてしまえるのは別のこと)。
+
+        `attachments` は**送られたものがそのまま新しい一覧**になる。
+        省いたものは外れる。
       operationId: editComment
       requestBody:
         required: true
@@ -638,6 +650,10 @@ paths:
               required: [body]
               properties:
                 body: { type: string, minLength: 1 }
+                attachments:
+                  type: array
+                  maxItems: 5
+                  items: { $ref: "#/components/schemas/Attachment" }
       responses:
         "200":
           description: OK
@@ -865,6 +881,28 @@ components:
         body: { type: string, description: Markdown }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: [string, "null"], format: date-time }
+        attachments:
+          type: array
+          items: { $ref: "#/components/schemas/Attachment" }
+          description: 添付ファイル。無ければ空。
+
+    Attachment:
+      type: object
+      description: |
+        コメントに付けたファイル。**中身は解釈しない** — 画面に出すかどうかは
+        `mime` を見て画面が決める。1 ファイル 1 MiB・1 コメント 5 件まで。
+      required: [id, filename, mime, size, data]
+      properties:
+        id: { type: string }
+        filename: { type: string, minLength: 1 }
+        mime:
+          type: string
+          description: 申告された種類。信用せず、画像として出すかの判断にだけ使う
+        size: { type: integer, minimum: 0, description: 元のバイト数 }
+        data:
+          type: string
+          format: byte
+          description: base64 (パディングあり)。実際に届いた長さで大きさを検める
 
     AccessEntry:
       type: object
