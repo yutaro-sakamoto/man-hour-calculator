@@ -90,7 +90,8 @@ while read -r file link; do
 done < <(
   # `file:リンク` を**最初のコロンだけ**で割る。リンクの中にもコロンは出る
   # (`attachment:a1` や `https://…`)。
-  grep -roP '\]\(\K[^)]+' --include='*.md' README.md README_JP.md docs .claude 2>/dev/null \
+  grep -roP '\]\(\K[^)]+' --include='*.md' \
+    README.md README_JP.md docs .claude dev-skills/README.md dev-skills/*/SKILL.md 2>/dev/null \
     | awk '{ i = index($0, ":"); print substr($0, 1, i - 1), substr($0, i + 1) }'
 )
 say "文書のリンク: $links 本 (切れ $missing)"
@@ -106,6 +107,46 @@ if [ -z "$store_version" ]; then
   bad "STORE_VERSION を読み取れません (crates/api/src/store/mod.rs)"
 elif [ "$store_version" -gt "$schema_steps" ]; then
   bad "保存データの版 ($store_version) に対して、表の段 ($schema_steps) が足りません"
+fi
+
+# ------------------------------------------------ 次に持っていく道具 (skills)
+# `dev-skills/` は次のプロジェクトへ持っていく置き場。Claude Code は
+# frontmatter の `name` で呼ぶので、**ディレクトリ名とずれると呼べなくなる**。
+# ずれても何も起きないまま気づけない種類の食い違いなので、機械で見る。
+skills=0
+for dir in dev-skills/*/; do
+  name="$(basename "$dir")"
+  skills=$((skills + 1))
+  if [ ! -f "$dir/SKILL.md" ]; then
+    bad "dev-skills/$name に SKILL.md がありません"
+    continue
+  fi
+  declared=$(grep -m1 -oP '^name: \K\S+' "$dir/SKILL.md")
+  if [ -z "$declared" ]; then
+    bad "dev-skills/$name/SKILL.md の frontmatter に name がありません"
+  elif [ "$declared" != "$name" ]; then
+    bad "dev-skills/$name/SKILL.md が name: $declared を名乗っています"
+  fi
+done
+say "skills: $skills 個"
+
+# ------------------------------------------------------- 日誌の昇格の段
+# `昇格:` は未昇格を数える手がかり。綴りを間違えると**静かに数から漏れる**。
+# 段は最初の語だけを見る (後ろに置き場所を書いてよい)。
+journal="docs/JOURNAL.md"
+if [ -f "$journal" ]; then
+  entries=$(grep -cP '^## [0-9]{4}-' "$journal")
+  promoted=$(grep -cP '^- 昇格: ' "$journal")
+  say "日誌: $entries 件 (昇格の行 $promoted 本)"
+  if [ "$entries" -ne "$promoted" ]; then
+    bad "日誌の項目 ($entries) と 昇格: の行 ($promoted) の数が合いません"
+  fi
+  while read -r stage; do
+    case "$stage" in
+      未 | rules | 機械 | skill | 一過性) ;;
+      *) bad "日誌に知らない昇格の段があります: $stage" ;;
+    esac
+  done < <(grep -oP '^- 昇格: \K\S+' "$journal" | sort -u)
 fi
 
 # ----------------------------------------------------------------------

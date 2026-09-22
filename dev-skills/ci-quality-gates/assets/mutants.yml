@@ -1,0 +1,66 @@
+# テストが「通っているだけで、効いているかは分からない」を潰す。
+# 変異を 1 つ入れてテストを回し、**落ちなければ見逃し**。
+name: Mutation testing
+
+on:
+  schedule:
+    - cron: "0 18 * * *" # 18:00 UTC = 03:00 JST。誰も触っていない時間に
+  workflow_dispatch:
+    inputs:
+      threshold:
+        description: 捕捉率の基準 (%)。空なら既定値
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # 捕捉率 = caught / (caught + missed)。
+  # unviable (組み立たない変異) と timeout は分母に入れない — テストの落ち度ではない。
+  # **実測の少し下**に置く。上げるのは見逃しを潰してから。
+  DEFAULT_THRESHOLD: "75"
+
+jobs:
+  run:
+    name: mutants (shard ${{ matrix.shard }}/4)
+    # cargo-mutants の --shard は **0 始まり** (k < n)。1..4 と書くと 4/4 が落ちる。
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with: { key: "mutants-${{ matrix.shard }}" }
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-mutants }
+      # 薄い繋ぎと FFI 境界は外す。変異が「意味のある間違い」になりにくい。
+      # --timeout は 1 変異あたり。無限ループに化けた変異で一晩潰さないため。
+      - run: cargo mutants -p <<<core>>> -p <<<api>>> --shard ${{ matrix.shard }}/4 --timeout 60
+        continue-on-error: true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: mutants.out/outcomes.json
+          if-no-files-found: error
+
+  report:
+    name: report
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write     # 下回ったら見逃した変異を並べた Issue を立てる
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: { pattern: mutants-*, path: shards }
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          THRESHOLD: ${{ inputs.threshold || env.DEFAULT_THRESHOLD }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/mutants-report.mjs shards

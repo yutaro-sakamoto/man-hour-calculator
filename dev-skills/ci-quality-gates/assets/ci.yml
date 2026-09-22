@@ -1,0 +1,242 @@
+# CI の骨。<<<...>>> を差し替える。
+# 並びは「速くて確実 → 遅くて確率的」。前の段で落ちるものを後ろで拾わない。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同じブランチに続けて push したら古い実行は打ち切る。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  NODE_VERSION: "22"
+
+jobs:
+  rust:
+    name: rust — fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # 版は rust-toolchain.toml が決める。ここには書かない (二重管理を避ける)。
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  web:
+    name: web — format / lint / types / test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # Prettier / ESLint (型情報つき) / tsc --noEmit / 単体テストを順に。
+      - run: npm run check
+      - run: npm audit --audit-level=moderate
+
+  build:
+    name: build the artifact
+    needs: [rust, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # apt の binaryen は古く、rustc が既定で出す sign-ext 命令を検証で弾く。
+      # 版を固定して公式リリースを使い、CI を再現可能にする。
+      - name: Install binaryen
+        env:
+          BINARYEN_VERSION: "123"
+        run: |
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o binaryen.tar.gz \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          tar xzf binaryen.tar.gz
+          echo "$PWD/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+      - run: wasm-opt --version
+      # --require-wasm-opt: 最適化が静かに外れたまま配布物が出るのを防ぐ。
+      - run: cargo xtask build --require-wasm-opt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist
+          # 空の artifact が静かに流れると、下流が何も無いものを検査して緑になる。
+          if-no-files-found: error
+
+  e2e:
+    name: end-to-end (file://)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: { name: dist, path: dist }
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - run: npm ci
+        working-directory: e2e
+      - run: npx playwright install --with-deps chromium
+        working-directory: e2e
+      # 「1 枚で動き、外部通信が 0 件」という配布物の前提そのものを検査する。
+      - run: npx playwright test
+        working-directory: e2e
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
+  # 本物の DB に当てる。SQLite だけで通すと方言の食い違いに気づけない。
+  postgres:
+    name: server — PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: { POSTGRES_PASSWORD: ci }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      # この変数があるときだけ走るテストにする (手元では黙って飛ばす)。
+      - env:
+          <<<APP>>>_TEST_POSTGRES_URL: postgres://postgres:ci@localhost:5432/postgres
+        run: cargo test -p <<<server-crate>>>
+
+  miri:
+    name: miri — undefined behaviour in the FFI layer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # miri は nightly にしか無い。rust-toolchain.toml の版とは別に入れる。
+      - run: rustup toolchain install nightly --component miri,rust-src
+      - uses: Swatinem/rust-cache@v2
+        with: { key: miri }
+      # 整数から作ったポインタを許さない。生ポインタを扱う層でこそ効く。
+      - env: { MIRIFLAGS: -Zmiri-strict-provenance }
+        run: cargo +nightly miri test -p <<<ffi-crate>>>
+
+  kani:
+    name: kani — bounded model checking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with: { key: kani }
+      # 取得先は GitHub の配布で、ときどき 504 を返す。**Kani 自身の curl なので
+      # こちらからフラグを足せない。** 手順ごと試し直す。
+      - name: Install Kani
+        run: |
+          set -euo pipefail
+          cargo install --locked kani-verifier
+          for attempt in 1 2 3 4 5; do
+            cargo kani setup && break
+            echo "::warning::kani setup が $attempt 回目で失敗" >&2
+            sleep $((attempt * 15))
+          done
+          cargo kani --version
+      - run: cargo kani --workspace
+
+  tla:
+    name: TLA+ — the design
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "21" }
+      - uses: actions/cache@v6
+        with: { path: spec/.tla, key: tla2tools-v1.7.4 }
+      - run: ./spec/check.sh
+
+  # 文書・仕様・コードのずれを、機械で見つけられるぶんだけ潰す。
+  # モデルを使わないので一瞬で終わる。人の目や重いレビューはこれを通してから。
+  sync:
+    name: docs and spec drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/check-sync.sh
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - run: rustup component add llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # 内訳を出してから、全体の行カバレッジで判定する (閾値は 1 つだけ)。
+      - run: |
+          cargo llvm-cov --workspace --summary-only
+          cargo llvm-cov --workspace --summary-only --fail-under-lines 85
+
+  # 「書いてある手順どおりの環境で本当に動くか」を見る。
+  # 既存のジョブと同じ筋書きを Dev Container の中でもう一度通す。
+  devcontainer:
+    name: dev container — build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: devcontainers/ci@v0.3
+        with:
+          configFile: .devcontainer/devcontainer.json
+          push: never
+          runCmd: |
+            set -euo pipefail
+            # 口伝だったものが全部入っているか。
+            rustc --version
+            node --version
+            wasm-opt --version
+            cargo xtask build --require-wasm-opt
+            cargo test --workspace
+
+  pages:
+    name: deploy to GitHub Pages
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: e2e            # E2E まで通ったものだけを配る
+    runs-on: ubuntu-latest
+    permissions: { pages: write, id-token: write }
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { name: dist, path: dist }
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with: { path: dist }
+      - id: deploy
+        uses: actions/deploy-pages@v5

@@ -1,0 +1,229 @@
+# `v*.*.*` のタグを push したら、配布物を作って Release に添える骨。
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  # タグを打つ前に、作るところまでを確かめる道。Release は作らない。
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Release を作らずに組み立てだけ試す
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: "22"
+
+jobs:
+  # タグと Cargo.toml の版が食い違ったまま配らない。
+  meta:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)-dryrun"
+          fi
+          base="${version%%-*}"
+          cargo_version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          if [ "$base" != "$cargo_version" ]; then
+            echo "::error::タグ ($base) と Cargo.toml ($cargo_version) の版が違います"
+            exit 1
+          fi
+          case "$version" in *-*) pre=true ;; *) pre=false ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+
+  html:
+    name: single-file HTML
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install binaryen
+        env: { BINARYEN_VERSION: "123" }
+        run: |
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o binaryen.tar.gz \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          tar xzf binaryen.tar.gz
+          echo "$PWD/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+      - run: cargo xtask build --require-wasm-opt
+      - env: { VERSION: "${{ needs.meta.outputs.version }}" }
+        run: |
+          mkdir -p out
+          cp dist/app.html "out/<<<APP>>>-${VERSION}.html"
+      - uses: actions/upload-artifact@v7
+        with: { name: html, path: out, if-no-files-found: error }
+
+  # **その CPU の実機で組む。** 同梱 SQLite が C コンパイラを要るので、
+  # クロスコンパイルにすると途端に面倒になる。
+  server:
+    name: server (${{ matrix.target }})
+    # 画面をバイナリに取り込むなら html に依存させる。忘れると仮ページを抱えたものを配る。
+    needs: [meta, html]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: "" }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, ext: "" }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: "" }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl, ext: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe" }
+          - { os: windows-11-arm, target: aarch64-pc-windows-msvc, ext: ".exe" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: { name: html, path: html }
+      - name: Embed the UI
+        shell: bash
+        run: |
+          mkdir -p dist && cp html/<<<APP>>>-*.html dist/app.html
+      - run: rustup show
+      - run: rustup target add ${{ matrix.target }}
+      # musl は静的リンク。glibc の版に縛られず、古い環境でもそのまま動く。
+      - if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with: { key: "${{ matrix.target }}" }
+      # 使った依存の一覧をバイナリのなかに埋める。届いたあとで cargo audit bin できる。
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-auditable }
+      - run: cargo auditable build --profile server -p <<<server>>> --target ${{ matrix.target }}
+
+      # 組んだその場で動かして確かめる。動かないものは配らない。
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/server/<<<server>>>${{ matrix.ext }}"
+          "$bin" --help > /dev/null
+          # 保存先は**作業ディレクトリからの相対**に。Windows の bash の mktemp -d が
+          # 返す /tmp/... は Rust から見るとドライブの無い読めない綴りになる。
+          rm -f smoke.db
+          "$bin" --db sqlite:./smoke.db --listen 127.0.0.1:8080 > server.log 2>&1 &
+          pid=$!
+          ok=""
+          for _ in $(seq 30); do
+            curl -sf localhost:8080/healthz > /dev/null && { ok=yes; break; }
+            kill -0 "$pid" 2> /dev/null || break
+            sleep 1
+          done
+          [ -n "$ok" ] || { echo "::error::サーバが応答しません"; cat server.log; exit 1; }
+          # 画面が**本物**であること (仮ページを抱えたまま配らない)。
+          curl -sf localhost:8080/ -o ui.html
+          grep -q '<<<TITLE>>>' ui.html
+          kill "$pid" 2> /dev/null || true
+
+      - name: Package
+        shell: bash
+        env: { VERSION: "${{ needs.meta.outputs.version }}" }
+        run: |
+          set -euo pipefail
+          rm -f smoke.db ui.html server.log
+          name="<<<server>>>-${VERSION}-${{ matrix.target }}"
+          mkdir -p "stage/$name" out
+          cp "target/${{ matrix.target }}/server/<<<server>>>${{ matrix.ext }}" "stage/$name/"
+          cp LICENSE docs/SERVER.md "stage/$name/"
+          if [ -n "${{ matrix.ext }}" ]; then
+            (cd stage && 7z a -tzip "../out/$name.zip" "$name") > /dev/null
+          else
+            tar -C stage -czf "out/$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v7
+        with: { name: "server-${{ matrix.target }}", path: out, if-no-files-found: error }
+
+  sbom:
+    name: SBOM and audit
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show
+      - uses: actions/setup-node@v7
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - uses: taiki-e/install-action@v2
+        with: { tool: "cargo-cyclonedx,cargo-audit" }
+      - env: { VERSION: "${{ needs.meta.outputs.version }}" }
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cargo cyclonedx --all --format json --spec-version 1.5
+          node .github/scripts/merge-sbom.mjs "out/sbom-rust-${VERSION}.cdx.json"
+          # **`--omit dev` を付けない。** 付けると中身が空になる。
+          # ビルド時だけの依存でも「何で組み立てたか」こそが知りたいこと。
+          npm --prefix web ci
+          (cd web && npm sbom --sbom-format cyclonedx > "../out/sbom-web-${VERSION}.cdx.json")
+          # 空の SBOM を静かに配らないための歯止め。
+          node -e '
+            const f = `./out/sbom-web-${process.env.VERSION}.cdx.json`;
+            const n = (require(f).components ?? []).length;
+            console.log("web SBOM:", n, "件");
+            if (n === 0) { console.error("空です"); process.exit(1); }
+          '
+          # 見つかっても止めない。結果を添えるのが目的で、止める判断は受け取る側がする。
+          cargo audit --json > "out/audit-${VERSION}.json" || true
+      - uses: actions/upload-artifact@v7
+        with: { name: sbom, path: out, if-no-files-found: error }
+
+  release:
+    name: publish
+    needs: [meta, html, server, sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write       # 出所証明の署名に要る
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with: { path: staging }
+      - run: |
+          mkdir -p out
+          find staging -type f -exec cp {} out/ \;
+          cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      # 「この成果物は、このリポジトリのこのワークフローが作った」ことを署名付きで残す。
+      # 受け取った側は `gh attestation verify` で確かめられる。
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            out/*.tar.gz
+            out/*.zip
+            out/*.html
+      - env: { VERSION: "${{ needs.meta.outputs.version }}" }
+        run: node .github/scripts/release-notes.mjs "$VERSION" > NOTES.md
+      - if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" --title "v${VERSION}" --notes-file NOTES.md \
+            ${{ needs.meta.outputs.prerelease == 'true' && '--prerelease' || '' }} out/*
+      - if: github.event_name != 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dry-run
+          path: |
+            out
+            NOTES.md
