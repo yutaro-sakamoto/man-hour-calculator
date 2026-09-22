@@ -171,6 +171,35 @@ Stop フックで機械の検査を回す。**ずれが無ければ何も言わ�
 フックは 1 つの `Stop` に並べて足せる (ずれの検査と、未昇格の知見の数)。
 **どれも黙っているのが既定**でないと、数が増えた時点で全部読み飛ばされる。
 
+## 貯めた設定が腐らないようにする
+
+取り決めは増える。増えること自体は良い。困るのは**壊れても何も起きない**こと。
+
+| 壊れかた | 起きること |
+|---|---|
+| フックの指し先が消えた / 実行権が無い | 黙って何もしない |
+| `rules` の `paths:` に当たるファイルが 1 つも無い | 触っても出てこない |
+| `agent` の `name` がファイル名とずれた | 呼べない |
+| `permissions` が名指しするスクリプトの名前が変わった | 許可が外れ、毎回聞かれる → **検証を省くようになる** |
+| `command` が名指しするスクリプトが消えた | 実行して初めて分かる |
+
+どれも「読めば分かる食い違い」なので、`check-sync.sh` に入れる
+([docs-spec-drift](../docs-spec-drift/))。**設定を足したら回す。**
+
+```sh
+# フックの指し先と実行権
+while read -r command; do
+  script="${command/\$\{CLAUDE_PROJECT_DIR\}\//}"
+  [ -f "$script" ] || bad "フックが指す $script がありません"
+  [ -x "$script" ] || bad "$script に実行権がありません"
+done < <(grep -oP '"command":\s*"\K[^"]+' .claude/settings.json)
+
+# 当たるファイルの無い rules
+shopt -s globstar nullglob
+matches=($pattern)
+[ ${#matches[@]} -eq 0 ] && bad "paths: \"$pattern\" に当たるものがありません"
+```
+
 ## Dev Container で「手元」を固定する
 
 口伝だったものを全部 `.devcontainer/` に入れて、**CI でその箱を組んで

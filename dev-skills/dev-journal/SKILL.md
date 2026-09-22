@@ -92,7 +92,16 @@ man-hour-calculator では**最初これをやらなかった**。踏んだ穴�
 ./scripts/journal.sh new      # 雛形を追記してエディタで開く
 ./scripts/journal.sh open     # 昇格: 未 の件数と一覧
 ./scripts/journal.sh stats    # 分類ごとの件数 (どこで転びやすいか分かる)
+./scripts/journal.sh promote rules <名前>     # .claude/rules/<名前>.md の雛形
+./scripts/journal.sh promote command <名前>   # .claude/commands/<名前>.md
+./scripts/journal.sh promote agent <名前>     # .claude/agents/<名前>.md
+./scripts/journal.sh promote skill <名前>     # skills/<名前>/SKILL.md
 ```
+
+**`promote` が要る。** 段 2 と段 4 の行き先は frontmatter の形がそれぞれ違い、
+毎回思い出すのは無理。「書きたいが、どこにどう書くのか思い出せない」で
+止まるのが、この仕組みがいちばん死にやすい場所だった。既にあるものは
+上書きしない。
 
 ### `/learn` コマンド
 
@@ -111,8 +120,11 @@ man-hour-calculator では**最初これをやらなかった**。踏んだ穴�
 `assets/journal-check.sh`。設計は `check-sync.sh` と同じ考え方。
 
 - **閾値を超えるまで何も言わない** (既定 5 件)。毎回出ると読まれなくなる
-- モデルを使わない。`grep -c` だけ
+- モデルを使わない。`grep` と `awk` だけ
 - 止めない。`additionalContext` を出すだけ
+- **同じ分類ばかり溜まっているとき**も出す (既定 3 件)。件数が閾値に届いて
+  いなくても、同じところで繰り返し転んでいるなら、そこは取り決めか機械の
+  検査にまとめる頃合い。**そのとき `promote` の 1 行をそのまま出す**
 
 ```json
 { "hooks": { "Stop": [{ "hooks": [
@@ -157,6 +169,7 @@ man-hour-calculator に入れたひと揃い。そのまま写せる。
 | `.claude/commands/learn.md` | `/learn` |
 | `.claude/hooks/journal-check.sh` | 未昇格が閾値を超えたときだけ言う |
 | `.claude/rules/skills.md` | 段 4 (skills へ移す) の書きかた |
+| `.claude/rules/claude-config.md` | 段 2 (取り決めそのもの) の書きかた |
 | `scripts/check-sync.sh` | 昇格の段の綴り、項目数と `昇格:` の行数の一致 |
 | `AGENTS.md`「学んだことを持ち越す」 | 昇格の表と、**設定そのものを直してよい**の一文 |
 

@@ -102,7 +102,7 @@ gh pr merge <n> --merge --delete-branch
 | 段 | 形 | いつ上げるか |
 |---|---|---|
 | 1 | 日誌に 1 件 | 踏んだその日 |
-| 2 | この文書か `.claude/rules/` | **2 回目に踏んだら** |
+| 2 | `.claude/rules/` / `.claude/commands/` / `.claude/agents/` / この文書 | **2 回目に踏んだら** |
 | 3 | **機械の検査** (テスト / `scripts/check-sync.sh`) | 3 回目、または重いとき |
 | 4 | [dev-skills/](dev-skills/) | **別のプロジェクトでも役に立つとき** |
 
@@ -110,16 +110,43 @@ gh pr merge <n> --merge --delete-branch
 コードは `grep` で見つかるか」を考える。見つかるなら `scripts/check-sync.sh`
 に足して、**わざと破って赤くなることを確かめる**。
 
+### 昇格は雛形から始める
+
+段 2 と段 4 の行き先は、それぞれ frontmatter の形が違う。思い出さなくていい。
+
+```sh
+./scripts/journal.sh promote rules <名前>      # .claude/rules/<名前>.md
+./scripts/journal.sh promote command <名前>    # .claude/commands/<名前>.md
+./scripts/journal.sh promote agent <名前>      # .claude/agents/<名前>.md
+./scripts/journal.sh promote skill <名前>      # dev-skills/<名前>/SKILL.md
+```
+
+書きかたは [.claude/rules/claude-config.md](.claude/rules/claude-config.md)
+(取り決めそのもの) と [.claude/rules/skills.md](.claude/rules/skills.md)
+(次に持っていくもの)。
+
 ### 設定そのものも直してよい
 
 この文書・`.claude/` の中身・`dev-skills/` は、**必要なら同じ変更のなかで
 書き換えてよい**。むしろ、そうしないと段 2 と 4 が回らない。
 
-- 同じ注意を 2 度されたなら、それはここか `.claude/rules/` に書くべきこと
+- 同じ注意を 2 度されたなら、それは `.claude/rules/` に書くべきこと。
+  `AGENTS.md` は短く保ち、**範囲を絞れるものは rules へ**
 - 「この手順は毎回やる」と思ったなら `.claude/commands/` に置く
+- 読むだけの仕事を切り出したくなったら `.claude/agents/`
 - ただし `dev-skills/` は**次のプロジェクトへ持っていく置き場**。
-  このリポジトリ固有の名前や事情は書かない ([.claude/rules/skills.md](.claude/rules/skills.md))
+  このリポジトリ固有の名前や事情は書かない
 - 設定を変えたら、**変えた理由を日誌に 1 行**残す
+
+### 貯めたものが腐らないようにする
+
+取り決めは増えるが、**指し先の消えたフック・当たるファイルの無い rules・
+名前のずれた agent は、壊れていても何も起きない。** `./scripts/check-sync.sh`
+がそこを見ている。設定を足したら回す。
+
+応答の終わりのフックは、未昇格が溜まったときと、**同じ分類ばかり溜まって
+いるとき**だけ声を出す。同じところで繰り返し転んでいる合図なので、
+そこは取り決めか機械の検査にまとめる頃合い。
 
 ## 書き方
 

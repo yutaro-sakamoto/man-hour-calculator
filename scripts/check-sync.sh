@@ -109,6 +109,85 @@ elif [ "$store_version" -gt "$schema_steps" ]; then
   bad "保存データの版 ($store_version) に対して、表の段 ($schema_steps) が足りません"
 fi
 
+# ------------------------------------------- ロケールに頼った正規表現
+# 語境界 (バックスラッシュ b) は、**多バイト文字の直後ではロケールで意味が
+# 変わる**。LANG が未設定の環境では境界が成立せず、日誌の未昇格を数える検査が
+# 黙って 0 を返していた (実際に踏んだ)。落ちるのではなく**静かに全部見逃す**。
+#
+# 実例をここに書くと、この検査が自分のコメントに当たる。だから書かない。
+if grep -rnP '[^\x00-\x7f]\\b' --include='*.sh' scripts .claude dev-skills 2> /dev/null; then
+  bad "多バイト文字の直後に \\b があります (ロケール依存。上の行を直してください)"
+fi
+
+# ------------------------------------------------ Claude の設定 ⇔ 実態
+# 取り決めは貯まっていくが、**貯まったまま腐る**のがいちばん困る。
+# ここで見るのは「壊れても静かなもの」だけ:
+# 指し先の消えたフック、当たるファイルの無い rules、名前のずれた agent。
+# どれも、壊れていても何も起きないまま気づけない。
+settings=".claude/settings.json"
+if [ -f "$settings" ]; then
+  # フックの指し先。消えていても Claude Code は黙って何もしない。
+  hooks=0
+  while read -r command; do
+    [ -z "$command" ] && continue
+    hooks=$((hooks + 1))
+    # ${CLAUDE_PROJECT_DIR} はここから見れば当のリポジトリ。
+    script="${command/\$\{CLAUDE_PROJECT_DIR\}\//}"
+    if [ ! -f "$script" ]; then
+      bad "$settings のフックが指す $script がありません"
+    elif [ ! -x "$script" ]; then
+      bad "$script に実行権がありません (フックは黙って何もしません)"
+    fi
+  done < <(grep -oP '"command":\s*"\K[^"]+' "$settings")
+  say "フック: $hooks 本"
+
+  # permissions が名指しするリポジトリ内のスクリプト。名前を変えたら
+  # 許可が外れ、**毎回聞かれるようになって検証を省くようになる。**
+  while read -r script; do
+    [ -f "$script" ] || bad "$settings の permissions が名指しする $script がありません"
+  done < <(grep -oP 'Bash\(\K\./[^:) ]+' "$settings" | sort -u)
+fi
+
+# rules は paths で効く範囲を絞る。**当たるファイルが 1 つも無い rules は
+# 死んでいる** (触っても出てこない)。移動やリネームで静かにそうなる。
+shopt -s globstar nullglob
+rules=0
+for rule in .claude/rules/*.md; do
+  rules=$((rules + 1))
+  if ! grep -q '^paths:' "$rule"; then
+    bad "$rule に paths: がありません (どこで効くのか決まっていません)"
+    continue
+  fi
+  while read -r pattern; do
+    [ -z "$pattern" ] && continue
+    matches=($pattern)
+    [ ${#matches[@]} -eq 0 ] \
+      && bad "$rule の paths: \"$pattern\" に当たるものがありません"
+  done < <(sed -n '/^paths:/,/^[^ -]/p' "$rule" | grep -oP '^\s+-\s+"\K[^"]+')
+done
+say "rules: $rules 個"
+
+# agent は frontmatter の name で呼ばれる。ファイル名とずれると呼べない。
+agents=0
+for agent in .claude/agents/*.md; do
+  agents=$((agents + 1))
+  expected="$(basename "$agent" .md)"
+  declared=$(grep -m1 -oP '^name: \K\S+' "$agent")
+  if [ -z "$declared" ]; then
+    bad "$agent の frontmatter に name がありません"
+  elif [ "$declared" != "$expected" ]; then
+    bad "$agent が name: $declared を名乗っています"
+  fi
+done
+say "agents: $agents 個"
+
+# command のなかで名指ししているリポジトリ内のスクリプト。
+for cmd in .claude/commands/*.md; do
+  while read -r script; do
+    [ -f "$script" ] || bad "$cmd が名指しする $script がありません"
+  done < <(grep -oP '(?<![\w/`])\./(scripts|spec)/[\w.-]+\.sh' "$cmd" | sort -u)
+done
+
 # ------------------------------------------------ 次に持っていく道具 (skills)
 # `dev-skills/` は次のプロジェクトへ持っていく置き場。Claude Code は
 # frontmatter の `name` で呼ぶので、**ディレクトリ名とずれると呼べなくなる**。
