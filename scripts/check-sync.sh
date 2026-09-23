@@ -109,6 +109,33 @@ elif [ "$store_version" -gt "$schema_steps" ]; then
   bad "保存データの版 ($store_version) に対して、表の段 ($schema_steps) が足りません"
 fi
 
+# ------------------------------------------- 品質の基準 ⇔ README の表
+# 基準は設定のほうにあり、README の表はその写し。基準を動かして表を
+# 直し忘れると、読んだ人は古い数字を信じる。
+cov_rs_lines=$(grep -oP '^RUST_MIN_LINES=\K[0-9]+' scripts/coverage.sh)
+cov_rs_branches=$(grep -oP '^RUST_MIN_BRANCHES=\K[0-9]+' scripts/coverage.sh)
+cov_ts_lines=$(grep -oP 'test-coverage-lines=\K[0-9]+' web/package.json)
+cov_ts_branches=$(grep -oP 'test-coverage-branches=\K[0-9]+' web/package.json)
+cc_rs=$(grep -oP '^cognitive-complexity-threshold = \K[0-9]+' clippy.toml)
+cc_ts=$(grep -oP 'complexity: \["error", \K[0-9]+' web/eslint.config.js)
+say "カバレッジの基準: rust C0=$cov_rs_lines C1=$cov_rs_branches / ts C0=$cov_ts_lines C1=$cov_ts_branches"
+say "複雑度の上限: rust=$cc_rs ts=$cc_ts"
+if [ -z "$cov_rs_lines" ] || [ -z "$cov_rs_branches" ] || [ -z "$cov_ts_lines" ] \
+  || [ -z "$cov_ts_branches" ] || [ -z "$cc_rs" ] || [ -z "$cc_ts" ]; then
+  bad "カバレッジの基準か複雑度の上限を読み取れません"
+else
+  for readme in README.md README_JP.md; do
+    grep -qP "^\| Rust \(\`cargo llvm-cov --branch\`\) \| $cov_rs_lines% \| $cov_rs_branches% \|" \
+      "$readme" || bad "$readme の Rust のカバレッジの基準が設定と違います"
+    grep -qP "^\| TypeScript \(Node [^|]*\| $cov_ts_lines% \| $cov_ts_branches% \|" \
+      "$readme" || bad "$readme の TypeScript のカバレッジの基準が設定と違います"
+    grep -qP "^\| Rust \| [^|]+ \| $cc_rs \|" "$readme" \
+      || bad "$readme の Rust の複雑度の上限が clippy.toml と違います"
+    grep -qP "^\| TypeScript \| [^|]+ \| $cc_ts \|" "$readme" \
+      || bad "$readme の TypeScript の複雑度の上限が eslint.config.js と違います"
+  done
+fi
+
 # ------------------------------------------- ロケールに頼った正規表現
 # 語境界 (バックスラッシュ b) は、**多バイト文字の直後ではロケールで意味が
 # 変わる**。LANG が未設定の環境では境界が成立せず、日誌の未昇格を数える検査が

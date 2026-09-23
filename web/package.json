@@ -13,7 +13,7 @@
     "format:check": "prettier --check .",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test",
     "test": "node --experimental-strip-types --test \"src/**/*.test.ts\"",
-    "test:coverage": "node --experimental-strip-types --test --experimental-test-coverage --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-lines=88 --test-coverage-branches=82 --test-coverage-functions=72 \"src/**/*.test.ts\""
+    "test:coverage": "node --experimental-strip-types --test --experimental-test-coverage --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=77 \"src/**/*.test.ts\""
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

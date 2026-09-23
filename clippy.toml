@@ -1,0 +1,7 @@
+# 認知的複雑度の上限。Cargo.toml の [workspace.lints.clippy] で点けた
+# cognitive_complexity がこの値を超える関数を落とす。
+#
+# 入れたときの最大は 16 (crates/core/src/calendar.rs)。その値に置き、
+# **上げない**。引っかかったら関数を割る。下げるのは、上のほうの関数を
+# 割ってから。分布は ./scripts/complexity.sh で見られる。
+cognitive-complexity-threshold = 16

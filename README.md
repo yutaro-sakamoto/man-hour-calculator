@@ -148,13 +148,37 @@ live in [dev-skills/](dev-skills/) as Claude Code skills.
 ### How much of it is actually tested
 
 ```sh
-cargo llvm-cov --workspace --summary-only   # Rust; CI fails below 85% lines
-npm --prefix web run test:coverage          # TypeScript; 88% lines / 82% branches / 72% functions
+./scripts/coverage.sh        # statement (C0) and branch (C1) coverage, Rust and TypeScript
 ```
+
+| | C0 (lines) | C1 (branches) | other |
+|---|---|---|---|
+| Rust (`cargo llvm-cov --branch`) | 90% | 75% | |
+| TypeScript (Node built-in) | 90% | 85% | functions 77% |
+
+CI fails if any of these drops below its threshold. The thresholds live in
+`scripts/coverage.sh` and `web/package.json`. Rust branch coverage is a nightly feature,
+so the script installs and uses a pinned nightly.
 
 Node's built-in coverage only counts files that the tests actually load, so `ui/` and
 `charts/` (which need a DOM) are out of scope — what is left is the pure modules, which is
 a range worth putting a number on.
+
+### Are functions getting too tangled
+
+```sh
+./scripts/complexity.sh      # per-function complexity, highest first
+```
+
+The limits are enforced by the ordinary lint: `cargo clippy` / `npm run check` fail above them.
+
+| | metric | limit | where |
+|---|---|---|---|
+| Rust | cognitive complexity | 16 | `clippy.toml` |
+| TypeScript | cyclomatic complexity | 25 | `web/eslint.config.js` |
+
+Each limit is the maximum found when it was introduced, and it does not go up: split the
+function instead.
 
 Coverage says which lines run, not whether anything checks them. For that there is
 **mutation testing**: change one thing and see whether a test notices.

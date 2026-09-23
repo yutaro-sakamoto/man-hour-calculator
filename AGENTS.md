@@ -59,6 +59,9 @@ gh pr merge <n> --merge --delete-branch
 - **Rust の依存クレートはゼロ**（`crates/core` と `crates/api`）。
   サーバだけが外のクレートを使う
 - `#![forbid(unsafe_code)]`。`unsafe` は `crates/wasm` の FFI 層だけ
+- **複雑度の上限とカバレッジの基準は上げ下げで逃げない。** 複雑度に
+  引っかかったら関数を割る。カバレッジが割ったらテストを足す
+  (`./scripts/complexity.sh` / `./scripts/coverage.sh`)
 
 ## レビューの回し方
 

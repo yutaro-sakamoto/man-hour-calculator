@@ -32,6 +32,8 @@
       "Bash(npm --prefix web run:*)",
       "Bash(npx playwright test:*)",
       "Bash(./scripts/check-sync.sh:*)",
+      "Bash(./scripts/coverage.sh:*)",
+      "Bash(./scripts/complexity.sh:*)",
       "Bash(./spec/check.sh:*)",
       "Bash(./scripts/journal.sh:*)"
     ],

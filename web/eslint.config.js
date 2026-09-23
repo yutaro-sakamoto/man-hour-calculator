@@ -24,6 +24,10 @@ export default tseslint.config(
       "@typescript-eslint/no-unnecessary-condition": "error",
       eqeqeq: ["error", "always", { null: "ignore" }],
       "no-console": ["warn", { allow: ["warn", "error"] }],
+      // 関数ひとつの分岐の数 (循環的複雑度) の上限。入れたときの最大が 25
+      // (ui/tasks.ts と model/markdown.ts) なので、そこに置いて**上げない**。
+      // 引っかかったら関数を割る。分布は ../scripts/complexity.sh で見られる。
+      complexity: ["error", 25],
     },
   },
   {
