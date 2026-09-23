@@ -8,6 +8,12 @@ members = ["crates/api", "crates/core", "crates/server", "crates/wasm", "crates/
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
+# 関数ひとつの込み入り具合 (認知的複雑度) に上限を置く。上限そのものは
+# clippy.toml にある。既定では効かない lint なので、ここで名指しして点ける。
+# `cargo clippy -- -D warnings` がそのまま番人になる。
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
