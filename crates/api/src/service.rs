@@ -263,6 +263,11 @@ impl<S: Store> Service<S> {
                 )));
             }
         }
+        self.ensure_folder_owners_survive(|service, group| {
+            let mut owners = service.owner_users_of_folder(group)?;
+            owners.remove(id);
+            Ok(owners)
+        })?;
         self.store.remove_user(id)?;
         Ok(())
     }
@@ -332,6 +337,9 @@ impl<S: Store> Service<S> {
             }
         }
 
+        self.ensure_folder_owners_survive(|service, folder| {
+            service.owner_users_of_folder_with(folder, Some((id, &[])))
+        })?;
         self.store.remove_user_group(id)?;
         Ok(())
     }
@@ -361,6 +369,9 @@ impl<S: Store> Service<S> {
             let after = group.members.clone();
             self.ensure_owners_survive(|service, meta, parent| {
                 service.owner_users_with(meta, parent, id, &after)
+            })?;
+            self.ensure_folder_owners_survive(|service, folder| {
+                service.owner_users_of_folder_with(folder, Some((id, &after)))
             })?;
         }
         self.store.put_user_group(group.clone())?;
@@ -938,6 +949,17 @@ impl<S: Store> Service<S> {
     ///
     /// 数え方は [`Self::owner_users`] と同じで、見るのは入れ物自身の付与だけ。
     fn owner_users_of_folder(&self, group: &ProjectGroup) -> ApiResult<Owners> {
+        self.owner_users_of_folder_with(group, None)
+    }
+
+    /// `override_group` の構成員が差し替わったとみなして数える
+    /// ([`Self::owner_users_with`] の入れ物版)。グループを消すのは、構成員を
+    /// 空にするのと同じ数え方になる。
+    fn owner_users_of_folder_with(
+        &self,
+        group: &ProjectGroup,
+        override_group: Option<(&UserGroupId, &[UserId])>,
+    ) -> ApiResult<Owners> {
         let mut out = Owners::default();
         for entry in &group.access {
             if entry.role != ProjectRole::Owner {
@@ -950,17 +972,45 @@ impl<S: Store> Service<S> {
                     }
                 }
                 Principal::Group(id) => {
-                    if let Some(team) = self.store.user_group(id)? {
-                        for member in team.members {
-                            if self.store.user(&member)?.is_some() {
-                                out.insert(member);
-                            }
+                    let members = match override_group {
+                        Some((target, members)) if target == id => Some(members.to_vec()),
+                        _ => self.store.user_group(id)?.map(|team| team.members),
+                    };
+                    for member in members.into_iter().flatten() {
+                        if self.store.user(&member)?.is_some() {
+                            out.insert(member);
                         }
                     }
                 }
             }
         }
         Ok(out)
+    }
+
+    /// この変更のあと、どの入れ物にも実在の所有者が残るか。
+    ///
+    /// [`Self::ensure_owners_survive`] の入れ物版。人・グループ・構成員の側から
+    /// 消す操作は、プロジェクトだけでなく入れ物の所有者も奪いうる
+    /// (ファジングで見つかった筋。`set_group_access` だけが入れ物を見ていた)。
+    ///
+    /// **この変更で**居なくなるものだけを止める。もともと所有者の居ない
+    /// 入れ物 (古いデータ) が、関係の無い操作まで止めないようにするため。
+    fn ensure_folder_owners_survive(
+        &self,
+        mut owners_after: impl FnMut(&Self, &ProjectGroup) -> ApiResult<Owners>,
+    ) -> ApiResult<()> {
+        for group in self.store.project_groups()? {
+            if self.owner_users_of_folder(&group)?.is_empty() {
+                continue;
+            }
+            if owners_after(self, &group)?.is_empty() {
+                return Err(ApiError::conflict(format!(
+                    "入れ物「{}」の所有者が居なくなります。先に別の所有者を立ててください",
+                    group.name
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// その付与一覧が、指定のグループに所有者を与えているか。
@@ -1047,6 +1097,9 @@ impl<S: Store> Service<S> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod fuzz;
 
 #[cfg(test)]
 mod tests {
@@ -1723,6 +1776,111 @@ mod tests {
                 .code,
             ErrorCode::Conflict,
         );
+    }
+
+    /* ===== 不変条件: 入れ物の所有者 =====
+    以下の 3 本はファジング (`service/fuzz.rs`) が見つけた筋。
+    `set_group_access` は入れ物の所有者が居なくなるのを止めていたが、
+    人・グループ・構成員の側から消す操作は、プロジェクトしか見ていなかった。 */
+
+    /// 入れ物の所有権をグループに預け、直接の付与を外す。
+    fn folder_owned_only_via_g1(service: &mut Service<MemoryStore>) {
+        let root = actor(service, "root");
+        let alice = actor(service, "alice");
+        service
+            .create_user_group(&root, NOW, UserGroupId::new("g1"), "チーム")
+            .unwrap();
+        service
+            .set_group_member(&root, &UserGroupId::new("g1"), &UserId::new("bob"), true)
+            .unwrap();
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("pg1"), "部門")
+            .unwrap();
+        let folder = ProjectGroupId::new("pg1");
+        service
+            .set_group_access(
+                &alice,
+                &folder,
+                &Principal::group("g1"),
+                Some(ProjectRole::Owner),
+            )
+            .unwrap();
+        service
+            .set_group_access(&alice, &folder, &Principal::user("alice"), None)
+            .unwrap();
+    }
+
+    #[test]
+    fn deleting_the_only_folder_owner_is_refused() {
+        let mut service = setup();
+        let root = actor(&service, "root");
+        let alice = actor(&service, "alice");
+        service
+            .create_project_group(&alice, NOW, ProjectGroupId::new("pg1"), "部門")
+            .unwrap();
+
+        let error = service
+            .delete_user(&root, &UserId::new("alice"))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert!(service.store.user(&UserId::new("alice")).unwrap().is_some());
+    }
+
+    #[test]
+    fn deleting_the_group_that_owns_a_folder_is_refused() {
+        let mut service = setup();
+        folder_owned_only_via_g1(&mut service);
+        let root = actor(&service, "root");
+
+        let error = service
+            .delete_user_group(&root, &UserGroupId::new("g1"))
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Conflict);
+    }
+
+    #[test]
+    fn the_last_member_cannot_leave_a_group_that_owns_a_folder() {
+        let mut service = setup();
+        folder_owned_only_via_g1(&mut service);
+        let root = actor(&service, "root");
+
+        let error = service
+            .set_group_member(&root, &UserGroupId::new("g1"), &UserId::new("bob"), false)
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Conflict);
+
+        // 別の所有者を立ててからなら抜けられる。
+        let bob = actor(&service, "bob");
+        service
+            .set_group_access(
+                &bob,
+                &ProjectGroupId::new("pg1"),
+                &Principal::user("carol"),
+                Some(ProjectRole::Owner),
+            )
+            .unwrap();
+        assert!(service
+            .set_group_member(&root, &UserGroupId::new("g1"), &UserId::new("bob"), false)
+            .is_ok());
+    }
+
+    /// すでに所有者の居ない入れ物 (古いデータ) があっても、関係の無い
+    /// アカウントは消せる。**この変更で**居なくなるときだけ止める。
+    #[test]
+    fn an_already_ownerless_folder_does_not_block_unrelated_deletes() {
+        let mut service = setup();
+        let root = actor(&service, "root");
+        service
+            .store
+            .put_project_group(ProjectGroup {
+                id: ProjectGroupId::new("old"),
+                name: "古い入れ物".into(),
+                access: Vec::new(),
+                created_at: NOW.into(),
+            })
+            .unwrap();
+
+        assert!(service.delete_user(&root, &UserId::new("carol")).is_ok());
     }
 
     /* ===== 不変条件: 所有者 ===== */

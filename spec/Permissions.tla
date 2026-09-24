@@ -72,9 +72,25 @@ OwnerUsers(p) ==
                         \E g \in ugroups : GroupPrincipal(g) \in GrantsOf(p) /\ u \in members[g]}
     IN direct \cup viaGroup
 
+\* 入れ物 (プロジェクトのグループ) を実際に管理できるアカウント。
+\* 実装 (Service::owner_users_of_folder) と同じく、入れ物自身の付与だけを見る。
+\* `mem` を引数に取るのは、構成員を差し替えた「このあと」を問うため。
+FolderOwnersWith(pg, us, gs, mem) ==
+    LET g == {q \in Principals : gaccess[pg][q] = "owner"}
+    IN {u \in us : UserPrincipal(u) \in g}
+         \cup {u \in us : \E gg \in gs : GroupPrincipal(gg) \in g /\ u \in mem[gg]}
+
+FolderOwners(pg) == FolderOwnersWith(pg, users, ugroups, members)
+
 \* ---- これが守りたいこと -------------------------------------------------
 NoProjectLosesItsLastOwner ==
     \A p \in projects : OwnerUsers(p) # {}
+
+\* 入れ物も同じ。所有者の居ない入れ物は、管理者のほかは誰も改名も削除も
+\* できない。(実装のファジングが見つけた筋: 人・グループ・構成員の側から
+\*  消す操作は、プロジェクトの所有者しか見ていなかった)
+NoFolderLosesItsLastOwner ==
+    \A pg \in pgroups : FolderOwners(pg) # {}
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
@@ -126,7 +142,13 @@ SetGroupAccess(pg, q, r) ==
              IN {u \in users : UserPrincipal(u) \in g}
                   \cup {u \in users :
                           \E gg \in ugroups : GroupPrincipal(gg) \in g /\ u \in members[gg]}
-       IN /\ \A p \in projects : parent[p] = pg => ownersOf(p) # {}
+           folderOwners ==
+             LET g == {x \in Principals : next[pg][x] = "owner"}
+             IN {u \in users : UserPrincipal(u) \in g}
+                  \cup {u \in users :
+                          \E gg \in ugroups : GroupPrincipal(gg) \in g /\ u \in members[gg]}
+       IN /\ folderOwners # {}
+          /\ \A p \in projects : parent[p] = pg => ownersOf(p) # {}
           /\ gaccess' = next
     /\ UNCHANGED <<users, ugroups, members, projects, pgroups, parent, access>>
 
@@ -155,6 +177,7 @@ DeleteUser(u) ==
                   \cup {x \in remaining :
                           \E gg \in ugroups : GroupPrincipal(gg) \in g /\ x \in members[gg]}
        IN /\ \A p \in projects : ownersOf(p) # {}
+          /\ \A pg \in pgroups : FolderOwnersWith(pg, remaining, ugroups, members) # {}
           /\ users' = remaining
     \* 消えたアカウントはグループからも外れる。
     /\ members' = [g \in UserGroups |-> members[g] \ {u}]
@@ -181,6 +204,7 @@ DeleteUserGroup(g) ==
                   \cup {u \in users :
                           \E gg \in rest : GroupPrincipal(gg) \in gr /\ u \in members[gg]}
        IN /\ \A p \in projects : ownersOf(p) # {}
+          /\ \A pg \in pgroups : FolderOwnersWith(pg, users, rest, members) # {}
           /\ ugroups' = rest
     /\ UNCHANGED <<users, members, projects, pgroups, parent, access, gaccess>>
 
@@ -191,7 +215,7 @@ AddGroupMember(g, u) ==
     /\ members' = [members EXCEPT ![g] = @ \cup {u}]
     /\ UNCHANGED <<users, ugroups, projects, pgroups, parent, access, gaccess>>
 
-\* 番人: 抜けたあとも、どのプロジェクトにも所有者が残ること。
+\* 番人: 抜けたあとも、どのプロジェクトにも、どの入れ物にも所有者が残ること。
 RemoveGroupMember(g, u) ==
     /\ g \in ugroups
     /\ u \in members[g]
@@ -202,13 +226,16 @@ RemoveGroupMember(g, u) ==
                   \cup {x \in users :
                           \E gg \in ugroups : GroupPrincipal(gg) \in gr /\ x \in next[gg]}
        IN /\ \A p \in projects : ownersOf(p) # {}
+          /\ \A pg \in pgroups : FolderOwnersWith(pg, users, ugroups, next) # {}
           /\ members' = next
     /\ UNCHANGED <<users, ugroups, projects, pgroups, parent, access, gaccess>>
 
-CreateProjectGroup(pg) ==
+\* 入れ物を作る。作った人が所有者になる (Service::create_project_group)。
+CreateProjectGroup(pg, u) ==
     /\ pg \notin pgroups
+    /\ u \in users
     /\ pgroups' = pgroups \cup {pg}
-    /\ gaccess' = [gaccess EXCEPT ![pg] = Empty]
+    /\ gaccess' = [gaccess EXCEPT ![pg] = [Empty EXCEPT ![UserPrincipal(u)] = "owner"]]
     /\ UNCHANGED <<users, ugroups, members, projects, parent, access>>
 
 \* プロジェクトの入れ物を消す (Service::delete_project_group)。
@@ -249,7 +276,7 @@ Next ==
     \/ \E g \in UserGroups : DeleteUserGroup(g)
     \/ \E g \in UserGroups, u \in Users : AddGroupMember(g, u)
     \/ \E g \in UserGroups, u \in Users : RemoveGroupMember(g, u)
-    \/ \E pg \in ProjectGroups : CreateProjectGroup(pg)
+    \/ \E pg \in ProjectGroups, u \in Users : CreateProjectGroup(pg, u)
     \/ \E pg \in ProjectGroups : DeleteProjectGroup(pg)
 
 Spec == Init /\ [][Next]_vars
