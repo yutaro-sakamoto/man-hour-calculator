@@ -410,6 +410,50 @@ function normalizeSettings(raw: unknown): ComputeSettings {
 }
 
 /**
+ * タスクを深さ優先の並び (部分木が連続する) に並べ直す。兄弟の順は保つ。
+ *
+ * 一覧・集計・CSV はこの並びを前提にしている (`subtreeRange`)。画面の操作は
+ * 並びを保つが、**読み込んだファイルは保っているとは限らない**。崩れたまま
+ * 通すと、親の集計が子を取りこぼし、CSV に書き出すと親子が組み替わる
+ * (どちらもファジングで見つかった)。
+ *
+ * 親子が輪になっているものは、トップレベルからたどり着けない。残ったものは
+ * 親を外してトップレベルに置く (ファイルに書かれた順に)。
+ */
+function toPreorder(tasks: readonly Task[]): Task[] {
+  const children = new Map<string | null, Task[]>();
+  for (const task of tasks) {
+    const siblings = children.get(task.parentId) ?? [];
+    siblings.push(task);
+    children.set(task.parentId, siblings);
+  }
+  const out: Task[] = [];
+  // id ではなく**もの**で覚える。同じ id のタスクが 2 つあるファイルでも、
+  // 片方を黙って捨てない (以前の読み込みも両方残していた)。
+  const placed = new Set<Task>();
+  const visit = (root: Task, detach: boolean): void => {
+    // 再帰にしない。深い木で呼び出しの段が尽きるのを避ける。
+    const stack = [root];
+    while (stack.length > 0) {
+      const next = stack.pop();
+      if (next === undefined || placed.has(next)) continue;
+      placed.add(next);
+      out.push(detach && next === root ? { ...next, parentId: null } : next);
+      const kids = children.get(next.id) ?? [];
+      for (let i = kids.length - 1; i >= 0; i--) {
+        const kid = kids[i];
+        if (kid !== undefined) stack.push(kid);
+      }
+    }
+  };
+  for (const root of children.get(null) ?? []) visit(root, false);
+  for (const task of tasks) {
+    if (!placed.has(task)) visit(task, true);
+  }
+  return out;
+}
+
+/**
  * 読み込んだ JSON を内容に整える。
  *
  * 形が違うものは例外を投げず、項目ごとに既定値へ落とす。
@@ -423,7 +467,7 @@ export function normalizeDocument(raw: unknown): ProjectDocument {
   const calendar = normalizeCalendar(record.calendar);
   const memberIds = new Set(calendar.members.map((member) => member.id));
   return {
-    tasks: rawTasks.map((task) => normalizeTask(task, knownIds, memberIds)),
+    tasks: toPreorder(rawTasks.map((task) => normalizeTask(task, knownIds, memberIds))),
     calendar,
     settings: normalizeSettings(record.settings),
   };
