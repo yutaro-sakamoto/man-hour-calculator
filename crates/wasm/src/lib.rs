@@ -445,4 +445,58 @@ mod tests {
         let outcome = load_state(r#"{"version":999,"users":[],"projects":[]}"#);
         assert!(outcome.contains(r#""ok":"false""#), "{outcome}");
     }
+
+    /// JSON としては正しいがオブジェクトでない保存データ。以前は移行の途中で
+    /// panic し、WASM ではアプリごと止まっていた (ファジングで見つかった)。
+    #[test]
+    fn a_non_object_state_is_refused_not_a_crash() {
+        for text in ["1", "[]", "null"] {
+            let outcome = load_state(text);
+            assert!(outcome.contains(r#""ok":"false""#), "{text}: {outcome}");
+        }
+    }
+
+    /// 橋の入口にでたらめなバイト列を渡す。UTF-8 として壊れているものも混ぜる
+    /// (`&str` を経由しないので、ここでしか撃てない)。どれも「失敗の応答」に
+    /// なり、落ちないこと。応答は必ず JSON で、`ok` を持つこと。
+    ///
+    /// miri の下では遅いので回数を絞る (見たいのは生ポインタの扱いで、
+    /// 入力の多様さは `crates/api` のファジングが受け持つ)。
+    #[test]
+    fn random_bytes_at_the_bridge_come_back_as_json() {
+        let cases = if cfg!(miri) { 8 } else { 400 };
+        let mut rng = mhc_core::rng::Rng::new(0xb41d6e);
+        let seeds: [&[u8]; 3] = [
+            br#"{"actor":"me","now":"2026-09-20T10:00:00Z","request":{"op":"listProjects"}}"#,
+            SEED_STATE.as_bytes(),
+            "\u{3042}\u{3044}".as_bytes(),
+        ];
+        for case in 0..cases {
+            let mut bytes = seeds[case % seeds.len()].to_vec();
+            for _ in 0..=rng.next_u64() % 4 {
+                let at = (rng.next_u64() as usize) % (bytes.len() + 1);
+                match rng.next_u64() % 3 {
+                    // 0x80..0xff を混ぜると、UTF-8 として壊れやすい。
+                    0 => bytes.insert(at, rng.next_u64() as u8),
+                    1 => bytes.truncate(at),
+                    _ => {
+                        if at < bytes.len() {
+                            bytes[at] ^= 0x80;
+                        }
+                    }
+                }
+            }
+            for entry in [api_call, import_state] {
+                // SAFETY: bytes.len() バイトが読める領域を渡している。
+                let text = unsafe {
+                    let ptr = entry(bytes.as_ptr(), bytes.len());
+                    std::slice::from_raw_parts(ptr, last_text_len()).to_vec()
+                };
+                let text = String::from_utf8(text).expect("応答は UTF-8");
+                let value: serde_json::Value =
+                    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+                assert!(value.get("ok").is_some(), "{case}: {text}");
+            }
+        }
+    }
 }

@@ -6,7 +6,7 @@ import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
 import { firstDayAtLeast } from "../model/schedule.ts";
 import type { ComputeResult } from "../wasm.ts";
-import { card, field, foldout, h, numberInput, select, subfold } from "./dom.ts";
+import { boldMarkup, card, field, foldout, h, numberInput, select, subfold } from "./dom.ts";
 
 function tile(key: string, label: string, value: string, accent = false): HTMLElement {
   return h("div", { class: `tile${accent ? " accent" : ""}`, dataset: { key, value } }, [
@@ -145,11 +145,15 @@ function renderProbe(result: ComputeResult): HTMLElement {
 
   const update = (position: number): void => {
     const value = result.lo + (position / PROBE_STEPS) * span;
-    output.innerHTML = t("probe.result", {
-      days: formatNumber(value, l),
-      unit: t("unit.days"),
-      prob: formatNumber(cumulativeAt(result, value) * 100, l, 1),
-    });
+    output.replaceChildren(
+      ...boldMarkup(
+        t("probe.result", {
+          days: formatNumber(value, l),
+          unit: t("unit.days"),
+          prob: formatNumber(cumulativeAt(result, value) * 100, l, 1),
+        }),
+      ),
+    );
   };
 
   const initial =

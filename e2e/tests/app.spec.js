@@ -1,48 +1,8 @@
 const path = require("path");
 const fs = require("fs/promises");
 const os = require("os");
-const { pathToFileURL } = require("url");
 const { test, expect } = require("@playwright/test");
-
-const PAGE_URL = pathToFileURL(
-  path.resolve(__dirname, "../../dist/app.html"),
-).href;
-
-/**
- * 検査のあいだ、画面から見える「いま」。
- *
- * **固定しないとテストが腐る。** 見本データのカレンダーは `startDate` を
- * 今日にし、表示範囲は `startDate` から `horizonDays` 日ぶん。ここで
- * 直書きしている `2026-09-21` のような日付は、実際の今日がそれを追い越した
- * 瞬間に「範囲の外」になって落ちる。実行した日によって結果が変わる検査は、
- * 検査ではない。
- */
-const FIXED_NOW = new Date("2026-09-01T09:00:00Z");
-
-/**
- * ページを開き、外部への通信もページ内の例外も起きていないことを保証する。
- * localStorage は毎回まっさらな状態から始める (テスト間で引きずらないため)。
- */
-async function open(page, { lang = "ja" } = {}) {
-  // 読み込みより先に時計を据える。`todayIso()` は起動時に 1 度読む。
-  await page.clock.install({ time: FIXED_NOW });
-  const external = [];
-  const errors = [];
-  page.on("request", (request) => {
-    if (!request.url().startsWith("file://")) external.push(request.url());
-  });
-  page.on("pageerror", (error) => errors.push(String(error)));
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console: ${message.text()}`);
-  });
-
-  await page.goto(PAGE_URL);
-  await expect(page.locator(".summary-bar")).toBeVisible();
-  await expect(page.locator("#status")).toContainText(/ms\)/);
-  // 実行環境の locale に左右されないよう、表示言語を明示的に決めてから始める。
-  await page.click(`.lang-toggle button[data-lang="${lang}"]`);
-  return { external, errors };
-}
+const { open } = require("./support");
 
 /** 操作して、計算が一巡し終わるまで待つ。 */
 async function recompute(page, action) {
@@ -508,7 +468,8 @@ test("帯グラフは入れ物からはみ出さない", async ({ page }) => {
     const canvas = document.querySelector("#schedule-chart");
     const box = canvas.closest("figure");
     return Math.round(
-      canvas.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom,
+      canvas.getBoundingClientRect().bottom -
+        box.getBoundingClientRect().bottom,
     );
   });
   expect(overflow, "図が入れ物からはみ出している").toBeLessThanOrEqual(0);
@@ -676,9 +637,7 @@ test("まっさらなプロジェクトは、責められずに始められる",
   // **案内が名指しする操作が、実際に押せる。** ここに実物が無いまま
   // 「サンプルを読み込む」と書いてあった時期がある。
   await expect(page.locator(".empty")).toContainText("サンプルを読み込む");
-  await recompute(page, () =>
-    page.click('button:text("サンプルを読み込む")'),
-  );
+  await recompute(page, () => page.click('button:text("サンプルを読み込む")'));
   await expect(rows(page)).toHaveCount(8);
   // 見本が入れば、要約に数字が出る。
   await expect(status).toContainText(/ms\)/);

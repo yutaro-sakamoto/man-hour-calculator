@@ -193,6 +193,11 @@ impl MemoryStore {
     pub fn from_json(text: &str) -> ApiResult<Self> {
         let mut value: serde_json::Value = serde_json::from_str(text)
             .map_err(|e| ApiError::invalid(format!("保存データを読めません: {e}")))?;
+        // オブジェクトでないものは、この先の移行が欄に書き込もうとして panic する。
+        // 入口で断る。
+        if !value.is_object() {
+            return Err(ApiError::invalid("保存データがオブジェクトではありません"));
+        }
 
         let version = value
             .get("version")
@@ -437,6 +442,18 @@ mod tests {
     #[test]
     fn the_memory_store_keeps_the_contract() {
         super::conformance::run_all(MemoryStore::new);
+    }
+
+    /// JSON としては正しいが、オブジェクトでない保存データ。
+    ///
+    /// 版の欄が無いので v1 とみなされ、移行が `value["version"]` に書こうとして
+    /// **panic していた** (ファジングで見つかった)。WASM は `panic = "abort"`
+    /// なので、エラーではなくアプリごと止まる。
+    #[test]
+    fn a_non_object_is_rejected_not_a_panic() {
+        for text in ["1", "[]", "\"x\"", "null", "true"] {
+            assert!(MemoryStore::from_json(text).is_err(), "{text} を受け付けた");
+        }
     }
 
     use crate::model::{AccessEntry, Principal, ProjectRole, SystemRole};
