@@ -108,6 +108,11 @@ if [ -z "$store_version" ]; then
 elif [ "$store_version" -gt "$schema_steps" ]; then
   bad "保存データの版 ($store_version) に対して、表の段 ($schema_steps) が足りません"
 fi
+# 版を上げたら、その版の保存データの見本も置く (移行テストが過去の形を
+# 全部開いて、ゴールデンと突き合わせる: crates/api/tests/store_formats.rs)。
+if [ -n "$store_version" ] && [ ! -f "crates/api/tests/fixtures/store-v$store_version.json" ]; then
+  bad "保存データの版 $store_version の見本 crates/api/tests/fixtures/store-v$store_version.json がありません"
+fi
 
 # ------------------------------------------- 品質の基準 ⇔ README の表
 # 基準は設定のほうにあり、README の表はその写し。基準を動かして表を
