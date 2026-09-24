@@ -28,6 +28,21 @@ export default tseslint.config(
       // (ui/tasks.ts と model/markdown.ts) なので、そこに置いて**上げない**。
       // 引っかかったら関数を割る。分布は ../scripts/complexity.sh で見られる。
       complexity: ["error", 25],
+      // 文字列を HTML として解釈させる道を塞ぐ。文字は必ず textContent に
+      // 入れる (.claude/rules/frontend.md)。取り決めだけだった頃、使っている
+      // 箇所が 2 つ残っていた。
+      "no-restricted-properties": [
+        "error",
+        ...["innerHTML", "outerHTML", "insertAdjacentHTML"].map((property) => ({
+          property,
+          message: "HTML の文字列を組み立てない。textContent に入れる (frontend.md)",
+        })),
+        ...["write", "writeln"].map((property) => ({
+          object: "document",
+          property,
+          message: "HTML の文字列を組み立てない。textContent に入れる (frontend.md)",
+        })),
+      ],
     },
   },
   {

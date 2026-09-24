@@ -11,7 +11,6 @@ export type Child = Node | string | number | null | false | undefined;
 interface Options {
   class?: string;
   text?: string;
-  html?: string;
   title?: string;
   id?: string;
   attrs?: Record<string, string | number | boolean | null>;
@@ -33,7 +32,6 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   if (options.id !== undefined) element.id = options.id;
   if (options.title !== undefined) element.title = options.title;
   if (options.text !== undefined) element.textContent = options.text;
-  if (options.html !== undefined) element.innerHTML = options.html;
 
   for (const [name, value] of Object.entries(options.attrs ?? {})) {
     // ARIA の真偽は文字列の "true" / "false"。`disabled` のような本物の
@@ -320,4 +318,20 @@ export function foldout(
       ...children,
     ],
   );
+}
+
+/**
+ * 訳文のなかの `<b>…</b>` だけを太字の要素にし、残りは文字として並べる。
+ *
+ * 訳文に強調を書けるようにしつつ、**`innerHTML` は使わない** ための道具。
+ * `<b>` 以外の印はそのまま文字として出る (差し込んだ値に何が入っていても
+ * スクリプトにはならない)。
+ */
+export function boldMarkup(text: string): Node[] {
+  return text
+    .split(/<b>(.*?)<\/b>/)
+    .map((part, index) =>
+      index % 2 === 1 ? h("b", { text: part }) : document.createTextNode(part),
+    )
+    .filter((node) => node.textContent !== "");
 }

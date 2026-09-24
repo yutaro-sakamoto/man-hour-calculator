@@ -35,6 +35,11 @@ API を叩く欄を `input` で拾わない。1 打鍵ごとに書き込みが�
 コメントも利用者が書いた文字列で、そこに何が書かれていてもスクリプトに
 なってはいけない。
 
+ESLint が `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `document.write` を
+禁じている (取り決めだけだった頃、使っている箇所が 2 つ残っていた)。
+訳文に強調を書きたいときは `<b>…</b>` で書いて `boldMarkup()` (`ui/dom.ts`) に
+通す。配布物では `e2e/tests/xss.spec.js` が全部の欄に HTML を書いて確かめる。
+
 - Markdown は木に解いてから DOM を生やす (`model/markdown.ts`)
 - グラフの吹き出しは**部品**を受け取る (`charts/common.ts` の `TooltipRow`)。
   文字列を受け取る形に戻さない — 戻すと「タスク名をそのまま差し込む」書き方が
