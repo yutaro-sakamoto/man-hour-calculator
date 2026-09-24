@@ -275,9 +275,20 @@ for (const seed of SEEDS) {
       ).toBeUndefined();
     }
 
-    // 最後まで応答する: 表示言語を切り替えられる。
-    await page.keyboard.press("Escape");
-    await page.click('.lang-toggle button[data-lang="en"]');
+    // 最後まで応答する。開いている窓は Esc で全部閉じられ (閉じられない窓は
+    // キーボードの利用者を閉じ込める)、表示言語を切り替えられる。
+    for (
+      let i = 0;
+      i < 5 && (await page.locator(".modal-card").count()) > 0;
+      i++
+    ) {
+      await page.keyboard.press("Escape");
+    }
+    await expect(
+      page.locator(".modal-card"),
+      `Esc で閉じない窓がある\n${report()}`,
+    ).toHaveCount(0);
+    await page.click('.lang-toggle button[data-lang="en"]', { timeout: 5000 });
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
   });
 }

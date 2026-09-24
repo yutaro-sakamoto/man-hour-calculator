@@ -141,6 +141,12 @@ pub const SCHEMA_VERSION: usize = STEPS.len();
 
 /// 足りない段だけを当てる。すでに最新なら何もしない。
 pub fn migrate(sql: &mut dyn Sql) -> ApiResult<()> {
+    migrate_to(sql, SCHEMA_VERSION)
+}
+
+/// `target` の版まで当てる。途中の版のデータベースを作って、そこから
+/// 最新へ上げる検査のために分けてある (本番は常に最新まで)。
+fn migrate_to(sql: &mut dyn Sql, target: usize) -> ApiResult<()> {
     sql.execute(
         "CREATE TABLE IF NOT EXISTS schema_version (version BIGINT NOT NULL)",
         &[],
@@ -154,7 +160,7 @@ pub fn migrate(sql: &mut dyn Sql) -> ApiResult<()> {
         )));
     }
 
-    for (index, step) in STEPS.iter().enumerate().skip(current) {
+    for (index, step) in STEPS.iter().enumerate().take(target).skip(current) {
         for statement in *step {
             sql.execute(statement, &[])?;
         }
@@ -181,4 +187,141 @@ fn write_version(sql: &mut dyn Sql, version: usize) -> ApiResult<()> {
         "INSERT INTO schema_version (version) VALUES (?)",
         &[Value::Int(i64::try_from(version).unwrap_or(i64::MAX))],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::sqlite::SqliteConn;
+    use crate::store::SqlStore;
+    use mhc_api::model::{CommentId, ProjectId, UserId};
+    use mhc_api::store::Store;
+
+    /// その版の表にだけ書ける形で、1 揃いのデータを直に入れる。
+    /// 中身は「その版を使っていた頃のサーバが書いたもの」を模している。
+    fn fill(sql: &mut dyn Sql, version: usize) {
+        let text = Value::text;
+        sql.execute(
+            "INSERT INTO users (id, name, email, system_role, created_at) VALUES (?, ?, ?, ?, ?)",
+            &[
+                text("u1"),
+                text("佐藤"),
+                Value::Null,
+                text("admin"),
+                text("2026-01-01T00:00:00Z"),
+            ],
+        )
+        .unwrap();
+        sql.execute(
+            "INSERT INTO projects (id, name, created_at, updated_at, group_id, due_date, status, \
+             task_count, member_count, document) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            &[
+                text("p1"),
+                text("案件"),
+                text("2026-01-01T00:00:00Z"),
+                text("2026-01-01T00:00:00Z"),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                text("0"),
+                text("1"),
+                text(r#"{"tasks":[],"calendar":{},"settings":{}}"#),
+            ],
+        )
+        .unwrap();
+        sql.execute(
+            "INSERT INTO project_access (project_id, principal_kind, principal_id, role) \
+             VALUES (?, ?, ?, ?)",
+            &[text("p1"), text("user"), text("u1"), text("owner")],
+        )
+        .unwrap();
+        if version >= 2 {
+            sql.execute(
+                "INSERT INTO comments (id, project_id, task_id, author, body, created_at, \
+                 updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                &[
+                    text("c1"),
+                    text("p1"),
+                    Value::Null,
+                    text("u1"),
+                    text("本文"),
+                    text("2026-01-02T00:00:00Z"),
+                    Value::Null,
+                ],
+            )
+            .unwrap();
+        }
+        if version >= 3 {
+            sql.execute(
+                "INSERT INTO attachments (id, comment_id, position, filename, mime, size, data) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                &[
+                    text("a1"),
+                    text("c1"),
+                    Value::Int(0),
+                    text("図.png"),
+                    text("image/png"),
+                    Value::Int(3),
+                    text("AAAA"),
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    /// **どの版のデータベースからでも**最新に上げられ、中身が残る。
+    ///
+    /// 最新の表で作ったデータベースだけを試していると、段を足したときに
+    /// 「古い版の行を運べない」誤り (列の取り違え・主キーの衝突) に
+    /// 気づけない。版 4 の添付の付け替えがまさにそれを運ぶ段。
+    #[test]
+    fn every_old_database_upgrades_to_the_latest_with_its_data() {
+        for version in 1..=SCHEMA_VERSION {
+            let mut conn = SqliteConn::in_memory().unwrap();
+            migrate_to(&mut conn, version).unwrap();
+            fill(&mut conn, version);
+
+            let store = SqlStore::open(conn)
+                .unwrap_or_else(|e| panic!("版 {version} から上げられない: {e:?}"));
+            let what = format!("版 {version} から上げたもの");
+            let user = (&store).user(&UserId::new("u1")).unwrap().expect(&what);
+            assert_eq!(user.name, "佐藤", "{what}");
+            let project = (&store)
+                .project(&ProjectId::new("p1"))
+                .unwrap()
+                .expect(&what);
+            assert_eq!(project.meta.name, "案件", "{what}");
+            assert_eq!(project.meta.access.len(), 1, "{what}");
+            if version >= 2 {
+                let comment = (&store)
+                    .comment(&CommentId::new("c1"))
+                    .unwrap()
+                    .expect(&what);
+                assert_eq!(comment.body, "本文", "{what}");
+                if version >= 3 {
+                    assert_eq!(comment.attachments.len(), 1, "{what}");
+                    assert_eq!(comment.attachments[0].filename, "図.png", "{what}");
+                }
+            }
+            // 上げたあとも、最新の約束どおりに書ける。
+            (&store)
+                .put_user(mhc_api::model::User {
+                    id: UserId::new("u2"),
+                    name: "新しい人".into(),
+                    email: None,
+                    system_role: mhc_api::model::SystemRole::Member,
+                    created_at: "2026-02-01T00:00:00Z".into(),
+                })
+                .unwrap();
+        }
+    }
+
+    /// 2 度当てても何も起きない (起動のたびに `migrate` が呼ばれる)。
+    #[test]
+    fn migrating_twice_changes_nothing() {
+        let mut conn = SqliteConn::in_memory().unwrap();
+        migrate(&mut conn).unwrap();
+        migrate(&mut conn).unwrap();
+        assert_eq!(read_version(&mut conn).unwrap(), SCHEMA_VERSION);
+    }
 }

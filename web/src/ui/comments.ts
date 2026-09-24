@@ -418,6 +418,18 @@ export function renderCommentsModal(state: AppState, actions: AppActions): HTMLE
     ],
   );
 
+  // 開いた直後は書く欄に合わせる (書けないときは閉じるボタン)。ほかの窓
+  // (タスクの詳細・予定) と同じ。これが無いと、フォーカスが窓の後ろに残り、
+  // Esc で閉じられず、キーボードと読み上げの利用者は窓の中に入れなかった
+  // (モンキーテストで見つかった)。すでに窓のなかを触っているときは奪わない。
+  queueMicrotask(() => {
+    if (panel.contains(document.activeElement)) return;
+    (
+      panel.querySelector<HTMLElement>(".comment-input") ??
+      panel.querySelector<HTMLElement>("button")
+    )?.focus();
+  });
+
   return h(
     "div",
     {

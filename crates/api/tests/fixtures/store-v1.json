@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "users": [
+    {"id": "root", "name": "管理者", "systemRole": "admin", "createdAt": "2026-01-01T00:00:00Z"},
+    {"id": "alice", "name": "佐藤", "email": "alice@example.com", "systemRole": "member", "createdAt": "2026-01-01T00:00:00Z"}
+  ],
+  "projects": [
+    {
+      "id": "p1",
+      "name": "案件",
+      "createdAt": "2026-01-05T00:00:00Z",
+      "updatedAt": "2026-01-06T00:00:00Z",
+      "access": [
+        {"userId": "alice", "role": "owner"},
+        {"userId": "root", "role": "viewer"}
+      ],
+      "document": {
+        "tasks": [
+          {
+            "id": "t1", "name": "設計", "parentId": null, "group": "", "priority": "high",
+            "enabled": true, "min": "1", "likely": "2", "max": "4", "startDate": null,
+            "progress": 0, "endDate": null, "assigneeId": null
+          }
+        ],
+        "calendar": {},
+        "settings": {}
+      }
+    }
+  ]
+}

@@ -205,6 +205,30 @@ MHC_FUZZ_ITERS=20000 cargo test --release fuzz      # raise the count for a deep
 MHC_MONKEY_STEPS=1000 npx playwright test monkey    # from e2e/
 ```
 
+### From the attacker's side
+
+Tests that assume a hostile caller are part of the ordinary suites too.
+
+- **Server**: every route in the route table is called with someone else's ids from an
+  unrelated account and must neither succeed nor change anything (BOLA/IDOR).
+  Authentication happens before the body is read, and every response carries defensive
+  headers (clickjacking, MIME sniffing, caching). SQL metacharacters, path tricks,
+  oversized bodies and 16 concurrent writers are tried as well
+- **Shipped page**: the HTML carries a CSP. Inline scripts are named by their SHA-256 at
+  build time and nothing else runs. Names exported to CSV never become spreadsheet
+  formulas. ESLint forbids `innerHTML` and `eval`
+- **Accessibility**: axe finds zero WCAG 2.2 AA issues (light/dark × Japanese/English)
+
+There is also fault injection (a failing store or localStorage never leaves a half-done
+change), migration tests (every past save format and database opens), golden tests (the
+same input gives the same numbers across versions), contract tests between the UI and the
+API, performance and soak tests, and a narrow-screen check. The full map is in
+[docs/VERIFICATION.md](docs/VERIFICATION.md).
+
+```sh
+MHC_UPDATE_GOLDEN=1 cargo test golden store_formats   # when a golden file changes on purpose
+```
+
 CI runs it nightly at 03:00 JST across four parallel shards (and on demand via
 `workflow_dispatch`). If the catch rate — `caught / (caught + missed)` — drops below the
 bar, it files an issue listing every mutant that got away. Those are lines the tests walk

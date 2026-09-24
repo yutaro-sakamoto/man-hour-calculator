@@ -110,6 +110,40 @@ const CSV_HEADER = [
   "endDate",
 ] as const;
 
+/**
+ * 表計算ソフトで式として読まれる書き出し。`=`・`+`・`-`・`@` と、その前に
+ * 置かれて読み飛ばされるタブ・CR。
+ */
+const FORMULA_START = /^[=+\-@\t\r]/;
+
+/**
+ * 利用者が書いた文字の欄 (名前・グループ) を、式にならない形にする。
+ *
+ * CSV を表計算ソフトで開くと、`=HYPERLINK("https://…?"&A1)` のようなセルは
+ * **開いた瞬間に式として実行される** (CSV インジェクション)。先頭に `'` を
+ * 足すと文字として扱われる (OWASP の勧める形)。読み戻すときは
+ * [`unquoteFormula`] で外す。数値の欄には使わない — 負の数を潰してしまう。
+ */
+function quoteFormula(value: string): string {
+  // もともと `'` で始まる名前にも足す。足さないと、`'+1` という名前が
+  // 読み戻しで `+1` に化ける (印と見分けがつかない。ファジングで見つかった)。
+  return FORMULA_START.test(value) || value.startsWith("'") ? `'${value}` : value;
+}
+
+/**
+ * [`quoteFormula`] で足した `'` を外してから、前後の空白を落とす。
+ *
+ * **順番が大事。** 先に空白を落とすと、`'\t` (タブだけの名前を書き出したもの)
+ * が `'` だけになり、外すべき印が名前として残る (ファジングで見つかった)。
+ */
+function unquoteFormula(value: string): string {
+  const unquoted =
+    value.startsWith("'") && (FORMULA_START.test(value.slice(1)) || value[1] === "'")
+      ? value.slice(1)
+      : value;
+  return unquoted.trim();
+}
+
 function escapeCsv(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
@@ -121,8 +155,8 @@ export function projectToCsv(rows: readonly TreeRow[]): string {
     lines.push(
       [
         String(row.depth),
-        t.name,
-        t.group,
+        quoteFormula(t.name),
+        quoteFormula(t.group),
         t.priority,
         t.enabled ? "1" : "0",
         row.hasChildren ? "" : t.min,
@@ -193,10 +227,11 @@ export function csvToTasks(text: string): Task[] {
   const hasHeader = header.includes("name") || header.includes("likely");
   const columns = hasHeader ? header : [...CSV_HEADER];
   const body = hasHeader ? rows.slice(1) : rows;
-  const at = (cells: string[], key: string): string => {
+  const raw = (cells: string[], key: string): string => {
     const index = columns.indexOf(key);
-    return index < 0 ? "" : (cells[index] ?? "").trim();
+    return index < 0 ? "" : (cells[index] ?? "");
   };
+  const at = (cells: string[], key: string): string => raw(cells, key).trim();
 
   const tasks: Task[] = [];
   // 深さごとの「直近の親候補」。
@@ -208,9 +243,9 @@ export function csvToTasks(text: string): Task[] {
     const priority = at(cells, "priority");
     const enabled = at(cells, "enabled");
     const task = createTask({
-      name: at(cells, "name"),
+      name: unquoteFormula(raw(cells, "name")),
       parentId,
-      group: at(cells, "group"),
+      group: unquoteFormula(raw(cells, "group")),
       priority: priority === "high" || priority === "low" ? priority : "normal",
       enabled: enabled !== "0" && enabled.toLowerCase() !== "false",
       min: at(cells, "min") || "0",

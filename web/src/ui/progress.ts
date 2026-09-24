@@ -12,7 +12,7 @@ import { lang, t } from "../i18n.ts";
 import { progressOverall } from "../model/progress.ts";
 import { card, h } from "./dom.ts";
 
-function meter(value: number, extraClass = ""): HTMLElement {
+function meter(value: number, label: string, extraClass = ""): HTMLElement {
   return h(
     "div",
     {
@@ -20,6 +20,9 @@ function meter(value: number, extraClass = ""): HTMLElement {
       dataset: { progress: value.toFixed(4) },
       attrs: {
         role: "progressbar",
+        // 読み上げで「何の進み具合か」が分かるように名前を付ける (axe の
+        // aria-progressbar-name)。
+        "aria-label": label,
         "aria-valuemin": 0,
         "aria-valuemax": 100,
         "aria-valuenow": Math.round(value * 100),
@@ -56,7 +59,7 @@ export function renderProgressCard(state: AppState): HTMLElement | null {
     t("progress.heading"),
     [
       h("div", { class: "progress-head" }, [
-        meter(progress.ratio, "wide"),
+        meter(progress.ratio, t("progress.heading"), "wide"),
         h("strong", {
           class: "progress-value",
           text: formatPercent(progress.ratio, l, 0),
@@ -76,7 +79,7 @@ export function renderProgressCard(state: AppState): HTMLElement | null {
         ? null
         : h("div", { class: "progress-elapsed" }, [
             h("span", { class: "field-label", text: t("progress.elapsed") }),
-            meter(elapsed, "thin"),
+            meter(elapsed, t("progress.elapsed"), "thin"),
             h("span", { class: "muted", text: formatPercent(elapsed, l, 0) }),
           ]),
       h("p", { class: "hint", text: t("progress.note") }),

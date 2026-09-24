@@ -9,17 +9,21 @@
   --surface-sunken: #f2f1ed;
   --ink: #0b0b0b;
   --ink-secondary: #52514e;
-  --ink-muted: #898781;
+  /* 文字に使う 3 色は、面の上で WCAG AA (4.5:1) を満たす濃さにしてある。
+     axe (e2e/tests/a11y.spec.js) が見張る。元の値は 3.2〜4.4:1 だった。 */
+  --ink-muted: #61605c;
+  /* 塗った面 (--series) の上の文字。ダークでは面が明るいので黒にする。 */
+  --on-series: #ffffff;
   --grid: #e1e0d9;
   --axis: #c3c2b7;
   --border: rgba(11, 11, 11, 0.1);
-  --series: #2a78d6;
-  --series-soft: rgba(42, 120, 214, 0.14);
+  --series: #2262af;
+  --series-soft: rgba(34, 98, 175, 0.14);
   --band-outer: #86b6ef;
   --band-inner: #3987e5;
   --band-marker: #184f95;
   --offday: rgba(11, 11, 11, 0.09);
-  --critical: #d03b3b;
+  --critical: #b13232;
   --warning: #fab219;
   --serious: #ec835a;
   --good: #006300;
@@ -40,17 +44,18 @@
     --surface-sunken: #232322;
     --ink: #ffffff;
     --ink-secondary: #c3c2b7;
-    --ink-muted: #898781;
+    --ink-muted: #a9a7a3;
+    --on-series: #0b0b0b;
     --grid: #2c2c2a;
     --axis: #383835;
     --border: rgba(255, 255, 255, 0.1);
-    --series: #3987e5;
-    --series-soft: rgba(57, 135, 229, 0.2);
+    --series: #72aaed;
+    --series-soft: rgba(114, 170, 237, 0.2);
     --band-outer: #1c5cab;
     --band-inner: #3987e5;
     --band-marker: #86b6ef;
     --offday: rgba(255, 255, 255, 0.1);
-    --critical: #e66767;
+    --critical: #ec8d8d;
     --serious: #ec835a;
     --good: #0ca30c;
     --good-fill: #0ca30c;
@@ -179,7 +184,7 @@ header h1 {
 .lang-toggle button[aria-pressed="true"],
 .segmented button[aria-pressed="true"] {
   background: var(--series);
-  color: #fff;
+  color: var(--on-series);
 }
 .segmented {
   display: inline-flex;
@@ -430,7 +435,7 @@ button:disabled {
 button.primary {
   background: var(--series);
   border-color: transparent;
-  color: #fff;
+  color: var(--on-series);
 }
 button.ghost {
   background: transparent;
@@ -849,7 +854,7 @@ select.assignee {
 }
 .day.today .day-number {
   background: var(--series);
-  color: #fff;
+  color: var(--on-series);
   font-weight: 650;
 }
 .day-capacity {
@@ -1736,7 +1741,7 @@ td.num.short {
 }
 .composer-tabs button[aria-pressed="true"] {
   background: var(--series);
-  color: #fff;
+  color: var(--on-series);
   border-color: transparent;
 }
 .comment-input {

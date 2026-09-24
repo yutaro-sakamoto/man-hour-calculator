@@ -604,8 +604,11 @@ impl<S: Store> Service<S> {
             snapshot
         });
         project.refresh_counts();
-        self.store.put_project(project.clone())?;
-        self.summarize(&project.meta, actor, now)
+        // 応答は書く前に組み立てる。書いたあとに読んで失敗すると、「失敗」と
+        // 答えたのに書けている状態になる (障害の注入で見つかった)。
+        let summary = self.summarize(&project.meta, actor, now)?;
+        self.store.put_project(project)?;
+        Ok(summary)
     }
 
     pub fn update_project(
@@ -652,8 +655,11 @@ impl<S: Store> Service<S> {
         }
         // `updated_at` は**中身**が変わった時刻。見出しの付け替えでは動かさない。
         // ここで動かすと、計算し直す必要が無いのに控えが「古い」ことになってしまう。
-        self.store.put_project(project.clone())?;
-        self.summarize(&project.meta, actor, now)
+        // 応答は書く前に組み立てる。書いたあとに読んで失敗すると、「失敗」と
+        // 答えたのに書けている状態になる (障害の注入で見つかった)。
+        let summary = self.summarize(&project.meta, actor, now)?;
+        self.store.put_project(project)?;
+        Ok(summary)
     }
 
     pub fn delete_project(&mut self, actor: &Actor, id: &ProjectId) -> ApiResult<()> {

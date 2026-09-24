@@ -108,6 +108,11 @@ if [ -z "$store_version" ]; then
 elif [ "$store_version" -gt "$schema_steps" ]; then
   bad "保存データの版 ($store_version) に対して、表の段 ($schema_steps) が足りません"
 fi
+# 版を上げたら、その版の保存データの見本も置く (移行テストが過去の形を
+# 全部開いて、ゴールデンと突き合わせる: crates/api/tests/store_formats.rs)。
+if [ -n "$store_version" ] && [ ! -f "crates/api/tests/fixtures/store-v$store_version.json" ]; then
+  bad "保存データの版 $store_version の見本 crates/api/tests/fixtures/store-v$store_version.json がありません"
+fi
 
 # ------------------------------------------- 品質の基準 ⇔ README の表
 # 基準は設定のほうにあり、README の表はその写し。基準を動かして表を
@@ -135,6 +140,23 @@ else
       || bad "$readme の TypeScript の複雑度の上限が eslint.config.js と違います"
   done
 fi
+
+# ------------------------------------------------ 秘密を書き込んでいない
+# 鍵やトークンは一度 push すると取り消せない (履歴にも、複製にも残る)。
+# 形で分かるものだけを見る: 秘密鍵、AWS / GitHub / Slack / Anthropic / Google の
+# トークン。この検査そのもの (パターンを書いたこのファイル) は外す。
+# パターンは `-----` で始まるので、`-e` で渡す (渡さないと grep の
+# 引数と読まれて、**何も見つけないまま 0 件になる**。実際にそうなった)。
+secret_pattern='-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}'
+secrets=$(git ls-files -z 2> /dev/null \
+  | grep -zv '^scripts/check-sync.sh$' \
+  | xargs -0 grep -IlE -e "$secret_pattern" 2> /dev/null)
+if [ -n "$secrets" ]; then
+  while read -r file; do
+    bad "秘密らしいものが書き込まれています: $file"
+  done <<< "$secrets"
+fi
+say "秘密の書き込み: $(echo -n "$secrets" | grep -c . || true) 件"
 
 # ------------------------------------------- ロケールに頼った正規表現
 # 語境界 (バックスラッシュ b) は、**多バイト文字の直後ではロケールで意味が

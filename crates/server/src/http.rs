@@ -10,6 +10,18 @@
 //! それに合わせて並べてある。食い違っていないことは
 //! `every_documented_route_is_served` が見張っている。
 //!
+//! # 守りの層
+//!
+//! ルートの外側に 3 枚重ねてある ([`router`])。
+//!
+//! - **認証が先。** `/v1/` は、本文を読む前に呼び出し元を確かめる
+//!   ([`authenticate_first`])。認証の無い呼び手に、本文を読ませない・
+//!   本文の形のエラーを返さない
+//! - **本文の上限** ([`BODY_LIMIT`])。正しい呼び出しの最大に合わせる
+//! - **防御のヘッダ** ([`defensive_headers`])。どの応答にも付ける
+//!
+//! どれも `tests/security.rs` が攻める側から確かめている。
+//!
 //! # ロック
 //!
 //! 「読む → 判定 → 書く」で不変条件を守っているので、書き込みのあいだは
@@ -18,15 +30,16 @@
 
 use std::sync::{Arc, RwLock};
 
-use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use mhc_api::error::ApiError;
 use mhc_api::model::{
     Attachment, CommentId, Document, Principal, ProjectGroupId, ProjectId, ProjectRole,
-    ProjectStatus, SystemRole, UserId,
+    ProjectStatus, SystemRole, UserId, MAX_ATTACHMENTS_PER_COMMENT, MAX_ATTACHMENT_BYTES,
 };
 use mhc_api::protocol::{dispatch, Envelope, Outcome, Request};
 use mhc_api::service::Service;
@@ -337,6 +350,73 @@ fn cors(origins: &[String]) -> Option<tower_http::cors::CorsLayer> {
     )
 }
 
+/// 本文の上限。**正しい呼び出しの最大**から決める。
+///
+/// いちばん大きいのは、上限いっぱいの添付を上限の件数だけ付けたコメント
+/// (base64 で 4/3 倍)。axum の既定 (2 MiB) のままだと、ローカル版では通る
+/// コメントがサーバでだけ 413 で落ちていた。残りの 1 MiB は本文と JSON の枠。
+pub const BODY_LIMIT: usize =
+    MAX_ATTACHMENTS_PER_COMMENT * (MAX_ATTACHMENT_BYTES as usize).div_ceil(3) * 4 + (1 << 20);
+
+/// 本文を読む前に、呼び出し元を確かめる。
+///
+/// axum は本文を型に読み込む (`Json`) のを、ハンドラの中の認証より**先に**
+/// 済ませる。放っておくと、トークンを持たない呼び手が上限いっぱいの本文を
+/// 送りつけて読ませられ、本文の形の誤り (422) まで返ってきていた。
+/// ここで先に断る。通ったあとハンドラがもう一度確かめるのは、同じ日の
+/// 2 回目は書き込まない読み取り 1 回ぶんで、安い。
+async fn authenticate_first<C: Sql + 'static>(
+    State(app): State<App<C>>,
+    request: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !request.uri().path().starts_with("/v1/") {
+        return next.run(request).await;
+    }
+    let headers = request.headers().clone();
+    let checked = tokio::task::spawn_blocking(move || {
+        let now = clock::now();
+        app.actor(&headers, &now).map(|_| ())
+    })
+    .await;
+    match checked {
+        Ok(Ok(())) => next.run(request).await,
+        Ok(Err(error)) => {
+            let status =
+                StatusCode::from_u16(error.http_status()).unwrap_or(StatusCode::UNAUTHORIZED);
+            (status, Json(error)).into_response()
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// どの応答にも付ける防御のヘッダ。
+///
+/// - `nosniff`: JSON や添付を、ブラウザに HTML と推測させない
+/// - `X-Frame-Options` と `frame-ancestors`: 別のサイトの枠に入れさせない
+///   (クリックジャッキング)。画面の HTML は `<meta>` で CSP を持っているが、
+///   `frame-ancestors` は `<meta>` では効かないので、ここで付ける
+/// - `Referrer-Policy`: URL (プロジェクトの id) を外のサイトへ渡さない
+/// - `Cache-Control: no-store` (API だけ): トークンで引いた中身を、共有の
+///   キャッシュやブラウザに残させない
+async fn defensive_headers(request: axum::extract::Request, next: Next) -> Response {
+    let api = request.uri().path().starts_with("/v1/");
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    for (name, value) in [
+        ("x-content-type-options", "nosniff"),
+        ("x-frame-options", "DENY"),
+        ("content-security-policy", "frame-ancestors 'none'"),
+        ("referrer-policy", "no-referrer"),
+    ] {
+        headers.insert(name, HeaderValue::from_static(value));
+    }
+    if api {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
 /// 組み立てたルータ。テストからも同じものを使う。
 pub fn router<C: Sql + 'static>(app: App<C>) -> Router {
     let allowed = cors(&app.allow_origins);
@@ -403,7 +483,13 @@ pub fn router<C: Sql + 'static>(app: App<C>) -> Router {
         // 画面。知らないパスもここに落とすので、深いリンクを開いても出る。
         .route("/", get(ui::<C>))
         .fallback(get(ui::<C>))
+        .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        .layer(middleware::from_fn_with_state(
+            app.clone(),
+            authenticate_first::<C>,
+        ))
         .layer(tower_http::catch_panic::CatchPanicLayer::new())
+        .layer(middleware::from_fn(defensive_headers))
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
     match allowed {

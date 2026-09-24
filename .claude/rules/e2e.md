@@ -12,6 +12,27 @@ paths:
 `open()` (`tests/support.js`) が、外部へのリクエストとページ内の例外を
 数えている。ここが 0 でなくなったら落ちる。新しい spec も必ずこれで開く。
 
+## どの spec が何を見ているか
+
+| spec | 見ているもの |
+|---|---|
+| `app.spec.js` | 機能ひとつずつの筋書き |
+| `monkey.spec.js` | 筋書きの無い乱択の操作 |
+| `xss.spec.js` / `security.spec.js` | 攻める側 (XSS・CSP・タブナビング・原型の汚染・CSV) |
+| `a11y.spec.js` | axe と窓のフォーカス |
+| `l10n.spec.js` | 英語の画面の日本語の残り |
+| `chaos.spec.js` | localStorage が壊れているとき |
+| `performance.spec.js` | 上限いっぱいの大きさと、繰り返し (ソーク) |
+| `compat.spec.js` | 狭い画面とタッチ |
+
+- **`page.evaluate` の中は CSP の外。** そこで `eval` しても止まらないので、
+  CSP が効いているかはそこで試さない (`<script>` を差し込んで試す)
+- axe は `<script>` で差し込むと CSP が止める。`page.evaluate` で読み込む
+- ブラウザの違いは `MHC_BROWSERS=chromium,firefox,webkit` で足せる (CI は Chromium だけ)
+- **落ちたら、まず入力を作った側を疑う。** 性能の検査が作った `min > likely` の
+  タスクを、アプリの不具合と読み違えかけた。直す前に、その入力が本当に
+  ありうるものかを確かめる
+
 ## モンキーテスト
 
 `tests/monkey.spec.js` は筋書きを持たず、見えている押せるもの・書けるものを

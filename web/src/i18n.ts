@@ -668,7 +668,7 @@ const en: Dictionary = {
 
   "accounts.heading": "Accounts",
   "accounts.hint":
-    "An account is someone who operates the app; a person (人員) is a working resource. They are different things.",
+    "An account is someone who operates the app; an entry under ‘People’ is a working resource. They are different things.",
   "accounts.add": "Add account",
   "accounts.name": "Name",
   "accounts.email": "Email",
@@ -1003,7 +1003,8 @@ const en: Dictionary = {
 
 export type MessageKey = keyof typeof ja;
 
-const TABLES: Record<Lang, Dictionary> = { ja, en };
+/** 訳文の表。画面は `t()` で引く。表そのものを出すのは、訳の抜けを検査するため。 */
+export const TABLES: Record<Lang, Dictionary> = { ja, en };
 
 const STORAGE_KEY = "mhc.lang.v1";
 

@@ -1,0 +1,137 @@
+{
+  "comments": [
+    {
+      "attachments": [
+        {
+          "data": "AAAA",
+          "filename": "図.png",
+          "id": "a1",
+          "mime": "image/png",
+          "size": 3
+        }
+      ],
+      "author": "bob",
+      "body": "**見て**",
+      "createdAt": "2026-01-08T00:00:00Z",
+      "id": "c1",
+      "projectId": "p1",
+      "taskId": "t1",
+      "updatedAt": null
+    }
+  ],
+  "projectGroups": [
+    {
+      "access": [
+        {
+          "principal": {
+            "id": "alice",
+            "kind": "user"
+          },
+          "role": "owner"
+        }
+      ],
+      "createdAt": "2026-01-04T00:00:00Z",
+      "id": "pg1",
+      "name": "部門"
+    }
+  ],
+  "projects": [
+    {
+      "access": [
+        {
+          "principal": {
+            "id": "g1",
+            "kind": "group"
+          },
+          "role": "editor"
+        },
+        {
+          "principal": {
+            "id": "alice",
+            "kind": "user"
+          },
+          "role": "owner"
+        }
+      ],
+      "createdAt": "2026-01-05T00:00:00Z",
+      "document": {
+        "calendar": {
+          "events": [],
+          "forcedWorkdays": [],
+          "horizonDays": 365,
+          "hoursPerPersonDay": 8.0,
+          "members": [],
+          "startDate": "",
+          "today": "",
+          "useJapaneseHolidays": true
+        },
+        "settings": {
+          "bins": 48,
+          "dist": 0,
+          "engine": 0,
+          "gridPoints": 2048,
+          "iterations": 100000,
+          "lambda": 4.0,
+          "seed": 20250920
+        },
+        "tasks": [
+          {
+            "assigneeId": null,
+            "enabled": true,
+            "endDate": null,
+            "group": "",
+            "id": "t1",
+            "likely": "2",
+            "max": "4",
+            "min": "1",
+            "name": "設計",
+            "parentId": null,
+            "priority": "high",
+            "progress": 0.0,
+            "startDate": null
+          }
+        ]
+      },
+      "dueDate": "2026-12-01",
+      "groupId": "pg1",
+      "id": "p1",
+      "memberCount": 0,
+      "name": "案件",
+      "status": null,
+      "taskCount": 1,
+      "updatedAt": "2026-01-05T00:00:00Z"
+    }
+  ],
+  "userGroups": [
+    {
+      "createdAt": "2026-01-02T00:00:00Z",
+      "id": "g1",
+      "members": [
+        "bob"
+      ],
+      "name": "チーム"
+    }
+  ],
+  "users": [
+    {
+      "createdAt": "2026-01-01T00:00:00Z",
+      "id": "root",
+      "name": "管理者",
+      "systemRole": "admin"
+    },
+    {
+      "createdAt": "2026-01-01T00:00:00Z",
+      "email": "alice@example.com",
+      "id": "alice",
+      "name": "佐藤",
+      "systemRole": "member"
+    },
+    {
+      "createdAt": "2026-01-01T00:00:00Z",
+      "id": "bob",
+      "name": "鈴木",
+      "systemRole": "member"
+    }
+  ],
+  "version": 3
+}

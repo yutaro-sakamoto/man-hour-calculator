@@ -31,6 +31,11 @@ export default tseslint.config(
       // 文字列を HTML として解釈させる道を塞ぐ。文字は必ず textContent に
       // 入れる (.claude/rules/frontend.md)。取り決めだけだった頃、使っている
       // 箇所が 2 つ残っていた。
+      // 文字列をコードとして走らせる道。CSP でも止まる (`script-src` に
+      // 'unsafe-eval' を入れていない) が、書いた時点で気づけるようにする。
+      "no-eval": "error",
+      "no-new-func": "error",
+      "no-script-url": "error",
       "no-restricted-properties": [
         "error",
         ...["innerHTML", "outerHTML", "insertAdjacentHTML"].map((property) => ({
@@ -48,7 +53,8 @@ export default tseslint.config(
   {
     // node:test の test() は Promise を返すが、待つのはテストランナーの仕事。
     files: ["src/**/*.test.ts"],
-    rules: { "@typescript-eslint/no-floating-promises": "off" },
+    // テストは攻撃の文字列 (`javascript:…`) をわざと持つ。
+    rules: { "@typescript-eslint/no-floating-promises": "off", "no-script-url": "off" },
   },
   {
     // ビルドスクリプトと設定ファイルは Node で動く素の JavaScript。
