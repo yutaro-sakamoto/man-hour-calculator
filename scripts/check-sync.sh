@@ -136,6 +136,23 @@ else
   done
 fi
 
+# ------------------------------------------------ 秘密を書き込んでいない
+# 鍵やトークンは一度 push すると取り消せない (履歴にも、複製にも残る)。
+# 形で分かるものだけを見る: 秘密鍵、AWS / GitHub / Slack / Anthropic / Google の
+# トークン。この検査そのもの (パターンを書いたこのファイル) は外す。
+# パターンは `-----` で始まるので、`-e` で渡す (渡さないと grep の
+# 引数と読まれて、**何も見つけないまま 0 件になる**。実際にそうなった)。
+secret_pattern='-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}'
+secrets=$(git ls-files -z 2> /dev/null \
+  | grep -zv '^scripts/check-sync.sh$' \
+  | xargs -0 grep -IlE -e "$secret_pattern" 2> /dev/null)
+if [ -n "$secrets" ]; then
+  while read -r file; do
+    bad "秘密らしいものが書き込まれています: $file"
+  done <<< "$secrets"
+fi
+say "秘密の書き込み: $(echo -n "$secrets" | grep -c . || true) 件"
+
 # ------------------------------------------- ロケールに頼った正規表現
 # 語境界 (バックスラッシュ b) は、**多バイト文字の直後ではロケールで意味が
 # 変わる**。LANG が未設定の環境では境界が成立せず、日誌の未昇格を数える検査が

@@ -29,6 +29,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod csp;
+
 /// 生成する HTML の上限サイズ。青天井に膨らんでいないかを見る歯止め。
 ///
 /// API 層 (プロジェクト・アカウント・権限) を Rust に置き、JSON でやり取りする
@@ -129,12 +131,16 @@ fn build(options: Options) -> Result<(), String> {
         ));
     }
     html = html.replace(WASM_PLACEHOLDER, &base64_encode(&wasm));
+    // 中身が出来上がってから、そのハッシュで CSP を組む。
+    let html = csp::inject(&html, csp::APP_POLICY)?;
 
     let dist = root.join("dist");
     std::fs::create_dir_all(&dist).map_err(|e| format!("dist/ を作れません: {e}"))?;
 
     // 紹介ページはそのまま置く。書き換えるものが無いので、組み立てはしない。
     let landing = read(&root.join("web/landing.html"))?;
+    // CSP だけは差し込む (スクリプトのハッシュを名指しする)。
+    let landing = csp::inject(&landing, csp::LANDING_POLICY)?;
     std::fs::write(dist.join("index.html"), &landing)
         .map_err(|e| format!("紹介ページを書けません: {e}"))?;
     println!(

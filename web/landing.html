@@ -16,10 +16,11 @@
         --surface-sunken: #f2f1ed;
         --ink: #0b0b0b;
         --ink-secondary: #52514e;
-        --ink-muted: #898781;
+        --ink-muted: #61605c;
         --border: rgba(11, 11, 11, 0.1);
         --grid: #e1e0d9;
-        --series: #2a78d6;
+        --series: #2262af;
+        --on-series: #ffffff;
         --warning: #fab219;
         --radius: 10px;
         --font: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
@@ -31,10 +32,11 @@
           --surface-sunken: #232322;
           --ink: #ffffff;
           --ink-secondary: #c3c2b7;
-          --ink-muted: #898781;
+          --ink-muted: #a9a7a3;
           --border: rgba(255, 255, 255, 0.1);
           --grid: #2c2c2a;
-          --series: #3987e5;
+          --series: #72aaed;
+          --on-series: #0b0b0b;
         }
       }
 
@@ -93,7 +95,7 @@
       }
       .lang-toggle button[aria-pressed="true"] {
         background: var(--series);
-        color: #fff;
+        color: var(--on-series);
       }
 
       /* 開発中であることの断り。目立つが、読み飛ばせない邪魔はしない。 */
@@ -140,7 +142,7 @@
       .button.primary {
         background: var(--series);
         border-color: transparent;
-        color: #fff;
+        color: var(--on-series);
       }
       .button:hover {
         filter: brightness(0.97);

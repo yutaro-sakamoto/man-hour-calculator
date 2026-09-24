@@ -166,6 +166,8 @@ function renderProbe(result: ComputeResult): HTMLElement {
     id: "probe-range",
     attrs: {
       type: "range",
+      // 名前の無い操作部品は、読み上げでは「スライダー」としか言われない。
+      "aria-label": t("probe.label"),
       min: 0,
       max: PROBE_STEPS,
       step: 1,
