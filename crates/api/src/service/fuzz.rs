@@ -19,6 +19,8 @@ use crate::model::{Principal, ProjectRole, SystemRole, User};
 use crate::protocol::{dispatch, Envelope, Outcome, Request};
 use crate::store::MemoryStore;
 
+mod chaos;
+
 /// splitmix64。`mhc-api` は `mhc-core` に依存しないので、ここで小さく持つ。
 struct Rng(u64);
 
@@ -416,7 +418,7 @@ fn stage(rng: &mut Rng) -> Service<MemoryStore> {
 }
 
 /// 約束 2。所有者の居ないプロジェクトか入れ物があれば、その id を返す。
-fn orphan(service: &Service<MemoryStore>) -> Option<String> {
+fn orphan<S: Store>(service: &Service<S>) -> Option<String> {
     let groups = service
         .store
         .project_groups()
@@ -435,7 +437,7 @@ fn orphan(service: &Service<MemoryStore>) -> Option<String> {
         .expect("メモリからは必ず読める")
         .into_iter()
         .find(|meta| {
-            let parent = Service::<MemoryStore>::parent_of(meta, &groups);
+            let parent = Service::<S>::parent_of(meta, &groups);
             service
                 .owner_users(meta, parent)
                 .map_or(true, |owners| owners.is_empty())

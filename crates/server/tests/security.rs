@@ -466,3 +466,68 @@ async fn path_tricks_only_ever_reach_the_ui_or_nothing() {
         );
     }
 }
+
+/* ===== SQL ===== */
+
+/// id・名前・本文に SQL の記号を入れても、ただの文字として往復し、
+/// ほかの行に何も起きない。値は必ず `?` で渡している (表と列の名前だけは
+/// コードの定数を差し込む) ので通らないはずだが、それを HTTP 越しに確かめる。
+#[tokio::test]
+async fn sql_metacharacters_are_only_ever_text() {
+    let server = Server::new();
+    alices_world(&server).await;
+    let before = server.snapshot().await;
+    let nasty = [
+        "' OR '1'='1",
+        "x'); DROP TABLE projects;--",
+        "\\'; DELETE FROM users; --",
+        "\" OR \"\"=\"",
+        "%' AND 1=1 --",
+        "p\0null",
+    ];
+    let mut round_trips = 0;
+    for (i, text) in nasty.iter().enumerate() {
+        let id = format!("q{i}{text}");
+        let encoded: String = id
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => (b as char).to_string(),
+                _ => format!("%{b:02X}"),
+            })
+            .collect();
+        let created = server
+            .send(
+                "POST",
+                "/v1/projects",
+                Some("bob"),
+                &json!({"id": id, "name": text}).to_string(),
+            )
+            .await;
+        if !created.status.is_success() {
+            // NUL など、入口で断るのも正しい。断ったなら何も変わっていない。
+            continue;
+        }
+        let read = server
+            .ok(
+                "GET",
+                &format!("/v1/projects/{encoded}"),
+                "bob",
+                Value::Null,
+            )
+            .await;
+        assert_eq!(read["name"], *text, "名前が化けた");
+        server
+            .ok(
+                "POST",
+                &format!("/v1/projects/{encoded}/comments"),
+                "bob",
+                json!({"commentId": format!("c-{i}"), "body": text}),
+            )
+            .await;
+        round_trips += 1;
+    }
+    // 全部が入口で断られていたら、この検査は何も見ていない。
+    assert!(round_trips >= 4, "往復できたのが {round_trips} 件だけ");
+    // alice のものも、アカウントも、そのまま。
+    assert_eq!(server.snapshot().await, before);
+}
