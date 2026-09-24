@@ -531,3 +531,113 @@ async fn sql_metacharacters_are_only_ever_text() {
     // alice のものも、アカウントも、そのまま。
     assert_eq!(server.snapshot().await, before);
 }
+
+/* ===== 負荷 ===== */
+
+/// 同時に大量に叩いても、書き込みが消えず、所有者が居なくならず、500 が出ない。
+///
+/// サーバは「読む → 判定 → 書く」を書き込みロックで直列にしている
+/// (`http.rs` の冒頭)。ロックを取り違えると、同時に来た 2 つの書き込みの
+/// 片方が消えたり、2 人が同時に自分の owner を外して誰も居なくなったりする。
+/// 単発のテストでは起きない種類の誤りなので、ここで並べて叩く。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_writers_lose_nothing_and_keep_an_owner() {
+    let server = Arc::new(Server::new());
+    alices_world(&server).await;
+    // bob も p1 の owner にする。2 人が同時に「自分を外す」を撃つ。
+    server
+        .ok(
+            "PUT",
+            "/v1/projects/p1/access/user/bob",
+            "alice",
+            json!({"role": "owner"}),
+        )
+        .await;
+
+    const WORKERS: usize = 16;
+    const EACH: usize = 20;
+    let started = std::time::Instant::now();
+    let mut tasks = Vec::new();
+    for worker in 0..WORKERS {
+        let server = server.clone();
+        tasks.push(tokio::spawn(async move {
+            let me = if worker % 2 == 0 { "alice" } else { "bob" };
+            let mut statuses = Vec::new();
+            for i in 0..EACH {
+                // 自分の案件を 1 件ずつ増やす (消えてはいけない)。
+                let id = format!("w{worker}-{i}");
+                let created = server
+                    .send(
+                        "POST",
+                        "/v1/projects",
+                        Some(me),
+                        &json!({"id": id, "name": id}).to_string(),
+                    )
+                    .await;
+                statuses.push(created.status);
+                // 共有の案件で、自分の owner を外そうとする (最後の 1 人は断られる)。
+                let removed = server
+                    .send(
+                        "DELETE",
+                        &format!("/v1/projects/p1/access/user/{me}"),
+                        Some(me),
+                        "{}",
+                    )
+                    .await;
+                statuses.push(removed.status);
+                // 外せたら戻してもらう (もう片方が owner のはず)。
+                let other = if me == "alice" { "bob" } else { "alice" };
+                let restored = server
+                    .send(
+                        "PUT",
+                        &format!("/v1/projects/p1/access/user/{me}"),
+                        Some(other),
+                        &json!({"role": "owner"}).to_string(),
+                    )
+                    .await;
+                statuses.push(restored.status);
+                let read = server.send("GET", "/v1/projects", Some(me), "{}").await;
+                statuses.push(read.status);
+            }
+            statuses
+        }));
+    }
+    let mut total = 0;
+    for task in tasks {
+        for status in task.await.expect("落ちない") {
+            total += 1;
+            assert!(
+                !status.is_server_error(),
+                "同時に叩いたら {status} が返った"
+            );
+        }
+    }
+    let elapsed = started.elapsed();
+    eprintln!(
+        "{total} 件を {:.2?} で処理 ({:.0} 件/秒)",
+        elapsed,
+        total as f64 / elapsed.as_secs_f64()
+    );
+
+    // 作った案件は 1 件も消えていない。
+    let listed = server.ok("GET", "/v1/projects", "root", Value::Null).await;
+    let made = listed
+        .as_array()
+        .expect("一覧")
+        .iter()
+        .filter(|p| p["id"].as_str().is_some_and(|id| id.starts_with('w')))
+        .count();
+    assert_eq!(made, WORKERS * EACH, "同時の書き込みで案件が消えた");
+
+    // 共有の案件には、まだ owner が居る。
+    let access = server
+        .ok("GET", "/v1/projects/p1/access", "root", Value::Null)
+        .await;
+    let owners = access
+        .as_array()
+        .expect("権限")
+        .iter()
+        .filter(|entry| entry["role"] == "owner")
+        .count();
+    assert!(owners >= 1, "同時に外したら owner が居なくなった: {access}");
+}

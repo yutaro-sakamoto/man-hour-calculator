@@ -9,7 +9,7 @@
 | 段 | 手段 | 分かること |
 |---|---|---|
 | 1 | 単体テスト | **試した入力について**正しい |
-| 2 | 性質テスト (乱択) / **ファジング** / モンキーテスト | 撃った標本の範囲で、性質が崩れていない |
+| 2 | 性質テスト (乱択) / **ファジング** / モンキーテスト / **障害注入** | 撃った標本の範囲で、性質が崩れていない |
 | 3 | 差分テスト (相互オラクル) | 独立した 2 実装が食い違っていない |
 | 4 | 型による構成 | その値が存在する時点で成り立つ |
 | 5 | **有界モデル検査 (Kani)** | 区間の**すべての入力**について成り立つ |
@@ -37,6 +37,7 @@
 | `F(F⁻¹(u)) = u` | 性質テスト | `dist.rs` `cdf_and_quantile_are_mutually_inverse` |
 | 逆 CDF テーブルの単調性 | **構成による** | `dist.rs:11,117` |
 | 2 つのエンジンが同じ答えを出す | 差分テスト | `convolve.rs`, `stats.rs`, `abi.rs` |
+| 同じリクエストは版をまたいでも同じ数字 (種が効いている) | **ゴールデン** | `core/tests/golden_compute.rs` |
 | 累積稼働量は単調非減少 | 性質テスト | `calendar.rs` `cumulative_capacity_is_monotone` |
 | 春分・秋分が官報の日付と一致 | 外部仕様への固定 | `date.rs` `equinox_matches_published_dates` |
 
@@ -52,6 +53,8 @@
 | **入れ物 (プロジェクトグループ) も実在の所有者を必ず 1 人以上持つ** | **TLC / TLA+** + 単体 + **状態つきファジング** | `NoFolderLosesItsLastOwner`, `service.rs`, `service/fuzz.rs` |
 | 失敗した操作・読むだけの操作は、保存先を変えない | **状態つきファジング** | `service/fuzz.rs` |
 | どの操作・どんな JSON でも panic しない | **ファジング** | `service/fuzz.rs` |
+| 保存先がでたらめに失敗しても、半端な変更を残さない | **障害注入** | `service/fuzz/chaos.rs` |
+| 1 つの操作は 1 回しか書かず、書いたあとは読まない | **障害注入** (構造の検査) | `service/fuzz/chaos.rs` |
 
 ### ファジングが見つけた筋
 
@@ -102,6 +105,14 @@
 | 権限は `(種別, id)` の順で返る | 適合テスト | `access_order_is_normalized` |
 | グループのメンバーは id の順で返る | 適合テスト | `group_members_are_normalized` |
 
+過去の形を開けること (移行):
+
+| 約束 | 手段 | どこ |
+|---|---|---|
+| 版ごとの保存データの見本が、今の形にちょうど読める | **ゴールデン** | `api/tests/store_formats.rs`, `fixtures/store-v*.json` |
+| どの版で止まったデータベースからでも、中身ごと最新に上がる | 移行テスト | `server/src/store/schema.rs` |
+| 今の版の見本がある | `check-sync.sh` | |
+
 当てている実装:
 
 | 実装 | どこ |
@@ -112,6 +123,33 @@
 最後の 2 つは、この表を作るまで**実装ごとに違っていた**。`MemoryStore`
 だけが `put_project` で件数を数え直し、権限の並びは `SqlStore` だけが
 正規化していた。同じ操作でローカル版とサーバ版の応答が違う状態だった。
+
+## サーバ (`crates/server`) — 攻める側から
+
+`tests/security.rs` はルート表 (`ROUTES`) から作るので、ルートを足せば自動で
+検査に入る。
+
+| 約束 | 手段 | どこ |
+|---|---|---|
+| 関係の無いアカウントは、他人のものを読めず変えられない (BOLA/IDOR) | 全ルートの走査 + 状態の突き合わせ | `an_unrelated_member_can_neither_read_nor_change_anything_of_anothers` |
+| 認証が無い・偽のトークンは、どのルートも 401 (**本文を読む前に**) | 全ルートの走査 | `every_route_needs_a_valid_token` |
+| 管理者だけの操作は、一般のアカウントには 403 | 単体 | `a_member_cannot_do_what_only_an_admin_may` |
+| どの応答にも防御のヘッダ (nosniff / frame-ancestors / Referrer-Policy / no-store) | 単体 | `every_response_carries_the_defensive_headers` |
+| 正しい呼び出しの最大は通り、それより大きい本文は 413 | 境界値 | `a_comment_with_the_largest_allowed_attachments_goes_through` ほか |
+| パスの細工 (`..`・エンコード) で何も読ませない | 単体 | `path_tricks_only_ever_reach_the_ui_or_nothing` |
+| SQL の記号はただの文字として往復する | 単体 | `sql_metacharacters_are_only_ever_text` |
+| 同時に叩いても書き込みが消えず、所有者が居なくならない | **負荷** (16 並列) | `concurrent_writers_lose_nothing_and_keep_an_owner` |
+
+権限を 1 つずつ緩めると、走査はどれも当のルートで落ちる。書き込みロックを
+外すと、負荷の検査が 500 で落ちる。
+
+## 画面と API の取り決め
+
+| 約束 | 手段 | どこ |
+|---|---|---|
+| ローカル版が使う `op` と Rust の操作が一致する | コントラクトテスト | `api/tests/client_contract.rs` |
+| サーバ版が送る (メソッド, パス) とルート表が一致する | コントラクトテスト | 同上 |
+| OpenAPI の文書とルート表が一致する | コントラクトテスト | `api/tests/openapi.rs` |
 
 ## FFI (`crates/wasm`)
 
@@ -128,7 +166,19 @@
 |---|---|---|
 | 1 枚の HTML で、外部通信が 0 件 | E2E (`file://`) + **モンキーテスト** | `e2e/tests/app.spec.js`, `monkey.spec.js` |
 | でたらめに操作し続けても、例外も外部通信も起きない | **モンキーテスト** (種で再現) | `e2e/tests/monkey.spec.js` |
-| HTML の文字列を組み立てない | **lint** (`innerHTML` ほかを禁止) | `web/eslint.config.js` |
+| HTML の文字列を組み立てない | **lint** (`innerHTML`・`eval` ほかを禁止) | `web/eslint.config.js` |
+| 入り込んだスクリプト・イベント属性を走らせない | **CSP** (ハッシュで名指し) + E2E | `crates/xtask/src/csp.rs`, `e2e/tests/security.spec.js` |
+| 新しい窓で開くリンクは `noopener` | E2E | `security.spec.js` |
+| `__proto__` を仕込んだファイルで原型が汚れない | E2E | `security.spec.js` |
+| CSV に書き出した名前が、表計算ソフトで式にならない | 単体 + ファジング + E2E | `storage.test.ts`, `fuzz.test.ts`, `security.spec.js` |
+| 秘密鍵やトークンを書き込んでいない | `check-sync.sh` | |
+| WCAG 2.2 AA の自動検査が 0 件 (ライト/ダーク × 日/英) | **axe** | `e2e/tests/a11y.spec.js` |
+| 窓を開くとフォーカスが入り、Esc で閉じる | E2E | `a11y.spec.js` |
+| 英語の画面に日本語が残らない / 差し込み口が両言語で揃う | E2E + 単体 | `l10n.spec.js`, `web/src/i18n.test.ts` |
+| localStorage が満杯・使えなくても計算と編集が続く | **障害注入** | `e2e/tests/chaos.spec.js` |
+| 上限いっぱいのプロジェクトが 30 秒以内に計算される | 性能 | `e2e/tests/performance.spec.js` |
+| 編集を繰り返しても遅くならず、ヒープが増え続けない | **ソーク** | `performance.spec.js` |
+| 幅 360px・タッチでも、ページが横にはみ出さない | 互換性 | `e2e/tests/compat.spec.js` |
 | 自由記入欄に書いた HTML は、どの画面でも文字のまま | E2E (全欄に書いて全画面を回る) | `e2e/tests/xss.spec.js` |
 | コメントの本文から危ないリンクを作らない / 長い本文で固まらない | **ファジング** | `web/src/fuzz.test.ts` |
 | 読み込んだファイルは深さ優先の並びに整い、輪は切れる | 単体 + **ファジング** | `web/src/model/project.test.ts`, `fuzz.test.ts` |
@@ -168,6 +218,20 @@ CI では `miri` `kani` `TLA+` と、上のずれの検査が pull request ご�
 いるときは、応答の終わりにもずれの検査が回る (`.claude/settings.json`)。
 
 ## まだ届いていないところ
+
+- **ブラウザの違い** (Firefox / WebKit) は CI で回していない。CI が Chromium
+  しか入れていないため。手元では `MHC_BROWSERS=chromium,firefox,webkit` で回る。
+  CI で回すには workflow に `npx playwright install firefox webkit` が要る
+- **見た目の退行** (スクリーンショットの差分) は入れていない。基準の画像は
+  CI と同じ Chromium とフォントで撮らないと、描画の差で毎回落ちる。
+  入れるなら、基準の画像を CI の上で作る仕組みから
+- **依存の脆弱性**は npm (`npm audit`) だけを CI で見ている。Rust の
+  `cargo audit` は workflow の変更が要る
+- **総当たりへの歯止め** (回数の制限) はサーバに無い。トークンは 256 ビットの
+  乱数なので当てられはしないが、叩かれ続ければ負荷にはなる。前段 (リバース
+  プロキシ) で絞る前提
+- **人の目が要るもの** (使い勝手、探索的なテスト、読み上げの順序の自然さ) は
+  自動の検査の外
 
 - **浮動小数の計算そのもの** は Kani の対象外にしてある。比較と構成
   (`TaskEstimate`) までは証明しているが、PERT の逆関数やモンテカルロの

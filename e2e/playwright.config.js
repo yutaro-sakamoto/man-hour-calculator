@@ -3,7 +3,16 @@
 // このアプリの前提そのものを毎回テストで確かめるため。
 const { defineConfig } = require("@playwright/test");
 
+// ブラウザの違いを試すときは MHC_BROWSERS=chromium,firefox,webkit で足す
+// (先に `npx playwright install firefox webkit`)。CI は Chromium だけを
+// 入れているので、既定は Chromium だけ。
+const browsers = (process.env.MHC_BROWSERS ?? "chromium")
+  .split(",")
+  .map((name) => name.trim())
+  .filter(Boolean);
+
 module.exports = defineConfig({
+  projects: browsers.map((name) => ({ name, use: { browserName: name } })),
   testDir: "./tests",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,

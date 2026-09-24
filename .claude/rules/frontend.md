@@ -35,8 +35,14 @@ API を叩く欄を `input` で拾わない。1 打鍵ごとに書き込みが�
 コメントも利用者が書いた文字列で、そこに何が書かれていてもスクリプトに
 なってはいけない。
 
-ESLint が `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `document.write` を
-禁じている (取り決めだけだった頃、使っている箇所が 2 つ残っていた)。
+ESLint が `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `document.write` と
+`eval` / `new Function` / `javascript:` を禁じている (取り決めだけだった頃、
+使っている箇所が 2 つ残っていた)。
+
+配布する HTML には CSP が入る (`crates/xtask/src/csp.rs`)。スクリプトはビルドの
+たびに SHA-256 で名指しするので、**外のスクリプトや `<script src>` を足すと
+ビルドが止まる**。`eval` も走らない。WASM のコンパイルだけは
+`'wasm-unsafe-eval'` で許している。
 訳文に強調を書きたいときは `<b>…</b>` で書いて `boldMarkup()` (`ui/dom.ts`) に
 通す。配布物では `e2e/tests/xss.spec.js` が全部の欄に HTML を書いて確かめる。
 
@@ -46,6 +52,18 @@ ESLint が `innerHTML` / `outerHTML` / `insertAdjacentHTML` / `document.write` �
   できてしまう
 - 画像は `attachment:` の綴りだけ。**外の URL を画像にしない**（開いただけで
   そこへ取りに行くことになる）
+
+## 誰でも使えるように
+
+axe (`e2e/tests/a11y.spec.js`) が WCAG 2.2 AA の自動検査を 0 件に保っている。
+
+- 文字の色は `--ink-muted` / `--series` / `--critical` を使う。面の上で 4.5:1 に
+  してある。**色を足すときは、ライトとダークの両方の面で対比を測る**
+- 塗った面 (`background: var(--series)`) の上の文字は `--on-series`。ダークでは
+  面が明るいので黒になる。`#fff` を直に書かない
+- 操作部品 (スライダー・進捗バー) には `aria-label` を付ける
+- `aria-modal` の窓は、開いたら中にフォーカスを入れる (Esc はその中でしか
+  効かない)。コメント欄だけ抜けていて、モンキーテストが見つけた
 
 ## 外へ通信しない
 
