@@ -25,7 +25,9 @@ MONKEY_STEPS ?= 1000                  ## モンキーテストの手数 (monkey-
 BROWSERS     ?= chromium              ## E2E を回すブラウザ (例: chromium,firefox,webkit)
 E2E_ARGS     ?=                       ## Playwright に渡す引数 (例: tests/a11y.spec.js)
 DB           ?= sqlite:mhc.db         ## サーバの保存先 (serve)
-LISTEN       ?= 127.0.0.1:8080        ## サーバの待ち受け (serve)
+LISTEN       ?= 127.0.0.1:8080        ## サーバの待ち受け (serve / smoke)
+PLAYWRIGHT_FLAGS ?=                   ## setup-browsers に足す引数 (CI は --with-deps)
+MUTANTS_ARGS ?=                       ## cargo mutants に足す引数 (CI は --shard k/n)
 
 comma := ,
 fuzz_iters   := $(strip $(FUZZ_ITERS))
@@ -34,6 +36,8 @@ browsers     := $(strip $(BROWSERS))
 e2e_args     := $(strip $(E2E_ARGS))
 db           := $(strip $(DB))
 listen       := $(strip $(LISTEN))
+playwright_flags := $(strip $(PLAYWRIGHT_FLAGS))
+mutants_args := $(strip $(MUTANTS_ARGS))
 
 WEB_DEPS := web/node_modules/.package-lock.json
 E2E_DEPS := e2e/node_modules/.package-lock.json
@@ -52,7 +56,7 @@ help: ## この一覧を出す
 	awk -v y="$$y" -v r="$$r" '/^[A-Z_0-9]+ +\?=.*## / { \
 	  name = $$1; value = $$0; sub(/^[^=]*= */, "", value); sub(/ *##.*/, "", value); \
 	  text = $$0; sub(/.*## /, "", text); \
-	  printf "  %s%-13s%s %-22s %s\n", y, name, r, "(" value ")", text }' \
+	  printf "  %s%-17s%s %-22s %s\n", y, name, r, "(" value ")", text }' \
 	  $(MAKEFILE_LIST)
 
 ##@ 準備
@@ -67,7 +71,7 @@ setup: $(WEB_DEPS) $(E2E_DEPS) ## 依存を入れる (web と e2e の npm ci)
 
 .PHONY: setup-browsers
 setup-browsers: $(E2E_DEPS) ## E2E のブラウザを入れる (BROWSERS で選ぶ。取りに行くので重い)
-	cd e2e && npx playwright install $(subst $(comma), ,$(browsers))
+	cd e2e && npx playwright install $(playwright_flags) $(subst $(comma), ,$(browsers))
 
 ##@ ビルド
 
@@ -84,8 +88,15 @@ dist: $(WEB_DEPS) ## 配る形で組み立てる (wasm-opt 必須・サイズ上
 	cargo xtask build --require-wasm-opt
 
 .PHONY: server
-server: build ## サーバを 1 つのバイナリに組み立てる (画面を埋め込む)
+server: build server-bin ## 画面を組み立て直してから、サーバを 1 つのバイナリに組み立てる
+
+.PHONY: server-bin
+server-bin: ## いまの dist/ を埋め込んでサーバを組み立てる (画面は組み立て直さない)
 	cargo build --profile server -p mhc-server
+
+.PHONY: smoke
+smoke: ## 組み立てたサーバを起動し、認証・API・画面を通しで確かめて止める
+	./scripts/smoke-server.sh ./target/server/mhc-server $(listen)
 
 .PHONY: serve
 serve: server ## サーバを起動する (DB と LISTEN で変えられる)
@@ -102,13 +113,25 @@ fmt: $(WEB_DEPS) ## 整形する (Rust と TypeScript)
 	npm --prefix web run --silent format
 
 .PHONY: fmt-check
-fmt-check: $(WEB_DEPS) ## 整形されているかを見る (書き換えない)
+fmt-check: fmt-check-rust fmt-check-web ## 整形されているかを見る (書き換えない)
+
+.PHONY: fmt-check-rust
+fmt-check-rust: ## Rust だけ整形を見る
 	cargo fmt --all --check
+
+.PHONY: fmt-check-web
+fmt-check-web: $(WEB_DEPS) ## TypeScript だけ整形を見る
 	npm --prefix web run --silent format:check
 
 .PHONY: lint
-lint: $(WEB_DEPS) ## lint と型検査 (clippy / ESLint / tsc)
+lint: lint-rust lint-web ## lint と型検査 (clippy / ESLint / tsc)
+
+.PHONY: lint-rust
+lint-rust: ## clippy (警告もエラー。複雑度の上限もここ)
 	cargo clippy --workspace --all-targets -- -D warnings
+
+.PHONY: lint-web
+lint-web: $(WEB_DEPS) ## ESLint と tsc (複雑度の上限・innerHTML の禁止もここ)
 	npm --prefix web run --silent lint
 	npm --prefix web run --silent typecheck
 
@@ -123,8 +146,24 @@ test-rust: ## Rust のテスト (cargo test --workspace)
 test-web: $(WEB_DEPS) ## TypeScript の単体テスト
 	npm --prefix web test
 
+.PHONY: check-web
+check-web: $(WEB_DEPS) ## 画面側の一式 (整形・lint・型・単体テスト。npm run check)
+	npm --prefix web run check
+
+.PHONY: test-postgres
+test-postgres: ## サーバのテストを PostgreSQL に当てる (MHC_TEST_POSTGRES_URL が要る)
+	@test -n "$${MHC_TEST_POSTGRES_URL:-}" \
+	  || { echo "MHC_TEST_POSTGRES_URL を設定してください (例: postgres://…)" >&2; exit 1; }
+	cargo test -p mhc-server
+
 .PHONY: e2e
-e2e: build $(E2E_DEPS) ## 組み立て直してから E2E (file://)。E2E_ARGS で絞れる
+e2e: build e2e-run ## 組み立て直してから E2E (file://)。E2E_ARGS で絞れる
+
+# CI の e2e ジョブは、build ジョブが作った dist/ を受け取って回す (cargo が無い)。
+# 手元では e2e を使う — 組み立て直さずに回すと、古い dist/ を試してしまう。
+.PHONY: e2e-run
+e2e-run: $(E2E_DEPS) ## いまの dist/ のまま E2E を回す (組み立て直さない。CI 用)
+	@test -f dist/app.html || { echo "dist/app.html がありません。make build を先に" >&2; exit 1; }
 	cd e2e && MHC_BROWSERS=$(browsers) npx playwright test $(e2e_args)
 
 .PHONY: sync
@@ -160,7 +199,7 @@ monkey-deep: build $(E2E_DEPS) ## モンキーテストを MONKEY_STEPS 手ま�
 
 .PHONY: mutants
 mutants: ## ミューテーションテスト (テストに歯があるか。数十分)
-	cargo mutants -p mhc-core -p mhc-api --timeout 60
+	cargo mutants -p mhc-core -p mhc-api --timeout 60 $(mutants_args)
 
 .PHONY: golden-update
 golden-update: ## ゴールデンを書き直す (わざと結果を変えたときだけ。差分は必ず目で見る)
