@@ -189,14 +189,13 @@
 ## 回し方
 
 ```sh
-cargo test --workspace                     # 1〜3 段 (Store の適合テスト、ファジングも含む)
-npm --prefix web test                      # 画面側の単体とファジング
-cd e2e && npx playwright test              # E2E・モンキーテスト・XSS
-cargo kani --workspace                     # 5 段 (11 ハーネス、約 45 秒)
-cargo +nightly miri test -p mhc-wasm       # FFI (約 2 分)
-./spec/check.sh                            # 6 段 (TLC)
-cargo mutants -p mhc-core -p mhc-api       # 上の検査に歯があるか
-./scripts/check-sync.sh                    # この表と実態がずれていないか
+make test       # 1〜3 段 (Store の適合テスト、ファジングも含む。Rust と画面側)
+make e2e        # E2E・モンキーテスト・XSS・axe・障害注入・性能
+make kani       # 5 段 (約 45 秒)
+make miri       # FFI (約 2 分)
+make tla        # 6 段 (TLC)
+make mutants    # 上の検査に歯があるか
+make sync       # この表と実態がずれていないか
 ```
 
 最後の 1 つは**この文書そのものを見張る**もの。ハーネスを足して表に
@@ -208,9 +207,8 @@ cargo mutants -p mhc-core -p mhc-api       # 上の検査に歯があるか
 既定の標本はそのまま含まれる。
 
 ```sh
-MHC_FUZZ_ITERS=20000 cargo test --release fuzz      # Rust のファジング
-MHC_FUZZ_ITERS=20000 npm --prefix web test          # 画面側のファジング
-MHC_MONKEY_STEPS=1000 npx playwright test monkey    # モンキーテスト (e2e/ で)
+make fuzz-deep FUZZ_ITERS=20000       # Rust と画面側のファジング
+make monkey-deep MONKEY_STEPS=1000    # モンキーテスト
 ```
 
 CI では `miri` `kani` `TLA+` と、上のずれの検査が pull request ごとに、

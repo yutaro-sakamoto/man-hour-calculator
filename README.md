@@ -89,8 +89,12 @@ To build it yourself, see the next section.
 ## Building
 
 ```sh
-cargo xtask build          # → dist/app.html (the tool) and dist/index.html (the intro page)
+make build                 # → dist/app.html (the tool) and dist/index.html (the intro page)
+make help                  # every build, test and check entry point
 ```
+
+Under the hood this is `cargo xtask build`. The other tasks (tests, end-to-end, coverage,
+formal methods, running the server) are reachable from `make` as well.
 
 You need:
 
@@ -111,17 +115,15 @@ esbuild, ESLint, Prettier) and none of them end up in what is shipped.
 
 `.devcontainer/` has all of the above already in it — the toolchain, Node 22, the right
 binaryen, a C compiler for the bundled SQLite, and Playwright's Chromium. Open the repo in
-a dev container and `cargo xtask build && cargo test --workspace` works with nothing else
-to install. CI builds the same container and runs a smoke test inside it, so what is
+a dev container and `make build test` works with nothing else to install. CI builds the same container and runs a smoke test inside it, so what is
 written here and what actually works do not drift apart.
 
 ## Checking
 
 ```sh
-cargo test --workspace                                  # Rust: unit, property, two-engine cross-check
-cargo clippy --workspace --all-targets -- -D warnings
-npm --prefix web run check                              # format / lint / types / unit tests
-cd e2e && npm ci && npx playwright test                 # end-to-end over file://
+make check      # format, lint, types, unit tests (Rust and TypeScript), drift checks
+make e2e        # rebuild, then end-to-end over file://
+make ci         # everything CI runs
 ```
 
 The end-to-end tests open `dist/app.html` **over `file://`**. That checks the premise
@@ -148,7 +150,7 @@ live in [dev-skills/](dev-skills/) as Claude Code skills.
 ### How much of it is actually tested
 
 ```sh
-./scripts/coverage.sh        # statement (C0) and branch (C1) coverage, Rust and TypeScript
+make coverage     # statement (C0) and branch (C1) coverage, Rust and TypeScript
 ```
 
 | | C0 (lines) | C1 (branches) | other |
@@ -167,7 +169,7 @@ a range worth putting a number on.
 ### Are functions getting too tangled
 
 ```sh
-./scripts/complexity.sh      # per-function complexity, highest first
+make complexity   # per-function complexity, highest first
 ```
 
 The limits are enforced by the ordinary lint: `cargo clippy` / `npm run check` fail above them.
@@ -201,8 +203,8 @@ seeded, so a failure always reproduces. They run as part of the ordinary test su
 | monkey testing | the shipped page itself | no exceptions, no network traffic, input never runs as script |
 
 ```sh
-MHC_FUZZ_ITERS=20000 cargo test --release fuzz      # raise the count for a deeper run
-MHC_MONKEY_STEPS=1000 npx playwright test monkey    # from e2e/
+make fuzz-deep FUZZ_ITERS=20000      # raise the count for a deeper run
+make monkey-deep MONKEY_STEPS=1000
 ```
 
 ### From the attacker's side
@@ -226,7 +228,7 @@ API, performance and soak tests, and a narrow-screen check. The full map is in
 [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ```sh
-MHC_UPDATE_GOLDEN=1 cargo test golden store_formats   # when a golden file changes on purpose
+make golden-update   # when a golden file changes on purpose (always read the diff)
 ```
 
 CI runs it nightly at 03:00 JST across four parallel shards (and on demand via

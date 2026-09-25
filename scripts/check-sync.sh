@@ -141,6 +141,34 @@ else
   done
 fi
 
+# ------------------------------------------------ 文書 ⇔ Makefile
+# 入口は make にそろえてある。文書が名指しする `make <ターゲット>` が
+# Makefile に無いと、書かれたとおりに打っても動かない。ターゲットは
+# `名前: … ## 説明` の行から拾う (説明の無いターゲットは make help に出ず、
+# 無いのと同じなので、ここでも数えない)。
+if [ -f Makefile ]; then
+  targets=$(grep -oP '^[a-z0-9][a-z0-9-]*(?=:.*## )' Makefile | sort -u)
+  make_refs=0
+  while read -r file target; do
+    [ -z "$target" ] && continue
+    make_refs=$((make_refs + 1))
+    grep -qx -- "$target" <<< "$targets" \
+      || bad "$file が名指しする make $target が Makefile にありません"
+  done < <(
+    # 行頭 (コードブロック) か、バッククォートの直後の `make …` だけを見る。
+    # 地の文の「make」(英語の動詞) を拾わないため。
+    grep -roP '(?:^|`)make\K(?: [a-z][a-z0-9-]*)+' --include='*.md' \
+      AGENTS.md README.md README_JP.md docs .claude 2> /dev/null \
+      | awk -F: '{ n = split($2, t, " "); for (i = 1; i <= n; i++) print $1, t[i] }'
+  )
+  say "make の名指し: $make_refs 件 (ターゲット $(echo "$targets" | grep -c .) 個)"
+  # 逆向き: 呼べるターゲット (.PHONY) には必ず説明を書く。
+  for phony in $(grep -oP '^\.PHONY: \K.*' Makefile); do
+    grep -qx -- "$phony" <<< "$targets" \
+      || bad "Makefile の $phony に ## の説明がありません (make help に出ません)"
+  done
+fi
+
 # ------------------------------------------------ 秘密を書き込んでいない
 # 鍵やトークンは一度 push すると取り消せない (履歴にも、複製にも残る)。
 # 形で分かるものだけを見る: 秘密鍵、AWS / GitHub / Slack / Anthropic / Google の

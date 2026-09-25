@@ -42,7 +42,7 @@ paths:
   すると半分近くが「覆われていて押せない」で時間切れになる
 - 外へのリンクと別ページへのリンクは候補から外す (利用者が選んだ遷移は、
   「勝手に通信しない」の違反ではない)
-- 候補の画面を足したら、`MHC_MONKEY_STEPS=1000` で一度深く回す
+- 候補の画面を足したら、`make monkey-deep` (1000 手) で一度深く回す
 
 ## 書くとき
 
@@ -55,9 +55,10 @@ paths:
 ## 回す前に
 
 ```sh
-cargo xtask build       # dist/app.html を作り直す
-cd e2e && npx playwright test
+make e2e                               # 組み立て直してから回す
+make e2e E2E_ARGS=tests/a11y.spec.js   # 1 つに絞る
 ```
 
 **`dist/` を作り直さずに回さない。** 直したはずのものが直っていないように
-見えて、時間を溶かす。
+見えて、時間を溶かす。`make e2e` は必ず組み立て直してから回すので、
+直接 `npx playwright test` を叩くより安全。

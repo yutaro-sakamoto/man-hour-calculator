@@ -85,8 +85,12 @@ P80 完了日                        2026-12-11   ← 休日と予定を踏ま�
 ## ビルド
 
 ```sh
-cargo xtask build          # → dist/app.html (道具) と dist/index.html (紹介ページ)
+make build                 # → dist/app.html (道具) と dist/index.html (紹介ページ)
+make help                  # ビルド・テスト・検査の入口の一覧
 ```
+
+中身は `cargo xtask build` です。ほかのタスク (テスト・E2E・カバレッジ・
+形式手法・サーバの起動など) も `make` から呼べます。
 
 必要なもの:
 
@@ -108,17 +112,15 @@ esbuild・ESLint・Prettier）で、配布物には一切含まれません。
 
 `.devcontainer/` に上のものが全部入っています。ツールチェーン・Node 22・
 対応する binaryen・同梱 SQLite のビルドに要る C コンパイラ・Playwright の
-Chromium まで揃っているので、開いてすぐ `cargo xtask build && cargo test --workspace`
-が通ります。CI でも同じコンテナを組み立てて、その中でスモークテストを回しています。
+Chromium まで揃っているので、開いてすぐ `make build test` が通ります。CI でも同じコンテナを組み立てて、その中でスモークテストを回しています。
 ここに書いてあることと実際に動くものが離れていかないようにするためです。
 
 ## 検証
 
 ```sh
-cargo test --workspace                                  # Rust: 単体・性質・2 エンジン相互検証
-cargo clippy --workspace --all-targets -- -D warnings
-npm --prefix web run check                              # 書式 / Lint / 型 / 単体テスト
-cd e2e && npm ci && npx playwright test                 # file:// で開いて E2E
+make check      # 整形・lint・型・単体テスト (Rust と TypeScript)・ずれの検査
+make e2e        # 組み立て直してから file:// で開いて E2E
+make ci         # CI と同じものを一通り
 ```
 
 E2E は `dist/app.html` を **`file://` で開いて**検査します。
@@ -144,7 +146,7 @@ TLA+ の仕様が名指しする関数が実在するか、文書のリンクが
 ### どこまで試せているか
 
 ```sh
-./scripts/coverage.sh        # C0 (行) と C1 (分岐) を Rust と TypeScript の両方で
+make coverage     # C0 (行) と C1 (分岐) を Rust と TypeScript の両方で
 ```
 
 | | C0 (行) | C1 (分岐) | ほか |
@@ -164,7 +166,7 @@ DOM が要る `ui/` や `charts/` は対象に入りません。残るのは純�
 ### 関数が込み入りすぎていないか
 
 ```sh
-./scripts/complexity.sh      # 関数ごとの複雑度を上から並べる
+make complexity   # 関数ごとの複雑度を上から並べる
 ```
 
 上限はふだんの lint が見ていて、超えると `cargo clippy` / `npm run check` が落ちます。
@@ -203,8 +205,8 @@ Playwright) の一部として CI で毎回回ります。
 | モンキーテスト | 配布物の画面そのもの | 例外も外部通信も起きない・入力がスクリプトにならない |
 
 ```sh
-MHC_FUZZ_ITERS=20000 cargo test --release fuzz      # 深く回すときは回数を上げる
-MHC_MONKEY_STEPS=1000 npx playwright test monkey    # e2e/ で
+make fuzz-deep FUZZ_ITERS=20000      # 深く回すときは回数を上げる
+make monkey-deep MONKEY_STEPS=1000
 ```
 
 ### 攻める側から
@@ -229,7 +231,7 @@ MHC_MONKEY_STEPS=1000 npx playwright test monkey    # e2e/ で
 [docs/VERIFICATION.md](docs/VERIFICATION.md) にあります。
 
 ```sh
-MHC_UPDATE_GOLDEN=1 cargo test golden store_formats   # ゴールデンをわざと書き直すとき
+make golden-update   # ゴールデンをわざと書き直すとき (差分は必ず目で見る)
 ```
 
 ## しくみ

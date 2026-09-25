@@ -8,23 +8,22 @@
 
 ## 変更したら回すもの
 
+入口は `make` にそろえてある。`make help` で全部の一覧が出る。
+
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-npm --prefix web run check          # 整形 / lint / 型 / 単体テスト
-cargo xtask build                   # → dist/app.html, dist/index.html
-cd e2e && npx playwright test       # file:// で開いて通しで確かめる
-./scripts/check-sync.sh             # 文書・仕様・コードのずれ
+make check      # 整形・lint・型・単体テスト・ずれの検査 (速い)
+make e2e        # 組み立て直してから file:// で通しで確かめる
 ```
 
 形式手法の層は重いので、**その層を触ったときだけ**回す。
 
 ```sh
-cargo kani --workspace                                    # 約 45 秒
-MIRIFLAGS=-Zmiri-strict-provenance cargo +nightly miri test -p mhc-wasm
-./spec/check.sh                                           # TLC
+make kani       # 約 45 秒
+make miri       # FFI 層 (約 2 分)
+make tla        # TLC
 ```
+
+CI と同じものを一通りなら `make ci`。
 
 `npm run check` の出力を `grep` で絞りすぎない。Prettier の `[warn]` 行を
 見落として、失敗を成功と読み違えたことがある。`tail` で見ること。
