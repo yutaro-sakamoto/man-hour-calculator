@@ -7,10 +7,11 @@
 
 import type { AppActions, AppState } from "../app.ts";
 import type { ProjectDocument } from "../api/types.ts";
-import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
+import { formatDayShort, formatEstimateRange, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { progressOfSubtree, stateOfProgress } from "../model/progress.ts";
+import { stateOfProgress } from "../model/progress.ts";
 import { createTask, sampleDocument } from "../model/project.ts";
+import type { ScheduleRow } from "../model/schedule.ts";
 import {
   collectGroups,
   indentTask,
@@ -25,13 +26,25 @@ import { memberLabel, UNASSIGNED_ID } from "../model/members.ts";
 import type { Priority, Task, TaskState } from "../types.ts";
 import { button, card, checkbox, h, headerRow, iconButton, openLink, select } from "./dom.ts";
 import { commentButton } from "./comments.ts";
+import { openTaskDetail } from "./schedule.ts";
 import { priorityChoices } from "./taskFields.ts";
 
 const STATE_ORDER: readonly TaskState[] = ["notStarted", "inProgress", "done"];
 
-function stateOf(state: AppState, row: TreeRow): TaskState {
-  if (row.hasChildren && state.result !== null) {
-    return stateOfProgress(progressOfSubtree(state.result, state.rows, row.index));
+/**
+ * タスク id からスケジュール行を引く索引。
+ *
+ * `ScheduleRow.progress` は `buildScheduleModel` が部分木ごとに 1 度だけ
+ * 計算済み (`model/schedule.ts` のコメント参照)。ここで索引にしておけば、
+ * 一覧の再構築で行ごとに引き直しても O(1) で済む。
+ */
+function scheduleRowMap(state: AppState): ReadonlyMap<string, ScheduleRow> {
+  return new Map((state.schedule?.rows ?? []).map((row) => [row.id, row]));
+}
+
+function stateOf(state: AppState, row: TreeRow, scheduleRow: ScheduleRow | undefined): TaskState {
+  if (row.hasChildren) {
+    return scheduleRow === undefined ? "notStarted" : stateOfProgress(scheduleRow.progress);
   }
   if (row.leafIndex === null) return "notStarted";
   const code = state.result?.states[row.leafIndex] ?? 0;
@@ -39,7 +52,7 @@ function stateOf(state: AppState, row: TreeRow): TaskState {
 }
 
 /** 行そのものが絞り込みに一致するか。 */
-function matches(state: AppState, row: TreeRow): boolean {
+function matches(state: AppState, row: TreeRow, scheduleRow: ScheduleRow | undefined): boolean {
   const { filter } = state;
   const task = row.task;
   if (filter.text !== "" && !task.name.toLowerCase().includes(filter.text.toLowerCase())) {
@@ -52,7 +65,7 @@ function matches(state: AppState, row: TreeRow): boolean {
     return false;
   }
   if (filter.priority !== "" && task.priority !== filter.priority) return false;
-  if (filter.state !== "" && stateOf(state, row) !== filter.state) return false;
+  if (filter.state !== "" && stateOf(state, row, scheduleRow) !== filter.state) return false;
   if (filter.assignee !== "") {
     const wanted = filter.assignee === UNASSIGNED_ID ? null : filter.assignee;
     if (task.assigneeId !== wanted) return false;
@@ -75,10 +88,11 @@ function visibleRows(state: AppState): TreeRow[] {
     state.filter.assignee !== "";
   if (!isFiltering) return state.rows;
 
+  const schedule = scheduleRowMap(state);
   const keep = new Set<string>();
   const byId = new Map(state.rows.map((row) => [row.task.id, row]));
   for (const row of state.rows) {
-    if (!matches(state, row)) continue;
+    if (!matches(state, row, schedule.get(row.task.id))) continue;
     keep.add(row.task.id);
     let parentId = row.task.parentId;
     while (parentId !== null) {
@@ -178,13 +192,6 @@ function renderFilterBar(state: AppState, actions: AppActions, shown: number): H
   ]);
 }
 
-/** 詳細を開く。一覧は読むだけにして、書き換えは詳細の窓でまとめて行う。 */
-function openDetail(actions: AppActions, taskId: string): void {
-  actions.patch((s) => {
-    s.taskDetailId = taskId;
-  });
-}
-
 /** タスクを足して、そのまま詳細を開く。名前をすぐ書けるように。 */
 function addTask(
   actions: AppActions,
@@ -194,7 +201,7 @@ function addTask(
   actions.mutate((document) => {
     insert(document, task);
   });
-  openDetail(actions, task.id);
+  openTaskDetail(actions, task.id);
 }
 
 /** 見積もりを 1 欄にまとめる。親は配下の合計、葉は書いたとおり。 */
@@ -202,7 +209,7 @@ function estimateText(row: TreeRow): string {
   const l = lang();
   if (row.hasChildren || row.valid) {
     const { min, likely, max } = row.rollup;
-    return `${formatNumber(min, l)} – ${formatNumber(likely, l)} – ${formatNumber(max, l)}`;
+    return formatEstimateRange(min, likely, max, l);
   }
   // 数になっていない書きかけは、そのまま見せる。0 に丸めると直す手がかりが消える。
   const task = row.task;
@@ -211,12 +218,13 @@ function estimateText(row: TreeRow): string {
     .join(" – ");
 }
 
-function progressCell(state: AppState, row: TreeRow): HTMLElement {
+function progressCell(
+  state: AppState,
+  row: TreeRow,
+  scheduleRow: ScheduleRow | undefined,
+): HTMLElement {
   // 計算に入っていない行 (使用を外した行・不正な行) には進捗が無い。
-  const progress =
-    state.result === null || !row.active
-      ? null
-      : (state.schedule?.rows.find((item) => item.id === row.task.id)?.progress ?? null);
+  const progress = state.result === null || !row.active ? null : (scheduleRow?.progress ?? null);
   if (progress === null || progress.leafCount === 0) {
     return h("td", { class: "num" }, [h("span", { class: "muted", text: "—" })]);
   }
@@ -250,11 +258,14 @@ function renderRow(
   actions: AppActions,
   row: TreeRow,
   position: { first: boolean; last: boolean },
+  schedule: ReadonlyMap<string, ScheduleRow>,
 ): HTMLTableRowElement {
   const task = row.task;
   const label = task.name.trim() === "" ? t("tasks.untitled") : task.name;
   const index = row.index;
-  const state_ = stateOf(state, row);
+  // この行のスケジュール情報は 1 度だけ引く。進捗・完了予測のどちらもここから読む。
+  const scheduleRow = schedule.get(task.id);
+  const state_ = stateOf(state, row, scheduleRow);
 
   const cells: HTMLElement[] = [];
 
@@ -284,7 +295,7 @@ function renderRow(
         openLink(
           label,
           () => {
-            openDetail(actions, task.id);
+            openTaskDetail(actions, task.id);
           },
           {
             class: `row-open${task.name.trim() === "" ? " untitled" : ""}`,
@@ -302,7 +313,7 @@ function renderRow(
 
   cells.push(
     h("td", {}, [h("span", { class: `pill pill-${state_}`, text: t(`state.${state_}`) })]),
-    progressCell(state, row),
+    progressCell(state, row, scheduleRow),
     h("td", { class: "num estimate" }, [
       row.hasChildren
         ? h("span", { class: "rollup", text: estimateText(row), title: t("tasks.rollupHint") })
@@ -314,7 +325,6 @@ function renderRow(
   );
 
   // 完了予測は常に見せる。これがこのアプリの答えそのもの。
-  const scheduleRow = state.schedule?.rows.find((r) => r.id === task.id);
   const finishDay = scheduleRow?.marks.p80 ?? null;
   cells.push(
     h("td", { class: "num finish" }, [
@@ -406,7 +416,7 @@ function renderRow(
         click: (event) => {
           const target = event.target as Element | null;
           if (target?.closest("a, button, input, select, label, textarea") != null) return;
-          openDetail(actions, task.id);
+          openTaskDetail(actions, task.id);
         },
       },
     },
@@ -416,6 +426,7 @@ function renderRow(
 
 export function renderTasksTab(state: AppState, actions: AppActions): HTMLElement {
   const shown = visibleRows(state);
+  const schedule = scheduleRowMap(state);
 
   const header: { label: string; class?: string }[] = [
     { label: t("col.use") },
@@ -453,7 +464,13 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
               "tbody",
               {},
               shown.map((row, i) =>
-                renderRow(state, actions, row, { first: i === 0, last: i === shown.length - 1 }),
+                renderRow(
+                  state,
+                  actions,
+                  row,
+                  { first: i === 0, last: i === shown.length - 1 },
+                  schedule,
+                ),
               ),
             ),
           ]),

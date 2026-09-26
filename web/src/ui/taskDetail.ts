@@ -10,9 +10,9 @@
 
 import type { AppActions, AppState } from "../app.ts";
 import { canWrite } from "../app.ts";
-import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
+import { formatDayShort, formatEstimateRange, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { progressOfSubtree, stateOfProgress, type Progress } from "../model/progress.ts";
+import { stateOfProgress, type Progress } from "../model/progress.ts";
 import { collectGroups, type TreeRow } from "../model/tree.ts";
 import type { ScheduleRow } from "../model/schedule.ts";
 import type { TaskState } from "../types.ts";
@@ -108,7 +108,7 @@ function forecastSection(
         ? null
         : readout(
             `${t("detail.remainingEstimate")} (${t("unit.days")})`,
-            `${formatNumber(remaining.min, l, 1)} – ${formatNumber(remaining.likely, l, 1)} – ${formatNumber(remaining.max, l, 1)}`,
+            formatEstimateRange(remaining.min, remaining.likely, remaining.max, l, 1),
             "remainingEstimate",
           ),
       share === null ? null : readout(t("sens.share"), formatPercent(share, l, 1), "share"),
@@ -249,12 +249,18 @@ export function renderTaskDetailModal(state: AppState, actions: AppActions): HTM
   };
 
   const label = row.task.name.trim() === "" ? t("tasks.untitled") : row.task.name;
-  const progress: Progress =
-    state.result === null
-      ? { spent: 0, remaining: 0, total: 0, ratio: 0, doneCount: 0, leafCount: 0 }
-      : progressOfSubtree(state.result, state.rows, at);
-  const taskState = row.hasChildren ? stateOfProgress(progress) : stateOf(state, row);
   const scheduleRow = state.schedule?.rows.find((item) => item.id === row.task.id);
+  // `progress` はスケジュールのモデルが部分木ごとに 1 度だけ計算済み
+  // (`model/schedule.ts` の `ScheduleRow.progress` を参照)。ここでは引き直さない。
+  const progress: Progress = scheduleRow?.progress ?? {
+    spent: 0,
+    remaining: 0,
+    total: 0,
+    ratio: 0,
+    doneCount: 0,
+    leafCount: 0,
+  };
+  const taskState = row.hasChildren ? stateOfProgress(progress) : stateOf(state, row);
 
   const body = h("div", { class: "detail-body" }, [
     forecastSection(state, row, scheduleRow, progress),
