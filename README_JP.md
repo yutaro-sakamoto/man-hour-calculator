@@ -238,17 +238,21 @@ make golden-update   # ゴールデンをわざと書き直すとき (差分は�
 
 ## しくみ
 
-```
-              ┌───────────── dist/app.html（1 ファイル） ─────────────┐
- cargo xtask  │  <style> …CSS… </style>                              │
-    build ──▶ │  <script> const WASM_BASE64 = "AGFzbQ…";  …JS…        │
-              │  WebAssembly.instantiate(atob(WASM_BASE64))           │
-              └──────────────────────────────────────────────────────┘
-                          ▲                        ▲
-              crates/wasm ─ 薄い FFI 層      web/ ─ TypeScript を
-              （unsafe はここだけ）                esbuild で 1 本に
-                          ▲
-              crates/core ─ 計算ロジック（#![forbid(unsafe_code)]）
+```mermaid
+flowchart BT
+  core["crates/core<br/>計算ロジック<br/>（#![forbid(unsafe_code)]）"]
+  wasm["crates/wasm<br/>薄い FFI 層<br/>（unsafe はここだけ）"]
+  web["web/<br/>TypeScript を esbuild で 1 本に"]
+  subgraph html["dist/app.html（1 ファイル）"]
+    direction TB
+    css["#lt;style#gt; …CSS… #lt;/style#gt;"]
+    js["#lt;script#gt; const WASM_BASE64 = #quot;AGFzbQ…#quot;; …JS…"]
+    inst["WebAssembly.instantiate(atob(WASM_BASE64))"]
+  end
+  core --> wasm
+  wasm --> html
+  web --> html
+  build(["cargo xtask build"]) -. 組み立てる .-> html
 ```
 
 `fetch()` を一切使わないのは、`file://` で開いたページからの `fetch()` が

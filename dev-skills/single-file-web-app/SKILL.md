@@ -13,14 +13,16 @@ description: ダウンロードして開くだけで動く「1 枚の HTML」と
 
 ## 組み立ての形
 
-```text
-web/index.html.template
-  ├─ /*{{CSS}}*/         ← esbuild でまとめた CSS
-  ├─ /*{{APP_JS}}*/      ← esbuild でまとめた JS (TypeScript から)
-  └─ /*{{WASM_BASE64}}*/ ← .wasm を base64 にしたもの
-          ↓  cargo xtask build
-      dist/app.html   (これ 1 枚)
-      dist/index.html (紹介ページ)
+```mermaid
+flowchart TB
+  subgraph template["web/index.html.template"]
+    direction TB
+    css["/*{{CSS}}*/<br/>esbuild でまとめた CSS"]
+    js["/*{{APP_JS}}*/<br/>esbuild でまとめた JS (TypeScript から)"]
+    wasm["/*{{WASM_BASE64}}*/<br/>.wasm を base64 にしたもの"]
+  end
+  template -- "cargo xtask build" --> app["dist/app.html (これ 1 枚)"]
+  template -- "cargo xtask build" --> index["dist/index.html (紹介ページ)"]
 ```
 
 ビルドスクリプトは**言語を増やさず**に書く。Rust のプロジェクトなら

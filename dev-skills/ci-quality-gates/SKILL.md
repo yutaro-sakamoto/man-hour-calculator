@@ -8,14 +8,16 @@ description: GitHub Actions の CI を、速い検査から重い検査へ段階
 **速くて確実なものから、遅くて確率的なものへ。** 前の段で落ちるものを
 後ろの段で拾わない。骨は `assets/ci.yml`。
 
-```text
-rust (fmt/clippy/test) ─┐
-web  (format/lint/型/test) ─┴→ build (1 枚 HTML) ─┬→ e2e (file://) → pages
-                                                  └→ server (単一バイナリのスモーク)
-
-独立して並走: postgres / miri / kani / tla / sync / coverage / devcontainer
-別スケジュール: mutants (毎日 03:00 JST)
+```mermaid
+flowchart LR
+  rust["rust<br/>(fmt/clippy/test)"] --> build["build<br/>(1 枚 HTML)"]
+  web["web<br/>(format/lint/型/test)"] --> build
+  build --> e2e["e2e<br/>(file://)"] --> pages
+  build --> server["server<br/>(単一バイナリのスモーク)"]
 ```
+
+- 独立して並走: postgres / miri / kani / tla / sync / coverage / devcontainer
+- 別スケジュール: mutants (毎日 03:00 JST)
 
 ## 全体にかける設定
 

@@ -6,23 +6,20 @@
 一方で、社内サーバやクラウドに置いて複数人で使えるようにもしたい。
 両立させるために、**画面は API しか知らない**構造にしてある。
 
-```
-        画面 (TypeScript)
-             │
-             ▼
-        ApiClient           ← 画面が知っているのはこの口だけ
-        ╱        ╲
-LocalApiClient   HttpApiClient
-   │                 │
-   ▼                 ▼
- WASM              HTTP
-   │                 │
-   ╰────────┬────────╯
-            ▼
-      crates/api の Service       ← 権限も不変条件もここにしかない
-            │
-            ▼
-         Store (差し替え可能)
+```mermaid
+flowchart TB
+  ui["画面 (TypeScript)"]
+  client["ApiClient<br/>画面が知っているのはこの口だけ"]
+  local[LocalApiClient]
+  http[HttpApiClient]
+  wasm[WASM]
+  net[HTTP]
+  service["crates/api の Service<br/>権限も不変条件もここにしかない"]
+  store["Store (差し替え可能)"]
+  ui --> client
+  client --> local --> wasm --> service
+  client --> http --> net --> service
+  service --> store
 ```
 
 肝心なのは、**どちらの経路でも最後は同じ Rust の実装に行き着く**ことだ。

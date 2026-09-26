@@ -8,14 +8,17 @@ description: 同じコードでローカル版 (ブラウザ内)・サーバ版 
 ローカル版 (ブラウザの中だけで完結)、サーバ版 (バイナリ 1 つ)、クラウド版
 (API Gateway + Lambda + DynamoDB)。**3 つ作るのではなく、1 つ作って 3 回配る。**
 
-```text
-        crates/core     計算。誰も知らない
-             ▲
-        crates/api      権限・不変条件・Request/Response・Store trait
-        ▲    ▲    ▲
-   wasm │    │    │ lambda
-        │  server│
-   MemoryStore  SqlStore  DynamoStore
+```mermaid
+flowchart BT
+  core["crates/core<br/>計算。誰も知らない"]
+  api["crates/api<br/>権限・不変条件・Request/Response・Store trait"]
+  wasm["wasm<br/>MemoryStore"]
+  server["server<br/>SqlStore"]
+  lambda["lambda<br/>DynamoStore"]
+  api --> core
+  wasm --> api
+  server --> api
+  lambda --> api
 ```
 
 ## 鉄則 1: 権限の判定は 1 か所だけ
@@ -122,11 +125,17 @@ man-hour-calculator で適合テストを作ったとき、既に 2 実装が違
 
 **条件付き書き込み (楽観ロック) に置き換える。**
 
-```text
-1. 見出しを読む            → updatedAt = U
-2. 判定する                 (Service がやる)
-3. 条件付きで書く           ConditionExpression: updatedAt = U
-4. 弾かれたら 1 からやり直す (数回まで。だめなら 409)
+```mermaid
+sequenceDiagram
+  participant S as Service
+  participant D as DynamoDB
+  loop 弾かれたら 1 からやり直す (数回まで。だめなら 409)
+    S->>D: 1. 見出しを読む
+    D-->>S: updatedAt = U
+    Note over S: 2. 判定する
+    S->>D: 3. 条件付きで書く<br/>ConditionExpression: updatedAt = U
+    D-->>S: 書けた / 条件に合わず弾かれた
+  end
 ```
 
 `Service` が「読む → 判定 → 書く」で完結していれば、**この繰り返しを

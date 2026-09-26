@@ -9,18 +9,15 @@
 
 ## 構成
 
-```text
-   ブラウザ
-      │  1 枚の HTML (S3 + CloudFront)
-      │
-      ▼  /v1/… (JSON)
-  API Gateway (HTTP API)
-      │
-      ▼
-   Lambda (Rust, 1 関数)
-      │  mhc_api::protocol::dispatch
-      ▼
-   DynamoDB (1 テーブル)
+```mermaid
+flowchart TB
+  browser["ブラウザ<br/>1 枚の HTML (S3 + CloudFront)"]
+  gateway["API Gateway (HTTP API)"]
+  lambda["Lambda (Rust, 1 関数)"]
+  dynamo["DynamoDB (1 テーブル)"]
+  browser -- "/v1/… (JSON)" --> gateway
+  gateway --> lambda
+  lambda -- "mhc_api::protocol::dispatch" --> dynamo
 ```
 
 **計算は入らない。** 見積もりの計算はブラウザの WASM がその場で回すので、
@@ -104,11 +101,17 @@ GSI1:  gsi1pk = PRINCIPAL#<kind>#<id>
 
 代わりに**条件付き書き込み (楽観ロック)** を使う。
 
-```text
-1. 見出しを読む            → updatedAt = U
-2. 判定する                 (Service がやる)
-3. 条件付きで書く           ConditionExpression: updatedAt = U
-4. 弾かれたら 1 からやり直す (数回まで。だめなら 409)
+```mermaid
+sequenceDiagram
+  participant S as Service
+  participant D as DynamoDB
+  loop 弾かれたら 1 からやり直す (数回まで。だめなら 409)
+    S->>D: 1. 見出しを読む
+    D-->>S: updatedAt = U
+    Note over S: 2. 判定する
+    S->>D: 3. 条件付きで書く<br/>ConditionExpression: updatedAt = U
+    D-->>S: 書けた / 条件に合わず弾かれた
+  end
 ```
 
 `updatedAt` をそのまま版として使える。`Service` は「読む → 判定 → 書く」で
