@@ -241,17 +241,21 @@ through without checking anything.
 
 ## How it works
 
-```
-              ┌───────────── dist/app.html (one file) ─────────────┐
- cargo xtask  │  <style> …CSS… </style>                            │
-    build ──▶ │  <script> const WASM_BASE64 = "AGFzbQ…";  …JS…      │
-              │  WebAssembly.instantiate(atob(WASM_BASE64))         │
-              └────────────────────────────────────────────────────┘
-                          ▲                      ▲
-              crates/wasm — a thin FFI      web/ — TypeScript
-              layer (the only unsafe)       bundled by esbuild
-                          ▲
-              crates/core — the computation (#![forbid(unsafe_code)])
+```mermaid
+flowchart BT
+  core["crates/core<br/>the computation<br/>(#![forbid(unsafe_code)])"]
+  wasm["crates/wasm<br/>a thin FFI layer<br/>(the only unsafe)"]
+  web["web/<br/>TypeScript bundled by esbuild"]
+  subgraph html["dist/app.html (one file)"]
+    direction TB
+    css["#lt;style#gt; …CSS… #lt;/style#gt;"]
+    js["#lt;script#gt; const WASM_BASE64 = #quot;AGFzbQ…#quot;; …JS…"]
+    inst["WebAssembly.instantiate(atob(WASM_BASE64))"]
+  end
+  core --> wasm
+  wasm --> html
+  web --> html
+  build(["cargo xtask build"]) -. assembles .-> html
 ```
 
 We never call `fetch()`, because a page opened over `file://` has its `fetch()` blocked by
