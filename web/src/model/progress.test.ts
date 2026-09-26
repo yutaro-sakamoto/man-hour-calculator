@@ -6,6 +6,7 @@ import {
   progressOfSubtree,
   progressOfTask,
   progressOverall,
+  stateOfProgress,
 } from "./progress.ts";
 import { createTask } from "./project.ts";
 import { buildRows } from "./tree.ts";
@@ -128,4 +129,47 @@ test("id からも引ける", () => {
   assert.ok(parent);
   assert.equal(progressOfTask(computed, rows, parent.id).ratio, 0.5);
   assert.equal(progressOfTask(computed, rows, "missing").leafCount, 0);
+});
+
+test("まとまりの状態は配下の葉から決まる", () => {
+  const tasks = tree();
+  const rows = buildRows(tasks);
+  const state = (leaves: { total: number; spent: number; state?: number }[]) =>
+    stateOfProgress(progressOfSubtree(result(leaves), rows, 0));
+
+  assert.equal(
+    state([
+      { total: 4, spent: 0 },
+      { total: 4, spent: 0 },
+      { total: 1, spent: 0 },
+    ]),
+    "notStarted",
+  );
+  // 1 件が少しでも進んでいれば、まとまりも進行中 (未着手と出すと進んでいないように見える)。
+  assert.equal(
+    state([
+      { total: 4, spent: 1 },
+      { total: 4, spent: 0 },
+      { total: 1, spent: 0 },
+    ]),
+    "inProgress",
+  );
+  // 工数 0 で終わった葉だけでも進行中。
+  assert.equal(
+    state([
+      { total: 0, spent: 0, state: 2 },
+      { total: 4, spent: 0 },
+      { total: 1, spent: 0 },
+    ]),
+    "inProgress",
+  );
+  assert.equal(
+    state([
+      { total: 4, spent: 4, state: 2 },
+      { total: 4, spent: 4, state: 2 },
+      { total: 1, spent: 0 },
+    ]),
+    "done",
+  );
+  assert.equal(stateOfProgress(progressOfLeaves(result([]), [])), "notStarted");
 });

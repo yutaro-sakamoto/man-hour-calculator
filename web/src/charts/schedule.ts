@@ -5,13 +5,32 @@
  * 外側が P10〜P90、内側の濃い部分が P25〜P75、縦線が P50。
  * 下段は全体が完了している確率のカーブで、x 軸 (日付) を上段と共有する。
  *
+ * 帯の下の細い線は**実績**。着手日から完了日 (まだなら基準日) まで引く。
+ * 予測の帯と同じ行に置くのは、「予定より遅れているか」を 1 行で読めるように
+ * するため。名前の右には進捗率を添える。
+ *
+ * 行を押すと、そのタスクの詳細が開く (`onSelect`)。キーボードでは
+ * ↑↓ で行を選び、Enter で開く。
+ *
  * 帯の濃淡は同一色相の順序ランプ。値の大小ではなく「確からしさの段階」を
  * 表しているので、カテゴリ色ではなくランプを使う。
  */
 
-import { formatDayShort, formatMonthShort, formatPercent, type Lang } from "../format.ts";
+import {
+  formatDayShort,
+  formatMonthShort,
+  formatNumber,
+  formatPercent,
+  type Lang,
+} from "../format.ts";
 import { t } from "../i18n.ts";
-import { isNonWorkingDay, type ScheduleMarks, type ScheduleModel } from "../model/schedule.ts";
+import type { Progress } from "../model/progress.ts";
+import {
+  isNonWorkingDay,
+  type ActualSpan,
+  type ScheduleMarks,
+  type ScheduleModel,
+} from "../model/schedule.ts";
 import {
   Tooltip,
   ellipsize,
@@ -26,6 +45,9 @@ const PAD = { top: 30, right: 16, bottom: 44 };
 const NAME_MIN = 150;
 const NAME_MAX = 260;
 const DATE_WIDTH = 78;
+/** 進捗率の欄。小さな棒と「100%」が収まる幅。 */
+const PROGRESS_WIDTH = 72;
+const PROGRESS_BAR = 30;
 export const ROW_HEIGHT = 26;
 const BAND_HEIGHT = 12;
 const CURVE_HEIGHT = 118;
@@ -35,6 +57,9 @@ const PANEL_GAP = 46;
 export function scheduleHeight(rowCount: number): number {
   return PAD.top + Math.max(1, rowCount + 1) * ROW_HEIGHT + PANEL_GAP + CURVE_HEIGHT + PAD.bottom;
 }
+
+/** 押された行を知らせる。全体の行は開く先が無いので知らせない。 */
+export type SelectRow = (taskId: string) => void;
 
 export interface ScheduleChart {
   setData: (model: ScheduleModel | null) => void;
@@ -57,15 +82,18 @@ export function createScheduleChart(
   canvas: HTMLCanvasElement,
   tooltipElement: HTMLElement,
   getLang: () => Lang,
+  onSelect: SelectRow = () => undefined,
 ): ScheduleChart {
   const tooltip = new Tooltip(tooltipElement);
   let model: ScheduleModel | null = null;
   let layout: Layout | null = null;
   let focusDay = -1;
+  /** 指している行 (マウスでもキーボードでも)。-1 なら無し。 */
+  let focusRow = -1;
 
   const layoutFor = (width: number, rowCount: number): Layout => {
     const nameWidth = Math.max(NAME_MIN, Math.min(NAME_MAX, width * 0.26));
-    const plotLeft = nameWidth + DATE_WIDTH + 8;
+    const plotLeft = nameWidth + PROGRESS_WIDTH + DATE_WIDTH + 8;
     const rowsTop = PAD.top;
     const rowsBottom = rowsTop + Math.max(1, rowCount + 1) * ROW_HEIGHT;
     return {
@@ -94,6 +122,14 @@ export function createScheduleChart(
     const fraction = (localX - layout.plotLeft) / layout.plotW;
     if (fraction < 0 || fraction > 1) return -1;
     return Math.max(0, Math.min(visibleDays() - 1, Math.floor(fraction * visibleDays())));
+  };
+
+  /** y 座標にあるタスクの行。全体の行や行の外なら -1。 */
+  const rowAt = (localY: number): number => {
+    if (!model || !layout) return -1;
+    if (localY < layout.rowsTop) return -1;
+    const index = Math.floor((localY - layout.rowsTop) / ROW_HEIGHT);
+    return index < model.rows.length ? index : -1;
   };
 
   /** 帯の左右端。終わらない場合は右端まで伸ばす。 */
@@ -139,6 +175,67 @@ export function createScheduleChart(
       ctx.closePath();
       ctx.fill();
     }
+  }
+
+  /**
+   * 実績の線。帯の真下に細く引く。
+   *
+   * 期間の外に出る部分は端で切る。着手が期間の初日より前でも、線は左端から
+   * 始まるだけで消えない (消えると「着手していない」と読めてしまう)。
+   */
+  function drawActual(
+    ctx: CanvasRenderingContext2D,
+    colors: ReturnType<typeof readPalette>,
+    actual: ActualSpan,
+    centerY: number,
+  ): void {
+    if (!layout || !model || actual.start === null) return;
+    const last = visibleDays() - 1;
+    const endDay = actual.end ?? model.todayIndex;
+    if (endDay === null || endDay < 0 || actual.start > last) return;
+    const left = actual.start < 0 ? layout.plotLeft : xOfDay(actual.start) - 1;
+    const right = endDay > last ? layout.plotRight : xOfDay(endDay) + 1;
+    const y = centerY + BAND_HEIGHT / 2 + 2;
+    ctx.fillStyle = colors.ink;
+    ctx.fillRect(left, y, Math.max(2, right - left), 3);
+    // 着手が図の左端より前なら、線がその先へ続いていることを矢じりで示す。
+    // 期間の初日は基準日なので、進行中のタスクはたいていここに当たる。
+    if (actual.start < 0) {
+      ctx.beginPath();
+      ctx.moveTo(left - 5, y + 1.5);
+      ctx.lineTo(left, y - 2);
+      ctx.lineTo(left, y + 5);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // 終わっているものだけ端を立てる。まだ続いている線と見分けるため。
+    if (actual.end !== null && actual.end <= last) {
+      ctx.fillRect(Math.round(right) - 2, y - 3, 2, 6);
+    }
+  }
+
+  /** 名前の右の進捗率。小さな棒と数字。 */
+  function drawProgress(
+    ctx: CanvasRenderingContext2D,
+    colors: ReturnType<typeof readPalette>,
+    progress: Progress,
+    centerY: number,
+    lang: Lang,
+  ): void {
+    if (!layout) return;
+    const left = layout.nameWidth + 4;
+    ctx.fillStyle = colors.grid;
+    ctx.fillRect(left, centerY - 2, PROGRESS_BAR, 4);
+    ctx.fillStyle = colors.series;
+    ctx.fillRect(left, centerY - 2, PROGRESS_BAR * Math.min(1, Math.max(0, progress.ratio)), 4);
+    ctx.font = `11px ${colors.font}`;
+    ctx.fillStyle = colors.secondary;
+    ctx.textAlign = "right";
+    ctx.fillText(
+      formatPercent(progress.ratio, lang, 0),
+      layout.nameWidth + PROGRESS_WIDTH,
+      centerY,
+    );
   }
 
   function draw(): void {
@@ -208,6 +305,15 @@ export function createScheduleChart(
     ctx.fillText(t("sched.ganttTitle"), 0, plot.rowsTop - 12);
     ctx.fillText(t("sched.curveTitle"), 0, plot.curveTop - 12);
 
+    // --- 指している行。押せば開くことが分かるように、行ごと薄く塗る。
+    if (focusRow >= 0 && focusRow < data.rows.length) {
+      ctx.save();
+      ctx.fillStyle = colors.series;
+      ctx.globalAlpha = 0.08;
+      ctx.fillRect(0, plot.rowsTop + focusRow * ROW_HEIGHT, plot.plotRight, ROW_HEIGHT);
+      ctx.restore();
+    }
+
     // --- 行
     ctx.textBaseline = "middle";
     data.rows.forEach((row, index) => {
@@ -223,11 +329,13 @@ export function createScheduleChart(
       ctx.textAlign = "right";
       ctx.fillText(
         row.marks.p80 === null ? "—" : formatDayShort(data.startDay + row.marks.p80, lang),
-        plot.nameWidth + DATE_WIDTH,
+        plot.nameWidth + PROGRESS_WIDTH + DATE_WIDTH,
         centerY,
       );
 
+      drawProgress(ctx, colors, row.progress, centerY, lang);
       drawRow(ctx, colors, row.marks, centerY);
+      drawActual(ctx, colors, row.actual, centerY);
     });
 
     // --- 全体の行 (最後に強調して置く)
@@ -243,10 +351,12 @@ export function createScheduleChart(
       data.overallMarks.p80 === null
         ? "—"
         : formatDayShort(data.startDay + data.overallMarks.p80, lang),
-      plot.nameWidth + DATE_WIDTH,
+      plot.nameWidth + PROGRESS_WIDTH + DATE_WIDTH,
       overallY,
     );
+    drawProgress(ctx, colors, data.overallProgress, overallY, lang);
     drawRow(ctx, colors, data.overallMarks, overallY);
+    drawActual(ctx, colors, data.overallActual, overallY);
 
     // --- 全体の完了確率カーブ
     ctx.textAlign = "right";
@@ -327,10 +437,62 @@ export function createScheduleChart(
     }
   }
 
+  /** 1 行ぶんの吹き出し。進捗と実績を、予測と並べて読めるように。 */
+  function rowTooltip(index: number, day: number): TooltipRow[] {
+    if (!model) return [];
+    const row = model.rows[index];
+    if (!row) return [];
+    const lang = getLang();
+    const start = model.startDay;
+    const date = (value: number | null): string =>
+      value === null ? "—" : formatDayShort(start + value, lang);
+    const lines: TooltipRow[] = [
+      // タスク名は利用者が書いた文字列なので、**組み立てずに部品として渡す**。
+      { label: row.label, heading: true },
+      { label: t("summary.progress"), value: formatPercent(row.progress.ratio, lang, 0) },
+      {
+        label: `${t("progress.spent")} / ${t("progress.remaining")}`,
+        value: `${formatNumber(row.progress.spent, lang, 1)} / ${formatNumber(
+          row.progress.remaining,
+          lang,
+          1,
+        )} ${t("unit.days")}`,
+      },
+    ];
+    if (row.actual.start !== null) {
+      lines.push({
+        label: t("sched.actual"),
+        value: `${date(row.actual.start)} – ${row.actual.end === null ? "" : date(row.actual.end)}`,
+      });
+    }
+    lines.push(
+      { label: t("summary.finishP50"), value: date(row.marks.p50), rule: true },
+      { label: t("summary.finishP80"), value: date(row.marks.p80) },
+    );
+    if (day >= 0) {
+      lines.push({
+        label: `${formatDayShort(start + day, lang)} ${t("sched.probability")}`,
+        value: formatPercent(row.probabilities[day] ?? 0, lang, 0),
+      });
+    }
+    lines.push({ label: t("sched.clickToOpen"), rule: true });
+    return lines;
+  }
+
   function showTooltip(day: number, clientX: number | null): void {
     if (!model || !layout) return;
-    const lang = getLang();
     const box = canvas.getBoundingClientRect();
+    if (focusRow >= 0) {
+      const x = clientX === null ? (day >= 0 ? xOfDay(day) : layout.plotLeft) : clientX - box.left;
+      const y = layout.rowsTop + (focusRow + 1) * ROW_HEIGHT;
+      tooltip.show(rowTooltip(focusRow, day), x, y, box.width);
+      return;
+    }
+    if (day < 0) {
+      tooltip.hide();
+      return;
+    }
+    const lang = getLang();
     const localX = clientX === null ? xOfDay(day) : clientX - box.left;
     // タスク名は利用者が書いた文字列なので、**組み立てずに部品として渡す**。
     const rows: TooltipRow[] = [
@@ -352,22 +514,37 @@ export function createScheduleChart(
     if (!model) return;
     const box = canvas.getBoundingClientRect();
     const day = dayAt(event.clientX - box.left);
-    if (day < 0) {
-      focusDay = -1;
+    focusRow = rowAt(event.clientY - box.top);
+    focusDay = day;
+    canvas.style.cursor = focusRow >= 0 ? "pointer" : "";
+    draw();
+    if (day < 0 && focusRow < 0) {
       tooltip.hide();
-      draw();
       return;
     }
-    focusDay = day;
-    draw();
     showTooltip(day, event.clientX);
   };
 
   const onLeave = (): void => {
     focusDay = -1;
+    focusRow = -1;
+    canvas.style.cursor = "";
     tooltip.hide();
     draw();
   };
+
+  const select = (index: number): void => {
+    const row = model?.rows[index];
+    if (row) onSelect(row.id);
+  };
+
+  // `pointerdown` は吹き出しに使っている (指で触ったとき)。開くのは `click`
+  // にする。押し下げで開くと、指でなぞって吹き出しを見るだけで窓が開く。
+  canvas.addEventListener("click", (event: MouseEvent) => {
+    const box = canvas.getBoundingClientRect();
+    const index = rowAt(event.clientY - box.top);
+    if (index >= 0) select(index);
+  });
 
   canvas.addEventListener("pointermove", onPointer);
   canvas.addEventListener("pointerdown", onPointer);
@@ -375,6 +552,25 @@ export function createScheduleChart(
   canvas.addEventListener("blur", onLeave);
   canvas.addEventListener("keydown", (event: KeyboardEvent) => {
     if (!model) return;
+    const rowCount = model.rows.length;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (rowCount === 0) return;
+      event.preventDefault();
+      focusRow =
+        event.key === "ArrowDown"
+          ? Math.min(rowCount - 1, focusRow + 1)
+          : focusRow < 0
+            ? rowCount - 1
+            : Math.max(0, focusRow - 1);
+      draw();
+      showTooltip(focusDay, null);
+      return;
+    }
+    if (event.key === "Enter" && focusRow >= 0) {
+      event.preventDefault();
+      select(focusRow);
+      return;
+    }
     const last = visibleDays() - 1;
     let next: number;
     const step = event.shiftKey ? 7 : 1;
@@ -387,6 +583,7 @@ export function createScheduleChart(
 
     event.preventDefault();
     focusDay = next;
+    if (next < 0) focusRow = -1;
     draw();
     if (next < 0) tooltip.hide();
     else showTooltip(next, null);
@@ -398,6 +595,8 @@ export function createScheduleChart(
     setData(next) {
       model = next;
       focusDay = -1;
+      // 行の数が変わると、指していた行が別のタスクに化ける。
+      focusRow = -1;
       tooltip.hide();
       canvas.style.height = `${String(scheduleHeight(next?.rows.length ?? 0))}px`;
       draw();

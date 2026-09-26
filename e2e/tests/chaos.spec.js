@@ -36,11 +36,14 @@ for (const [name, fault] of Object.entries(FAULTS)) {
       .locator('.summary-item[data-key="effortP80"]')
       .getAttribute("data-value");
     const run = await page.locator("#status").getAttribute("data-run");
+    // 一覧は読むだけ。見積もりは詳細の窓で書き換える。
     await page
       .locator(".task-table tbody tr")
       .nth(1)
-      .locator('input[type="number"]')
-      .first()
+      .locator(".row-open")
+      .click();
+    await page
+      .locator('.modal-card.detail-card input[data-focus$=":min"]')
       .fill("40");
     // 計算が一巡し、結果が変わる。
     await expect(page.locator("#status")).not.toHaveAttribute(
@@ -55,6 +58,7 @@ for (const [name, fault] of Object.entries(FAULTS)) {
     await expect(page.locator("#storage-warning")).toBeVisible();
 
     // ほかの画面も開ける。
+    await page.click('.modal-card.detail-card button[title="詳細を閉じる"]');
     for (const tab of ["forecast", "calendar", "projects"]) {
       await page.click(`.tabs button[data-tab="${tab}"]`);
     }

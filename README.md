@@ -46,7 +46,10 @@ Finish date, P80              2026-12-11           ← holidays and meetings inc
 - **Working calendar**: Japanese public holidays, working on a day off, meetings and time
   off (5-minute steps, biweekly and other repeats, shared by several people)
 - **Finish-date probabilities**: read "when will it be done" per task and overall, as a
-  band chart and as a table
+  band chart and as a table. The chart also shows each task's progress and actual
+  start/finish, and clicking a row opens that task's details
+- **Compact task list**: the list shows only what you need to pick a task; click a row to
+  view and edit everything in its details
 - **Actuals fold back in**: start dates, progress and completion dates redraw the forecast
 - **Comments**: Markdown on projects and tasks, with file attachments (1 MB each, 5 per
   comment) — people with view-only access can write them

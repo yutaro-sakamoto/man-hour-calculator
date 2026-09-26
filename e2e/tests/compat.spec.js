@@ -62,11 +62,11 @@ test("タッチで数字を変えると、計算がやり直される", async ({
   await open(page);
   await page.locator('.tabs button[data-tab="tasks"]').tap();
   const before = await page.locator("#status").getAttribute("data-run");
-  const input = page
-    .locator(".task-table tbody tr")
-    .nth(1)
-    .locator('input[type="number"]')
-    .first();
+  // 一覧は読むだけ。行を触って詳細の窓を開き、そこで書き換える。
+  await page.locator(".task-table tbody tr").nth(1).locator(".row-open").tap();
+  const input = page.locator(
+    '.modal-card.detail-card input[data-focus$=":min"]',
+  );
   await input.tap();
   await input.fill("9");
   await expect(page.locator("#status")).not.toHaveAttribute(

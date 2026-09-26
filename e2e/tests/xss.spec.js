@@ -46,6 +46,24 @@ async function fillEveryTextField(page, start) {
   return written;
 }
 
+/**
+ * タスクの名前とグループを、詳細の窓を 1 件ずつ開いて埋める。
+ *
+ * 一覧は読むだけで、欄は詳細の窓にしか無い。一覧を舐めるだけでは、
+ * いちばん数の多いタスク名を 1 つも書かないまま通ってしまう。
+ */
+async function fillEveryTaskDetail(page, start) {
+  const rows = page.locator(".task-table tbody tr");
+  const count = await rows.count();
+  let written = 0;
+  for (let i = 0; i < count; i++) {
+    await rows.nth(i).locator(".row-open").click();
+    written += await fillEveryTextField(page, start + written);
+    await page.click('.modal-card.detail-card button[title="詳細を閉じる"]');
+  }
+  return written;
+}
+
 test("自由記入欄に書いた HTML は、どの画面でも文字のまま出る", async ({
   page,
 }) => {
@@ -57,6 +75,7 @@ test("自由記入欄に書いた HTML は、どの画面でも文字のまま�
     await page.click(`.tabs button[data-tab="${tab}"]`);
     await unfoldAll(page);
     written += await fillEveryTextField(page, written);
+    if (tab === "tasks") written += await fillEveryTaskDetail(page, written);
   }
   // 1 画面に数個では検査にならない。見本データなら 20 ほど書ける
   // (入れたときの実測 19)。大きく減ったら、欄を拾えていない。

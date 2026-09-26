@@ -19,7 +19,9 @@
  */
 
 import { DAY_FLAG } from "../abi.ts";
+import { dayFromIso } from "../format.ts";
 import type { ComputeResult } from "../wasm.ts";
+import { progressOfSubtree, progressOverall, type Progress } from "./progress.ts";
 import type { TreeRow } from "./tree.ts";
 
 /** 累積和 CDF を工数の実数値で引く (グリッド間は線形補間)。 */
@@ -60,6 +62,17 @@ export interface ScheduleMarks {
   p90: number | null;
 }
 
+/**
+ * 実績の期間。値は期間の初日からの日数 (初日より前なら負になる)。
+ *
+ * `end` は**配下がすべて完了日を持つときだけ**埋まる。1 件でも終わって
+ * いなければ、まとまりとしてはまだ続いているので `null`。
+ */
+export interface ActualSpan {
+  start: number | null;
+  end: number | null;
+}
+
 export interface ScheduleRow {
   id: string;
   label: string;
@@ -70,6 +83,9 @@ export interface ScheduleRow {
   members: number[];
   probabilities: Float64Array;
   marks: ScheduleMarks;
+  /** 部分木の進捗。表・グラフ・詳細で同じ数字を出すため、ここで 1 度だけ引く。 */
+  progress: Progress;
+  actual: ActualSpan;
 }
 
 export interface MemberSummary {
@@ -96,6 +112,8 @@ export interface ScheduleModel {
   members: MemberSummary[];
   overall: Float64Array;
   overallMarks: ScheduleMarks;
+  overallProgress: Progress;
+  overallActual: ActualSpan;
 }
 
 function marksOf(probabilities: Float64Array): ScheduleMarks {
@@ -159,6 +177,43 @@ function lastTaskPerMember(
   return last;
 }
 
+/**
+ * 葉の並びから実績の期間を出す。
+ *
+ * 計算に入っていない葉 (`leafIndex === null`) は数えない。外した行の日付で
+ * 帯が伸び縮みすると、画面の数字と食い違う。
+ */
+export function actualSpanOf(leaves: readonly TreeRow[], startDay: number): ActualSpan {
+  let start: number | null = null;
+  let end: number | null = null;
+  let allEnded = leaves.length > 0;
+  for (const row of leaves) {
+    const began = dayFromIso(row.task.startDate);
+    const ended = dayFromIso(row.task.endDate);
+    if (began !== null) start = start === null ? began : Math.min(start, began);
+    if (ended === null) allEnded = false;
+    else end = end === null ? ended : Math.max(end, ended);
+  }
+  return {
+    start: start === null ? null : start - startDay,
+    end: allEnded && end !== null ? end - startDay : null,
+  };
+}
+
+/** `rows[from]` とその配下のうち、計算に入っている葉。 */
+function subtreeLeafRows(rows: readonly TreeRow[], from: number): TreeRow[] {
+  const base = rows[from];
+  if (!base) return [];
+  const out: TreeRow[] = [];
+  for (let i = from; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) break;
+    if (i > from && row.depth <= base.depth) break;
+    if (row.leafIndex !== null) out.push(row);
+  }
+  return out;
+}
+
 /** 一覧に出す行と計算結果から、スケジュール表示用のモデルを組み立てる。 */
 export function buildScheduleModel(
   result: ComputeResult,
@@ -196,6 +251,8 @@ export function buildScheduleModel(
       members: [...last.keys()].sort((a, b) => a - b),
       probabilities,
       marks: marksOf(probabilities),
+      progress: progressOfSubtree(result, rows, i),
+      actual: actualSpanOf(subtreeLeafRows(rows, i), result.calendarStartDay),
     });
   }
 
@@ -259,6 +316,11 @@ export function buildScheduleModel(
     members,
     overall,
     overallMarks: marksOf(overall),
+    overallProgress: progressOverall(result),
+    overallActual: actualSpanOf(
+      rows.filter((row) => row.leafIndex !== null),
+      result.calendarStartDay,
+    ),
   };
 }
 

@@ -62,6 +62,7 @@ import { renderMembersTab } from "./ui/members.ts";
 import { renderCommentsModal } from "./ui/comments.ts";
 import { renderProjectsTab } from "./ui/projects.ts";
 import { renderForecastTab } from "./ui/forecast.ts";
+import { openTaskDetail } from "./ui/schedule.ts";
 import { renderTaskDetailModal } from "./ui/taskDetail.ts";
 import { renderTasksTab } from "./ui/tasks.ts";
 import {
@@ -106,7 +107,6 @@ const state: AppState = {
   schedule: null,
   members: { all: [], indexById: new Map(), unassignedIndex: null },
   filter: { text: "", group: "", priority: "", state: "", assignee: "" },
-  columnMode: "estimate",
   activeTab: "tasks",
   calendarMonth: { year: startMonth.getUTCFullYear(), month: startMonth.getUTCMonth() + 1 },
   calendarMember: null,
@@ -173,7 +173,11 @@ const distributionChart = createDistributionChart(
   distributionHost.tooltip,
   lang,
 );
-const scheduleChart = createScheduleChart(scheduleHost.canvas, scheduleHost.tooltip, lang);
+// 帯グラフの行を押すと、そのタスクの詳細が開く。表の名前と同じ道を通す。
+// (`actions` はこの下で定義する。押されるのは描いたあとなので、そのときには在る。)
+const scheduleChart = createScheduleChart(scheduleHost.canvas, scheduleHost.tooltip, lang, (id) => {
+  openTaskDetail(actions, id);
+});
 
 /* ===== 計算 ================================================= */
 

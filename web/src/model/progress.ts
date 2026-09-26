@@ -17,6 +17,7 @@
  */
 
 import type { TreeRow } from "./tree.ts";
+import type { TaskState } from "../types.ts";
 import type { ComputeResult } from "../wasm.ts";
 
 /** 完了を表す状態コード (`crates/core` の `TaskState`)。 */
@@ -73,6 +74,18 @@ export function progressOfLeaves(result: ComputeResult, leafIndices: Iterable<nu
     doneCount,
     leafCount,
   };
+}
+
+/**
+ * まとまり (親タスク) の状態。配下の葉から決める。
+ *
+ * 親は自分では着手も完了もしないので、エンジンは状態を返さない。そのまま
+ * 「未着手」と出すと、配下が 7 割終わっていても未着手に見える。
+ */
+export function stateOfProgress(progress: Progress): TaskState {
+  if (progress.leafCount > 0 && progress.doneCount === progress.leafCount) return "done";
+  if (progress.spent > 0 || progress.doneCount > 0) return "inProgress";
+  return "notStarted";
 }
 
 /** プロジェクト全体。 */

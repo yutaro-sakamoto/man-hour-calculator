@@ -93,7 +93,7 @@ test("どの窓も、開くとフォーカスが入り、Esc で閉じる", asyn
         await page
           .locator(".task-table tbody tr")
           .nth(1)
-          .locator('button[title*="詳細"]')
+          .locator('[title*="詳細を開く"]')
           .click();
       },
     ],
