@@ -112,11 +112,15 @@ test("編集と再計算を繰り返しても、遅くならず、ヒープが�
     return (await cdp.send("Runtime.getHeapUsage")).usedSize;
   };
 
-  const input = page
+  // 一覧は読むだけ。詳細の窓を開いたまま、同じ欄を書き換え続ける。
+  await page
     .locator(".task-table tbody tr")
     .nth(1)
-    .locator('input[type="number"]')
-    .first();
+    .locator(".row-open")
+    .click();
+  const input = page.locator(
+    '.modal-card.detail-card input[data-focus$=":min"]',
+  );
   const times = [];
   let heapAfterWarmup = 0;
   const ROUNDS = 60;

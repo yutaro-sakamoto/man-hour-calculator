@@ -169,8 +169,7 @@ header h1 {
   overflow: hidden;
   background: var(--surface);
 }
-.lang-toggle button,
-.segmented button {
+.lang-toggle button {
   border: 0;
   background: transparent;
   color: var(--ink-secondary);
@@ -181,18 +180,9 @@ header h1 {
   cursor: pointer;
   border-radius: 0;
 }
-.lang-toggle button[aria-pressed="true"],
-.segmented button[aria-pressed="true"] {
+.lang-toggle button[aria-pressed="true"] {
   background: var(--series);
   color: var(--on-series);
-}
-.segmented {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--surface);
-  margin-left: auto;
 }
 
 /* ===== プロジェクトと権限 ===== */
@@ -1018,6 +1008,13 @@ select.assignee {
 .swatch.marker {
   background: var(--band-marker);
 }
+/* 図の実績は帯の下の細い線。凡例も細くして、帯の色と取り違えないように。 */
+.swatch.actual {
+  height: 3px;
+  border: 0;
+  border-radius: 0;
+  background: var(--ink);
+}
 
 /* ===== KPI タイル ===== */
 .tiles {
@@ -1260,6 +1257,7 @@ details.data-view .scroll {
   color: var(--ink);
   text-align: left;
   cursor: pointer;
+  text-decoration: none;
   border-bottom: 1px dotted var(--grid);
 }
 .row-open:hover {
@@ -1440,9 +1438,6 @@ details.data-view .scroll {
   }
   .summary-value {
     font-size: 19px;
-  }
-  .segmented {
-    margin-left: 0;
   }
   .day {
     min-height: 40px;
@@ -1879,4 +1874,39 @@ td.num.short {
   border: 0;
   border-top: 1px solid var(--grid);
   margin: 10px 0;
+}
+
+/* ===== タスク一覧 (読むだけの行) ===== */
+/* 行のどこを押しても詳細が開く。押せることを指の形で伝える。 */
+.task-table tr.task-row {
+  cursor: pointer;
+}
+.task-table tr.task-row:hover > td {
+  background: color-mix(in srgb, var(--series) 5%, transparent);
+}
+.task-table .name-inner {
+  gap: 6px;
+}
+.task-table tr[data-parent="true"] .row-open {
+  font-weight: 620;
+}
+.task-table .row-open.untitled {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+.task-table td.estimate {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.bar-track.mini {
+  width: 48px;
+  height: 6px;
+  margin-right: 6px;
+}
+.progress-cell {
+  white-space: nowrap;
+}
+.chip.priority-high {
+  color: var(--critical);
+  font-weight: 600;
 }

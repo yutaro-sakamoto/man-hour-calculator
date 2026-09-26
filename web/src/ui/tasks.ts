@@ -1,8 +1,15 @@
-/** タスクタブ。階層・優先度・グループ・実績の入力と、表示の絞り込み。 */
+/**
+ * タスクタブ。一覧・絞り込み・並べ替えと階層。
+ *
+ * 一覧は**読むだけ**にして、名前・見積もり・実績の書き換えは行を押して開く
+ * 詳細の窓 (`taskDetail.ts`) に集めてある。
+ */
 
 import type { AppActions, AppState } from "../app.ts";
-import { formatDayShort, formatNumber } from "../format.ts";
+import type { ProjectDocument } from "../api/types.ts";
+import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
+import { progressOfSubtree, stateOfProgress } from "../model/progress.ts";
 import { createTask, sampleDocument } from "../model/project.ts";
 import {
   collectGroups,
@@ -15,26 +22,17 @@ import {
   type TreeRow,
 } from "../model/tree.ts";
 import { memberLabel, UNASSIGNED_ID } from "../model/members.ts";
-import type { ColumnMode, Priority, TaskState } from "../types.ts";
-import { button, card, checkbox, h, headerRow, iconButton, select } from "./dom.ts";
+import type { Priority, Task, TaskState } from "../types.ts";
+import { button, card, checkbox, h, headerRow, iconButton, openLink, select } from "./dom.ts";
 import { commentButton } from "./comments.ts";
-import {
-  assigneeField,
-  endField,
-  estimateField,
-  groupField,
-  nameField,
-  priorityChoices,
-  priorityField,
-  progressField,
-  startField,
-  taskWriter,
-  type FieldOptions,
-} from "./taskFields.ts";
+import { priorityChoices } from "./taskFields.ts";
 
 const STATE_ORDER: readonly TaskState[] = ["notStarted", "inProgress", "done"];
 
 function stateOf(state: AppState, row: TreeRow): TaskState {
+  if (row.hasChildren && state.result !== null) {
+    return stateOfProgress(progressOfSubtree(state.result, state.rows, row.index));
+  }
   if (row.leafIndex === null) return "notStarted";
   const code = state.result?.states[row.leafIndex] ?? 0;
   return STATE_ORDER[code] ?? "notStarted";
@@ -89,10 +87,6 @@ function visibleRows(state: AppState): TreeRow[] {
     }
   }
   return state.rows.filter((row) => keep.has(row.task.id));
-}
-
-function columnsFor(mode: ColumnMode): { estimate: boolean; actual: boolean } {
-  return { estimate: mode !== "actual", actual: mode !== "estimate" };
 }
 
 function renderFilterBar(state: AppState, actions: AppActions, shown: number): HTMLElement {
@@ -181,22 +175,76 @@ function renderFilterBar(state: AppState, actions: AppActions, shown: number): H
       class: "filter-count",
       text: t("filter.showing", { shown, total: state.rows.length }),
     }),
-    h("div", { class: "segmented", attrs: { role: "group", "aria-label": t("columns.all") } }, [
-      ...(["estimate", "actual", "all"] as const).map((mode) =>
-        button(
-          t(`columns.${mode}`),
-          () => {
-            actions.patch((s) => {
-              s.columnMode = mode;
-            });
-          },
-          { attrs: { "aria-pressed": state.columnMode === mode } },
-        ),
-      ),
-    ]),
   ]);
 }
 
+/** 詳細を開く。一覧は読むだけにして、書き換えは詳細の窓でまとめて行う。 */
+function openDetail(actions: AppActions, taskId: string): void {
+  actions.patch((s) => {
+    s.taskDetailId = taskId;
+  });
+}
+
+/** タスクを足して、そのまま詳細を開く。名前をすぐ書けるように。 */
+function addTask(
+  actions: AppActions,
+  insert: (document: ProjectDocument, task: Task) => void,
+  task: Task,
+): void {
+  actions.mutate((document) => {
+    insert(document, task);
+  });
+  openDetail(actions, task.id);
+}
+
+/** 見積もりを 1 欄にまとめる。親は配下の合計、葉は書いたとおり。 */
+function estimateText(row: TreeRow): string {
+  const l = lang();
+  if (row.hasChildren || row.valid) {
+    const { min, likely, max } = row.rollup;
+    return `${formatNumber(min, l)} – ${formatNumber(likely, l)} – ${formatNumber(max, l)}`;
+  }
+  // 数になっていない書きかけは、そのまま見せる。0 に丸めると直す手がかりが消える。
+  const task = row.task;
+  return [task.min, task.likely, task.max]
+    .map((value) => (value.trim() === "" ? "?" : value))
+    .join(" – ");
+}
+
+function progressCell(state: AppState, row: TreeRow): HTMLElement {
+  // 計算に入っていない行 (使用を外した行・不正な行) には進捗が無い。
+  const progress =
+    state.result === null || !row.active
+      ? null
+      : (state.schedule?.rows.find((item) => item.id === row.task.id)?.progress ?? null);
+  if (progress === null || progress.leafCount === 0) {
+    return h("td", { class: "num" }, [h("span", { class: "muted", text: "—" })]);
+  }
+  return h("td", { class: "num progress-cell", dataset: { progress: progress.ratio.toFixed(4) } }, [
+    h("span", { class: "bar-track mini" }, [
+      h("span", { class: "bar-fill", style: { width: `${String(progress.ratio * 100)}%` } }),
+    ]),
+    h("span", { class: "bar-value", text: formatPercent(progress.ratio, lang(), 0) }),
+  ]);
+}
+
+function assigneeText(state: AppState, row: TreeRow): string {
+  if (row.hasChildren) return "—";
+  const id = row.task.assigneeId;
+  if (id === null) return t("members.unassigned");
+  const members = state.document.calendar.members;
+  const at = members.findIndex((member) => member.id === id);
+  const member = members[at];
+  return member === undefined ? t("members.unassigned") : memberLabel(member, at);
+}
+
+/**
+ * 一覧の 1 行。**読むだけ。** 書き換えは行を押して開く詳細の窓で行う。
+ *
+ * 1 行に 15 の入力欄を並べていたころは、横に長すぎて完了予測が画面の外に
+ * 出ていた。一覧に残すのは「どれを開くか」を決めるのに要るものと、
+ * 並べ替え・階層・使用の切り替えのように**一覧でしかできない操作**だけ。
+ */
 function renderRow(
   state: AppState,
   actions: AppActions,
@@ -204,13 +252,9 @@ function renderRow(
   position: { first: boolean; last: boolean },
 ): HTMLTableRowElement {
   const task = row.task;
-  const columns = columnsFor(state.columnMode);
   const label = task.name.trim() === "" ? t("tasks.untitled") : task.name;
   const index = row.index;
-  // 書き込み口も入力欄も詳細の窓と共用する。2 か所に同じ丸めを書くと、
-  // 片方だけ直したときに静かにずれる。
-  const setTask = taskWriter(actions, task.id);
-  const fields: FieldOptions = { focusPrefix: task.id, label };
+  const state_ = stateOf(state, row);
 
   const cells: HTMLElement[] = [];
 
@@ -219,7 +263,10 @@ function renderRow(
       checkbox(
         task.enabled,
         (checked) => {
-          setTask({ enabled: checked });
+          actions.mutate((document) => {
+            const target = document.tasks.find((item) => item.id === task.id);
+            if (target) target.enabled = checked;
+          });
         },
         {
           dataset: { focus: `${task.id}:use` },
@@ -234,71 +281,35 @@ function renderRow(
       h("div", { class: "name-inner" }, [
         h("span", { class: "indent", style: { width: `${String(row.depth * 16)}px` } }),
         h("span", { class: "twisty", text: row.hasChildren ? "▾" : "" }),
-        nameField(task, setTask, fields),
+        openLink(
+          label,
+          () => {
+            openDetail(actions, task.id);
+          },
+          {
+            class: `row-open${task.name.trim() === "" ? " untitled" : ""}`,
+            title: t("detail.open", { name: label }),
+            dataset: { task: task.id, focus: `${task.id}:open` },
+          },
+        ),
+        task.group.trim() === "" ? null : h("span", { class: "chip muted", text: task.group }),
+        task.priority === "high"
+          ? h("span", { class: "chip priority-high", text: t("priority.high") })
+          : null,
       ]),
     ]),
   );
 
-  if (columns.estimate) {
-    cells.push(
-      h("td", {}, [priorityField(task, setTask, fields)]),
-      h("td", {}, [groupField(task, setTask, fields)]),
-    );
-
-    for (const key of ["min", "likely", "max"] as const) {
-      cells.push(
-        h("td", { class: "num" }, [
-          row.hasChildren
-            ? h("span", {
-                class: "rollup",
-                text: formatNumber(row.rollup[key], lang()),
-                title: t("tasks.rollupHint"),
-              })
-            : estimateField(task, key, setTask, {
-                ...fields,
-                invalid: row.active && !row.valid,
-              }),
-        ]),
-      );
-    }
-  }
-
-  if (columns.actual) {
-    const leafIndex = row.leafIndex;
-    const state_ = stateOf(state, row);
-    cells.push(
-      h("td", {}, [
-        row.hasChildren
-          ? h("span", { class: "muted", text: "—" })
-          : startField(task, setTask, fields),
-      ]),
-      h("td", { class: "num" }, [
-        row.hasChildren
-          ? h("span", { class: "muted", text: "—" })
-          : progressField(task, setTask, fields),
-      ]),
-      h("td", {}, [
-        row.hasChildren
-          ? h("span", { class: "muted", text: "—" })
-          : endField(task, setTask, fields),
-      ]),
-      h("td", { class: "num" }, [
-        h("span", {
-          class: "muted",
-          text:
-            leafIndex === null ? "—" : formatNumber(state.result?.spent[leafIndex] ?? 0, lang(), 1),
-        }),
-      ]),
-      h("td", {}, [h("span", { class: `pill pill-${state_}`, text: t(`state.${state_}`) })]),
-    );
-  }
-
-  // 担当者は常に見せる。誰の列に積まれるかで日付が変わるため。
   cells.push(
-    h("td", {}, [
+    h("td", {}, [h("span", { class: `pill pill-${state_}`, text: t(`state.${state_}`) })]),
+    progressCell(state, row),
+    h("td", { class: "num estimate" }, [
       row.hasChildren
-        ? h("span", { class: "muted", text: "—" })
-        : assigneeField(state, task, setTask, fields),
+        ? h("span", { class: "rollup", text: estimateText(row), title: t("tasks.rollupHint") })
+        : h("span", { text: estimateText(row) }),
+    ]),
+    h("td", {}, [
+      h("span", { class: row.hasChildren ? "muted" : "", text: assigneeText(state, row) }),
     ]),
   );
 
@@ -357,21 +368,13 @@ function renderRow(
         task.parentId === null,
       ),
       iconButton("+", t("tasks.addChild"), () => {
-        actions.mutate((document) => {
-          document.tasks = insertAfterSubtree(
-            document.tasks,
-            index,
-            createTask({ parentId: task.id, group: task.group }),
-          );
-        });
-      }),
-      // 並べ替えや階層とは別の話なので、削除の手前にまとめて置く。
-      // 「…」は残りの見積もり・寄与・確率の線を出す窓。16 列目を増やさずに
-      // 見せられるようにする。
-      iconButton("…", t("detail.open", { name: label }), () => {
-        actions.patch((s) => {
-          s.taskDetailId = task.id;
-        });
+        addTask(
+          actions,
+          (document, child) => {
+            document.tasks = insertAfterSubtree(document.tasks, index, child);
+          },
+          createTask({ parentId: task.id, group: task.group }),
+        );
       }),
       commentButton(state, actions, row.task.id, t("comments.taskButton")),
       iconButton("×", t("tasks.removeRow", { name: label }), () => {
@@ -390,10 +393,21 @@ function renderRow(
   return h(
     "tr",
     {
+      class: "task-row",
       dataset: {
+        task: task.id,
         invalid: String(row.active && !row.valid && !row.hasChildren),
         parent: String(row.hasChildren),
         inactive: String(!row.active),
+      },
+      on: {
+        // 行のどこを押しても開く。名前の字だけが的だと、狭くて押しにくい。
+        // 行のなかの操作部品 (チェック・並べ替えなど) はそれぞれの役目を優先する。
+        click: (event) => {
+          const target = event.target as Element | null;
+          if (target?.closest("a, button, input, select, label, textarea") != null) return;
+          openDetail(actions, task.id);
+        },
       },
     },
     cells,
@@ -402,36 +416,17 @@ function renderRow(
 
 export function renderTasksTab(state: AppState, actions: AppActions): HTMLElement {
   const shown = visibleRows(state);
-  const columns = columnsFor(state.columnMode);
-  const groups = collectGroups(state.document.tasks);
 
   const header: { label: string; class?: string }[] = [
     { label: t("col.use") },
     { label: t("col.name") },
-  ];
-  if (columns.estimate) {
-    header.push(
-      { label: t("col.priority") },
-      { label: t("col.group") },
-      { label: t("col.min"), class: "num" },
-      { label: t("col.likely"), class: "num" },
-      { label: t("col.max"), class: "num" },
-    );
-  }
-  if (columns.actual) {
-    header.push(
-      { label: t("col.start") },
-      { label: t("col.progress"), class: "num" },
-      { label: t("col.end") },
-      { label: t("col.spent"), class: "num" },
-      { label: t("col.state") },
-    );
-  }
-  header.push(
+    { label: t("col.state") },
+    { label: t("col.progress"), class: "num" },
+    { label: t("tasks.estimateCol"), class: "num" },
     { label: t("col.assignee") },
     { label: t("col.finish"), class: "num" },
     { label: t("col.actions") },
-  );
+  ];
 
   const totals = state.rows.filter((row) => row.leafIndex !== null);
   const sum = (key: "min" | "likely" | "max"): number =>
@@ -463,11 +458,6 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
             ),
           ]),
         ]),
-    h(
-      "datalist",
-      { id: "group-options" },
-      groups.map((group) => h("option", { attrs: { value: group } })),
-    ),
     empty
       ? h("p", { class: "empty", text: t("tasks.empty") })
       : shown.length === 0
@@ -477,9 +467,13 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
       button(
         t("tasks.add"),
         () => {
-          actions.mutate((document) => {
-            document.tasks.push(createTask());
-          });
+          addTask(
+            actions,
+            (document, task) => {
+              document.tasks.push(task);
+            },
+            createTask(),
+          );
         },
         { id: "add-row", class: "primary" },
       ),
@@ -513,6 +507,7 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
             });
           }),
     ]),
+    empty ? null : h("p", { class: "hint", text: t("tasks.openHint") }),
     empty ? null : h("p", { class: "hint", text: t("tasks.orderHint") }),
     empty ? null : h("p", { class: "hint", text: t("tasks.assignHint") }),
     empty

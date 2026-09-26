@@ -18,7 +18,7 @@ import type { Connection } from "./model/connection.ts";
 import type { ResolvedMembers } from "./model/members.ts";
 import type { ScheduleModel } from "./model/schedule.ts";
 import type { TreeRow } from "./model/tree.ts";
-import type { ColumnMode, TaskFilter } from "./types.ts";
+import type { TaskFilter } from "./types.ts";
 import type { ComputeResult } from "./wasm.ts";
 
 /**
@@ -72,7 +72,6 @@ export interface AppState {
   members: ResolvedMembers;
 
   filter: TaskFilter;
-  columnMode: ColumnMode;
   activeTab: TabId;
   /** カレンダーの月表示で見ている月。 */
   calendarMonth: { year: number; month: number };

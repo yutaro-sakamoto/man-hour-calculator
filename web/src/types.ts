@@ -127,6 +127,3 @@ export interface TaskFilter {
   /** 担当者の id。`"\u0000"` は未割当を表す。 */
   assignee: string;
 }
-
-/** 表に出す列のまとまり。 */
-export type ColumnMode = "estimate" | "actual" | "all";

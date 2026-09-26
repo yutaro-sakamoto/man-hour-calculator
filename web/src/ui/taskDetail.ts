@@ -12,12 +12,12 @@ import type { AppActions, AppState } from "../app.ts";
 import { canWrite } from "../app.ts";
 import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { progressOfSubtree, type Progress } from "../model/progress.ts";
+import { progressOfSubtree, stateOfProgress, type Progress } from "../model/progress.ts";
 import { collectGroups, type TreeRow } from "../model/tree.ts";
 import type { ScheduleRow } from "../model/schedule.ts";
 import type { TaskState } from "../types.ts";
 import { commentButton } from "./comments.ts";
-import { button, checkbox, field, h, iconButton } from "./dom.ts";
+import { checkbox, field, h, iconButton, openLink } from "./dom.ts";
 import { sparkline } from "./sparkline.ts";
 import {
   assigneeField,
@@ -213,7 +213,7 @@ function childrenSection(state: AppState, actions: AppActions, row: TreeRow): HT
       "div",
       { class: "detail-children" },
       children.map((child) =>
-        button(
+        openLink(
           child.task.name.trim() === "" ? t("tasks.untitled") : child.task.name,
           () => {
             actions.patch((s) => {
@@ -249,11 +249,11 @@ export function renderTaskDetailModal(state: AppState, actions: AppActions): HTM
   };
 
   const label = row.task.name.trim() === "" ? t("tasks.untitled") : row.task.name;
-  const taskState = stateOf(state, row);
-  const progress =
+  const progress: Progress =
     state.result === null
       ? { spent: 0, remaining: 0, total: 0, ratio: 0, doneCount: 0, leafCount: 0 }
       : progressOfSubtree(state.result, state.rows, at);
+  const taskState = row.hasChildren ? stateOfProgress(progress) : stateOf(state, row);
   const scheduleRow = state.schedule?.rows.find((item) => item.id === row.task.id);
 
   const body = h("div", { class: "detail-body" }, [

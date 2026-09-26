@@ -236,10 +236,6 @@ const ja = {
   "filter.showing": "{shown} / {total} 件を表示中",
   "filter.viewOnly": "絞り込みは表示だけに効きます。計算対象は「使用」のチェックで決まります。",
 
-  "columns.estimate": "見積もり",
-  "columns.actual": "実績",
-  "columns.all": "すべて",
-
   "tasks.heading": "タスク",
   "tasks.add": "行を追加",
   "tasks.loadSample": "サンプルを読み込む",
@@ -258,6 +254,8 @@ const ja = {
     "まだタスクがありません。下の「行を追加」から 1 つ作るか、「サンプルを読み込む」で見本を入れてください。",
   "tasks.noMatch": "絞り込みに一致するタスクがありません。",
   "tasks.untitled": "無題のタスク",
+  "tasks.estimateCol": "見積もり (最小 – 最可能 – 最大)",
+  "tasks.openHint": "行を押すと詳細が開き、名前・見積もり・実績・担当を書き換えられます。",
   "tasks.orderHint": "上から順に着手する前提で日付を計算します。並べ替えると完了日も変わります。",
   "tasks.rollupHint": "子を持つタスクの見積もりは配下の合計です。直接は編集できません。",
   "tasks.totals": "使用中 {count} 件 / 最小 {min} ・ 最可能 {likely} ・ 最大 {max} {unit}",
@@ -390,7 +388,11 @@ const ja = {
 
   "sched.heading": "完了日の見通し",
   "sched.ganttTitle": "タスクごとの完了予測",
-  "sched.ganttNote": "帯は P10〜P90 の幅、濃い部分が P25〜P75、縦線が P50",
+  "sched.ganttNote":
+    "帯は P10〜P90 の幅、濃い部分が P25〜P75、縦線が P50。帯の下の線は実績 (着手日から完了日、まだなら基準日まで)。行を押すと詳細が開きます。",
+  "sched.actual": "実績",
+  "sched.legendActual": "実績 (着手〜完了)",
+  "sched.clickToOpen": "押すと詳細を開きます",
   "sched.taskCol": "タスク",
   "sched.overall": "全体",
   "sched.notFinishing": "期間内に終わりません",
@@ -734,10 +736,6 @@ const en: Dictionary = {
   "filter.viewOnly":
     "Filtering only affects the list. The “Use” checkbox decides what is computed.",
 
-  "columns.estimate": "Estimate",
-  "columns.actual": "Actuals",
-  "columns.all": "All",
-
   "tasks.heading": "Tasks",
   "tasks.add": "Add row",
   "tasks.loadSample": "Load sample",
@@ -755,6 +753,9 @@ const en: Dictionary = {
   "tasks.empty": "No tasks yet. Add one with “Add row” below, or start from “Load sample”.",
   "tasks.noMatch": "No tasks match the filter.",
   "tasks.untitled": "Untitled task",
+  "tasks.estimateCol": "Estimate (min – likely – max)",
+  "tasks.openHint":
+    "Click a row to open its details and edit the name, estimate, actuals and assignee.",
   "tasks.orderHint": "Tasks are worked top to bottom. Reordering changes the finish dates.",
   "tasks.rollupHint": "A parent task shows the sum of its children and cannot be edited directly.",
   "tasks.totals": "{count} in use / min {min} · likely {likely} · max {max} {unit}",
@@ -891,7 +892,11 @@ const en: Dictionary = {
 
   "sched.heading": "Finish dates",
   "sched.ganttTitle": "Forecast completion per task",
-  "sched.ganttNote": "The band spans P10–P90, the darker part P25–P75, the line marks P50",
+  "sched.ganttNote":
+    "The band spans P10–P90, the darker part P25–P75, the line marks P50. The thin line below is what actually happened (start to finish, or to the reference date). Click a row to open its details.",
+  "sched.actual": "Actual",
+  "sched.legendActual": "Actual (start to finish)",
+  "sched.clickToOpen": "Click to open the details",
   "sched.taskCol": "Task",
   "sched.overall": "Everything",
   "sched.notFinishing": "Does not finish in range",

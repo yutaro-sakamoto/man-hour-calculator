@@ -10,10 +10,9 @@ import {
   isoFromDay,
 } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { progressOfSubtree, progressOverall, type Progress } from "../model/progress.ts";
+import type { Progress } from "../model/progress.ts";
 import type { ScheduleModel, ScheduleRow } from "../model/schedule.ts";
-import type { TreeRow } from "../model/tree.ts";
-import { button, card, dateInput, foldout, h, subfold } from "./dom.ts";
+import { card, dateInput, foldout, h, openLink, subfold } from "./dom.ts";
 
 function legend(): HTMLElement {
   return h("div", { class: "legend" }, [
@@ -22,6 +21,10 @@ function legend(): HTMLElement {
     h("span", { class: "legend-item" }, [
       h("i", { class: "swatch marker" }),
       t("sched.legendMedian"),
+    ]),
+    h("span", { class: "legend-item" }, [
+      h("i", { class: "swatch actual" }),
+      t("sched.legendActual"),
     ]),
   ]);
 }
@@ -93,29 +96,19 @@ interface ForecastRow {
   probability: number;
 }
 
-function forecastRows(state: AppState, model: ScheduleModel, at: number | null): ForecastRow[] {
-  const result = state.result;
-  // 帯グラフと同じ順・同じ行数で並べる。`ScheduleRow` は部分木を知らないので、
-  // 進捗と残りは `state.rows` に id で突き合わせて引く。
-  const byId = new Map<string, number>();
-  state.rows.forEach((row: TreeRow, index) => byId.set(row.task.id, index));
-
-  const rows: ForecastRow[] = model.rows.map((row) => {
-    const index = byId.get(row.id);
-    return {
-      id: row.id,
-      label: row.label,
-      depth: row.depth,
-      strong: row.isParent,
-      openable: true,
-      progress:
-        result === null || index === undefined
-          ? null
-          : progressOfSubtree(result, state.rows, index),
-      marks: row.marks,
-      probability: at === null ? 0 : (row.probabilities[at] ?? 0),
-    };
-  });
+function forecastRows(model: ScheduleModel, at: number | null): ForecastRow[] {
+  // 帯グラフと同じ順・同じ行数で並べる。進捗も帯グラフと同じ数字を使う
+  // (`ScheduleRow.progress`)。ここで引き直すと、2 つの絵で値がずれうる。
+  const rows: ForecastRow[] = model.rows.map((row) => ({
+    id: row.id,
+    label: row.label,
+    depth: row.depth,
+    strong: row.isParent,
+    openable: true,
+    progress: row.progress,
+    marks: row.marks,
+    probability: at === null ? 0 : (row.probabilities[at] ?? 0),
+  }));
 
   rows.push({
     id: null,
@@ -123,7 +116,7 @@ function forecastRows(state: AppState, model: ScheduleModel, at: number | null):
     depth: 0,
     strong: true,
     openable: false,
-    progress: result === null ? null : progressOverall(result),
+    progress: model.overallProgress,
     marks: model.overallMarks,
     probability: at === null ? 0 : (model.overall[at] ?? 0),
   });
@@ -218,12 +211,12 @@ function renderForecastTable(
           h(
             "tbody",
             {},
-            forecastRows(state, model, at).map((row) =>
+            forecastRows(model, at).map((row) =>
               h("tr", { dataset: { strong: String(row.strong), row: row.id ?? "overall" } }, [
                 h("td", { class: "name-cell" }, [
                   h("span", { class: "indent", style: { width: `${String(row.depth * 16)}px` } }),
                   row.openable && row.id !== null
-                    ? button(
+                    ? openLink(
                         row.label,
                         () => {
                           openTaskDetail(actions, row.id ?? "");

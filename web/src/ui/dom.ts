@@ -220,6 +220,33 @@ export function button(
   });
 }
 
+/**
+ * 詳細を開くためのリンク。タスク一覧・見通しの表・詳細の窓の子で使う。
+ *
+ * **ボタンにしない。** 閲覧権限しか無いときはタブの中身を
+ * `<fieldset disabled>` で囲むので、ボタンは押せなくなる。見るだけの人こそ
+ * 詳細を開きたい。`<a>` は fieldset の無効化を受けない。
+ */
+export function openLink(
+  label: string,
+  onOpen: () => void,
+  options: Options = {},
+): HTMLAnchorElement {
+  return h("a", {
+    ...options,
+    text: label,
+    // 押しても移動はしない (`preventDefault`)。`href` を付けるのは、
+    // タブで辿れて Enter で押せる、ふつうのリンクにするため。
+    attrs: { href: "#", ...options.attrs },
+    on: {
+      click: (event) => {
+        event.preventDefault();
+        onOpen();
+      },
+    },
+  });
+}
+
 /** アイコンだけのボタン。読み上げ用に必ずラベルを付ける。 */
 export function iconButton(
   glyph: string,
