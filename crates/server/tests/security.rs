@@ -39,6 +39,9 @@ struct Reply {
     status: StatusCode,
     headers: axum::http::HeaderMap,
     body: Value,
+    /// `body` は JSON でない応答 (画面の HTML など) だと `Value::Null` に
+    /// 潰れ、中身の漏れを見る検査が素通りしてしまう。生の本文はこちらで見る。
+    text: String,
 }
 
 impl Server {
@@ -85,6 +88,7 @@ impl Server {
             status,
             headers,
             body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            text: String::from_utf8_lossy(&bytes).into_owned(),
         }
     }
 
@@ -458,11 +462,11 @@ async fn path_tricks_only_ever_reach_the_ui_or_nothing() {
             continue; // URI として組み立てられないものは、そもそも届かない
         };
         let reply = server.raw(request).await;
-        let text = reply.body.to_string();
         assert!(
-            !text.contains("root:") && !text.contains("alice の案件"),
-            "{path} ({}) が何かを読ませた: {text}",
-            reply.status
+            !reply.text.contains("root:") && !reply.text.contains("alice の案件"),
+            "{path} ({}) が何かを読ませた: {}",
+            reply.status,
+            reply.text
         );
     }
 }

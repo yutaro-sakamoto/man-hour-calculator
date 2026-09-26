@@ -166,14 +166,19 @@ fn run(percent: u64) {
                 };
                 // 注入した障害は 500。403 や 404 に化けると、呼び手は
                 // 「やり直しても無駄」と誤解する。
-                if error.code == ErrorCode::Internal {
-                    assert_eq!(
-                        service.store().inner.to_json(),
-                        before,
-                        "種 {seed}: 失敗した操作が状態を変えた\n  {}",
-                        trail()
-                    );
-                }
+                assert_eq!(
+                    error.code,
+                    ErrorCode::Internal,
+                    "種 {seed}: 注入した障害が {:?} に化けた\n  {}",
+                    error.code,
+                    trail()
+                );
+                assert_eq!(
+                    service.store().inner.to_json(),
+                    before,
+                    "種 {seed}: 失敗した操作が状態を変えた\n  {}",
+                    trail()
+                );
             }
             if let Some(what) = orphan(&snapshot(&service)) {
                 panic!("種 {seed}: {what} の所有者が居なくなった\n  {}", trail());
