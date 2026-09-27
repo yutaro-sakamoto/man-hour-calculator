@@ -249,7 +249,8 @@ export function renderTaskDetailModal(state: AppState, actions: AppActions): HTM
   };
 
   const label = row.task.name.trim() === "" ? t("tasks.untitled") : row.task.name;
-  const scheduleRow = state.schedule?.rows.find((item) => item.id === row.task.id);
+  // id ではなく行の添字で引く (同じ id のタスクが 2 つあっても取り違えない)。
+  const scheduleRow = state.schedule?.rows.find((item) => item.index === at);
   // `progress` はスケジュールのモデルが部分木ごとに 1 度だけ計算済み
   // (`model/schedule.ts` の `ScheduleRow.progress` を参照)。ここでは引き直さない。
   const progress: Progress = scheduleRow?.progress ?? {

@@ -32,14 +32,16 @@ import { priorityChoices } from "./taskFields.ts";
 const STATE_ORDER: readonly TaskState[] = ["notStarted", "inProgress", "done"];
 
 /**
- * タスク id からスケジュール行を引く索引。
+ * 行の添字からスケジュール行を引く索引。
  *
  * `ScheduleRow.progress` は `buildScheduleModel` が部分木ごとに 1 度だけ
  * 計算済み (`model/schedule.ts` のコメント参照)。ここで索引にしておけば、
- * 一覧の再構築で行ごとに引き直しても O(1) で済む。
+ * 一覧の再構築で行ごとに引き直しても O(1) で済む。id ではなく添字で引くのは、
+ * 同じ id のタスクが 2 つある文書 (`project.ts` の `toPreorder`) でも
+ * 行を取り違えないため。
  */
-function scheduleRowMap(state: AppState): ReadonlyMap<string, ScheduleRow> {
-  return new Map((state.schedule?.rows ?? []).map((row) => [row.id, row]));
+function scheduleRowMap(state: AppState): ReadonlyMap<number, ScheduleRow> {
+  return new Map((state.schedule?.rows ?? []).map((row) => [row.index, row]));
 }
 
 function stateOf(state: AppState, row: TreeRow, scheduleRow: ScheduleRow | undefined): TaskState {
@@ -92,7 +94,7 @@ function visibleRows(state: AppState): TreeRow[] {
   const keep = new Set<string>();
   const byId = new Map(state.rows.map((row) => [row.task.id, row]));
   for (const row of state.rows) {
-    if (!matches(state, row, schedule.get(row.task.id))) continue;
+    if (!matches(state, row, schedule.get(row.index))) continue;
     keep.add(row.task.id);
     let parentId = row.task.parentId;
     while (parentId !== null) {
@@ -258,13 +260,13 @@ function renderRow(
   actions: AppActions,
   row: TreeRow,
   position: { first: boolean; last: boolean },
-  schedule: ReadonlyMap<string, ScheduleRow>,
+  schedule: ReadonlyMap<number, ScheduleRow>,
 ): HTMLTableRowElement {
   const task = row.task;
   const label = task.name.trim() === "" ? t("tasks.untitled") : task.name;
   const index = row.index;
   // この行のスケジュール情報は 1 度だけ引く。進捗・完了予測のどちらもここから読む。
-  const scheduleRow = schedule.get(task.id);
+  const scheduleRow = schedule.get(row.index);
   const state_ = stateOf(state, row, scheduleRow);
 
   const cells: HTMLElement[] = [];

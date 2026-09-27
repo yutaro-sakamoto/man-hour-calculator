@@ -30,7 +30,7 @@ export interface Progress {
   remaining: number;
   /** 消化 + 残り。 */
   total: number;
-  /** 0〜1。分母が 0 のときは「全部完了なら 1、そうでなければ 0」。 */
+  /** 0〜1。分母 (工数) が 0 のときは完了した葉の件数比に落とす。 */
   ratio: number;
   doneCount: number;
   leafCount: number;
@@ -70,7 +70,10 @@ export function progressOfLeaves(result: ComputeResult, leafIndices: Iterable<nu
     total,
     // 工数 0 のタスクだけでも「終わったかどうか」は言える。分母が無いときは
     // 件数に落とす。0 除算を 0% と書くと、完了済みが未着手に見えてしまう。
-    ratio: total > 0 ? Math.min(1, spent / total) : doneCount === leafCount ? 1 : 0,
+    // 一部だけ終わっているときも件数比で出す — ここを 0/1 の二値にすると、
+    // `stateOfProgress` の「1 件でも終われば進行中」と食い違い、同じ行で
+    // 「進行中」なのに進捗バーは 0% という表示になる。
+    ratio: total > 0 ? Math.min(1, spent / total) : doneCount / leafCount,
     doneCount,
     leafCount,
   };
