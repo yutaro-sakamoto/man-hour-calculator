@@ -16,6 +16,8 @@ function snap(date: string, finishP80: number | null = 100, effortP80 = 10): Sna
     taskCount: 4,
     doneCount: 1,
     taskProgress: {},
+    dueProbability: null,
+    budgetProbability: null,
   };
 }
 

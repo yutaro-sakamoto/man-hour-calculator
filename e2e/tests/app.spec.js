@@ -34,10 +34,11 @@ async function openCard(page, id) {
  * 畳みの中に畳みがあるため。外が閉じたままだと中の見出しは押せない)。
  */
 async function openDetails(panel) {
-  const page = panel.page();
-  // 1 段開くたびに描き直されうるので、毎回いちばん外の閉じた畳みを探し直す。
+  // 1 段ずつ、いちばん外の閉じた畳みを開く。描き直しと競らないよう、
+  // 探すのと押すのを同じ評価のなかで済ませる (印を付けてから押すと、
+  // その間の描き直しで印が消えて時間切れになった)。
   for (let step = 0; step < 5; step++) {
-    const id = await panel.evaluate((node) => {
+    const opened = await panel.evaluate((node) => {
       let outer = null;
       for (
         let at = node;
@@ -46,15 +47,11 @@ async function openDetails(panel) {
       ) {
         if (!at.open) outer = at;
       }
-      document.querySelectorAll("[data-open-next]").forEach((element) => {
-        element.removeAttribute("data-open-next");
-      });
-      if (outer === null) return null;
-      outer.setAttribute("data-open-next", "");
+      if (outer === null) return false;
+      outer.querySelector(":scope > summary").click();
       return true;
     });
-    if (id === null) break;
-    await page.locator("details[data-open-next] > summary").click();
+    if (!opened) break;
   }
   await expect(panel).toHaveAttribute("open", "");
 }
@@ -1113,11 +1110,17 @@ test("帯グラフの行を押すと、そのタスクの詳細が開く", async
   await open(page);
   await openTab(page, "forecast");
   const chart = page.locator("#schedule-chart");
-  await chart.scrollIntoViewIfNeeded();
-  const box = await chart.boundingBox();
-  // 見出しの下から 1 行 26px。2 行目は Requirements。
-  await page.mouse.click(box.x + 60, box.y + 30 + 26 + 13);
-  await expect(page.locator(".detail-heading")).toHaveText("Requirements");
+  // 帯グラフは要点カードの下にあり、画面の外から scroll して押す。押す前に
+  // 自動保存の描き直しが入ると座標がずれるので、測るところからやり直せるように。
+  await expect(async () => {
+    await chart.scrollIntoViewIfNeeded();
+    const box = await chart.boundingBox();
+    // 見出しの下から 1 行 26px。2 行目は Requirements。
+    await page.mouse.click(box.x + 60, box.y + 30 + 26 + 13);
+    await expect(page.locator(".detail-heading")).toHaveText("Requirements", {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 10_000 });
   await closeDetail(page);
 
   // キーボードでも: ↓ で行を選び、Enter で開く。

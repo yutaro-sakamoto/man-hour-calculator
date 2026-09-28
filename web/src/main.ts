@@ -48,6 +48,7 @@ import {
   type Connection,
 } from "./model/connection.ts";
 import { recordSnapshot, snapshotOf } from "./model/history.ts";
+import { applyCalibration, calibrationOf } from "./model/calibration.ts";
 import { memberLabel, resolveMembers } from "./model/members.ts";
 import { createMember, emptyDocument, newId, sampleDocument, sampleName } from "./model/project.ts";
 import { buildScheduleModel, withDueDate } from "./model/schedule.ts";
@@ -72,6 +73,7 @@ import { renderForecastTab } from "./ui/forecast.ts";
 import { openTaskDetail } from "./ui/schedule.ts";
 import { renderTaskDetailModal } from "./ui/taskDetail.ts";
 import { renderTasksTab } from "./ui/tasks.ts";
+import { cumulativeAt } from "./ui/results.ts";
 import {
   ComputeError,
   boot,
@@ -153,6 +155,7 @@ function chartHost(
 ): ChartHost {
   const canvas = h("canvas", {
     id: canvasId,
+    dataset: { focus: `chart:${canvasId}` },
     attrs: { tabindex: 0, role: "img", "aria-label": t(labelKey) },
   });
   const tooltip = h("div", {
@@ -229,10 +232,19 @@ function runEngine(document: ProjectDocument): Computed {
     document.calendar.members,
     leaves.map((row) => row.task),
   );
+  // 見積もりの偏りを掛けるなら、計算に渡すときだけ掛ける (画面の見積もりは
+  // 書いたとおりのまま)。
+  const hoursPerDay = document.calendar.hoursPerPersonDay;
+  const calibration = document.calibrate ? calibrationOf(document.tasks, hoursPerDay) : null;
+  const adjusted = new Map(
+    (calibration === null ? [] : applyCalibration(document.tasks, calibration.factor)).map(
+      (task) => [task.id, task],
+    ),
+  );
   const result = compute(
     buildRequest(
       leaves.map((row) =>
-        leafInputFromTask(row.task, members, document.calendar.hoursPerPersonDay),
+        leafInputFromTask(adjusted.get(row.task.id) ?? row.task, members, hoursPerDay),
       ),
       document.calendar,
       members,
@@ -398,10 +410,13 @@ function captureFocus(): FocusSnapshot | null {
   const active = document.activeElement;
   // ボタンも拾う。タブを矢印で移ると描き直しが走るので、拾わないと
   // 1 回移っただけで焦点が本文へ落ちてしまう。
+  // グラフ (canvas) も拾う。キーボードで行を選んでいる最中に自動保存の
+  // 描き直しが入ると、焦点が外れて ↓ も Enter も効かなくなっていた。
   if (!(
     active instanceof HTMLInputElement ||
     active instanceof HTMLSelectElement ||
-    active instanceof HTMLButtonElement
+    active instanceof HTMLButtonElement ||
+    active instanceof HTMLCanvasElement
   )) {
     return null;
   }
@@ -877,10 +892,30 @@ function tabContent(): HTMLElement {
   }
 }
 
+/**
+ * 期限は一覧 (プロジェクトの情報) の側にある。描く前に、計算結果に載って
+ * いる期限と今の期限を照らし、違えば載せ直す (計算はし直さなくてよい)。
+ *
+ * 期限を変える道はいくつもある (一覧の欄・読み込み・複製)。どこか 1 か所で
+ * 載せ直す形だと、通らない道が残る。実際、一覧の欄で 12/25 を 1/8 に変えても
+ * 「期限までに終わる確率」が古い期限のまま出ていた。
+ */
+function syncDueDate(): void {
+  const schedule = state.schedule;
+  if (schedule === null) return;
+  const due = dayFromIso(openDueDate());
+  const wanted = due === null ? null : due - schedule.startDay;
+  const inRange = wanted !== null && wanted >= 0 && wanted < schedule.days ? wanted : null;
+  if (schedule.dueIndex === inRange) return;
+  state.schedule = withDueDate(schedule, due);
+  scheduleChart.setData(state.schedule);
+}
+
 function render(): void {
   // 言語は毎回書き戻す。切り替えたときに <html lang> が取り残されると、
   // 読み上げソフトや辞書機能が古い言語のまま扱ってしまう。
   document.documentElement.lang = lang();
+  syncDueDate();
   const focus = captureFocus();
   clear(root);
 
@@ -982,8 +1017,21 @@ function rememberForecast(): void {
       status,
       remaining,
       state.rows.filter((row) => row.leafIndex !== null).map((row) => row.task),
+      forecastChances(),
     ),
   );
+}
+
+/** 期限までに終わる確率と、予算内に収まる確率。推移に残すため。 */
+function forecastChances(): { due: number | null; budget: number | null } {
+  const schedule = state.schedule;
+  const result = state.result;
+  const dueIndex = schedule?.dueIndex ?? null;
+  const budget = state.document.budget;
+  return {
+    due: schedule === null || dueIndex === null ? null : (schedule.overall[dueIndex] ?? null),
+    budget: result === null || budget === null ? null : cumulativeAt(result, budget),
+  };
 }
 
 /** 内容を変えて、再計算を予約する。描き直しは呼び出し側が決める。 */
@@ -1041,6 +1089,7 @@ const actions: AppActions = {
 
 async function reloadProjects(): Promise<void> {
   state.projects = await state.client.listProjects();
+
   state.users = await state.client.listUsers();
   state.userGroups = await state.client.listUserGroups();
   state.projectGroups = await state.client.listProjectGroups();

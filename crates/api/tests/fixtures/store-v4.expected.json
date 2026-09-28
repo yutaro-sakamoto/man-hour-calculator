@@ -103,11 +103,14 @@
           "today": "",
           "useJapaneseHolidays": true
         },
+        "calibrate": false,
         "editedAt": "2026-01-09T08:00:00Z",
         "history": [
           {
+            "budgetProbability": null,
             "date": "2026-01-09",
             "doneCount": 0,
+            "dueProbability": null,
             "effortP80": 3.4,
             "finishP50": 20465,
             "finishP80": 20467,

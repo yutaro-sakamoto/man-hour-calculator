@@ -208,6 +208,8 @@ export interface ProjectDocument {
   history: Snapshot[];
   /** 予算 (人日)。無ければ null。 */
   budget: number | null;
+  /** 終わったタスクの「実績 ÷ 見積もり」を、残りの見積もりに掛けるか。 */
+  calibrate: boolean;
 }
 
 /** ある日の見通しの控え。`crates/api/src/model.rs` の `Snapshot` と対応する。 */
@@ -226,6 +228,10 @@ export interface Snapshot {
   doneCount: number;
   /** タスクごとの進捗率 (0〜100)。止まっているタスクを見つけるため。 */
   taskProgress: Record<string, number>;
+  /** 期限までに終わる確率 (0〜1)。期限が無ければ null。 */
+  dueProbability: number | null;
+  /** 予算内に収まる確率 (0〜1)。予算が無ければ null。 */
+  budgetProbability: number | null;
 }
 
 export interface Project {

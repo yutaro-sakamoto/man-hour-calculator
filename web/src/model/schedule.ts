@@ -402,7 +402,7 @@ function memberLoad(
  * 吹き出しを横に掃いて探すしかなかった。
  */
 export function withDueDate(model: ScheduleModel, dueDay: number | null): ScheduleModel {
-  if (dueDay === null) return model;
+  if (dueDay === null) return { ...model, dueIndex: null };
   const index = dueDay - model.startDay;
   if (index < 0 || index >= model.days) return { ...model, dueIndex: null };
   return {
@@ -416,4 +416,57 @@ export function withDueDate(model: ScheduleModel, dueDay: number | null): Schedu
 export function isNonWorkingDay(flags: number): boolean {
   const off = (flags & DAY_FLAG.weekend) !== 0 || (flags & DAY_FLAG.holiday) !== 0;
   return off && (flags & DAY_FLAG.forcedWorkday) === 0;
+}
+
+/**
+ * 完了日を決めている流れ。最後に終わるタスクから、前にさかのぼる。
+ *
+ * 各タスクの「前」は、前提のタスクと、同じ担当者の直前のタスク。その中で
+ * いちばん遅く終わるものが、このタスクの着手を決めている。人ではなく
+ * タスクの流れで出すのは、前提があると「最後のタスクの担当者」が完了日を
+ * 決めているとは限らないため (シミュレーションで、別の人の流れが決めて
+ * いるのに、最後のタスクの人の名前が出つづけていた)。
+ *
+ * 返すのは葉の添字の並び (前から後ろへ)。
+ */
+export function criticalChain(
+  result: ComputeResult,
+  model: ScheduleModel,
+  rows: readonly TreeRow[],
+  pairs: readonly (readonly [number, number])[],
+  limit = 8,
+): number[] {
+  const finishOf = new Map<number, number>();
+  const byId = new Map(model.rows.map((row) => [row.id, row]));
+  for (const row of rows) {
+    if (row.leafIndex === null) continue;
+    const mark = byId.get(row.task.id)?.marks.p80;
+    finishOf.set(row.leafIndex, mark ?? Number.POSITIVE_INFINITY);
+  }
+  const finish = (leaf: number): number => finishOf.get(leaf) ?? Number.NEGATIVE_INFINITY;
+
+  let current: number | null = null;
+  for (const leaf of finishOf.keys()) {
+    if (current === null || finish(leaf) >= finish(current)) current = leaf;
+  }
+  const chain: number[] = [];
+  while (current !== null && chain.length < limit) {
+    chain.unshift(current);
+    const at: number = current;
+    const member = result.assignees[at] ?? 0;
+    const before = [
+      ...pairs.filter(([task]) => task === at).map(([, after]) => after),
+      // 同じ担当者の直前のタスク。
+      ...[...finishOf.keys()]
+        .filter((leaf) => leaf < at && (result.assignees[leaf] ?? 0) === member)
+        .slice(-1),
+    ];
+    let next: number | null = null;
+    for (const leaf of before) {
+      if (next === null || finish(leaf) > finish(next)) next = leaf;
+    }
+    // 前のものが今日までに終わっている (完了日の印が 0 以下) なら、そこで止める。
+    current = next !== null && finish(next) > (model.todayIndex ?? 0) ? next : null;
+  }
+  return chain;
 }

@@ -5,7 +5,15 @@ import { DAY_FLAG } from "../abi.ts";
 import { dayFromIso } from "../format.ts";
 import type { ComputeResult } from "../wasm.ts";
 import { createTask } from "./project.ts";
-import { actualSpanOf, buildScheduleModel, isNonWorkingDay, prefixCdfAt } from "./schedule.ts";
+import {
+  actualSpanOf,
+  buildScheduleModel,
+  criticalChain,
+  isNonWorkingDay,
+  prefixCdfAt,
+  withDueDate,
+  type ScheduleModel,
+} from "./schedule.ts";
 import { buildRows } from "./tree.ts";
 
 const START = dayFromIso("2026-09-01") ?? 0;
@@ -186,4 +194,33 @@ test("休日出勤は非稼働日にしない", () => {
   );
   assert.ok(isNonWorkingDay(model.dayFlags[0] ?? 0));
   assert.ok(!isNonWorkingDay(model.dayFlags[1] ?? 0));
+});
+
+test("期限を載せ直すと確率の日が動き、外すと消える", () => {
+  const model = buildScheduleModel(tinyResult(), tinyRows(), START, "u", ["A"]);
+  const due = withDueDate(model, START + 2);
+  assert.equal(due.dueIndex, 2);
+  assert.equal(withDueDate(due, START + 1).dueIndex, 1);
+  assert.equal(withDueDate(due, null).dueIndex, null);
+});
+
+test("完了日を決めている流れは、前提と同じ担当者の直前をさかのぼる", () => {
+  // A (Alice, 3 日目に終わる) → C (Bob, A を待って 5 日目)。B (Bob, 1 日目) は流れに無い。
+  const a = createTask({ name: "A" });
+  const b = createTask({ name: "B" });
+  const c = createTask({ name: "C", after: [a.id] });
+  const rows = buildRows([a, b, c]);
+  const marks = (p80: number) => ({ p10: p80, p25: p80, p50: p80, p75: p80, p80, p90: p80 });
+  const model = {
+    todayIndex: 0,
+    rows: [
+      { id: a.id, marks: marks(3) },
+      { id: b.id, marks: marks(1) },
+      { id: c.id, marks: marks(5) },
+    ],
+  } as unknown as ScheduleModel;
+  const result = { assignees: new Float64Array([0, 1, 1]) } as unknown as ComputeResult;
+  assert.deepEqual(criticalChain(result, model, rows, [[2, 0]]), [0, 2]);
+  // 前提が無ければ、Bob の直前 (B) が流れになる。
+  assert.deepEqual(criticalChain(result, model, rows, []), [1, 2]);
 });

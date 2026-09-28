@@ -398,6 +398,8 @@ pub struct Document {
     pub history: Vec<Snapshot>,
     /// 予算 (人日)。無ければ `None`。予算内に収まる確率と着地見込みを出すため。
     pub budget: Option<f64>,
+    /// 終わったタスクの「実績 ÷ 見積もり」を、残りの見積もりに掛けるか。
+    pub calibrate: bool,
 }
 
 /// ある日の見通しの控え。
@@ -418,6 +420,10 @@ pub struct Snapshot {
     pub done_count: usize,
     /// タスクごとの進捗率 (0〜100、タスクの id から)。止まっているタスクを見つけるため。
     pub task_progress: std::collections::BTreeMap<String, f64>,
+    /// 期限までに終わる確率 (0〜1)。期限が無ければ `None`。
+    pub due_probability: Option<f64>,
+    /// 予算内に収まる確率 (0〜1)。予算が無ければ `None`。
+    pub budget_probability: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

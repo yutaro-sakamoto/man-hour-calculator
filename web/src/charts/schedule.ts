@@ -586,7 +586,14 @@ export function createScheduleChart(
   canvas.addEventListener("pointermove", onPointer);
   canvas.addEventListener("pointerdown", onPointer);
   canvas.addEventListener("pointerleave", onLeave);
-  canvas.addEventListener("blur", onLeave);
+  // 描き直しで図が一瞬外れると `blur` が起きる。すぐに焦点が戻る (`main.ts` の
+  // `restoreFocus`) なら、選んでいた行を消さない。消していたころは、↓ で
+  // 行を選んでいる最中に自動保存が入ると、選択が先頭に戻っていた。
+  canvas.addEventListener("blur", () => {
+    setTimeout(() => {
+      if (document.activeElement !== canvas) onLeave();
+    }, 0);
+  });
   canvas.addEventListener("keydown", (event: KeyboardEvent) => {
     if (!model) return;
     const rowCount = model.rows.length;

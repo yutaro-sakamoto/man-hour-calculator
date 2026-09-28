@@ -88,6 +88,22 @@ export function stateOfProgress(progress: Progress): TaskState {
   return "notStarted";
 }
 
+/**
+ * 計算に入っていないタスク (使用を外した・見積もりが読めない) の状態。
+ *
+ * 計算の結果が無いので、入れた実績から読む。「未着手」と決め打ちすると、
+ * 終わってから外したタスクが未着手に戻って見えていた。
+ */
+export function stateOfEntered(task: {
+  endDate: string | null;
+  progress: number;
+  startDate: string | null;
+}): TaskState {
+  if (task.endDate !== null || task.progress >= 100) return "done";
+  if (task.progress > 0 || task.startDate !== null) return "inProgress";
+  return "notStarted";
+}
+
 /** プロジェクト全体。 */
 export function progressOverall(result: ComputeResult): Progress {
   return progressOfLeaves(result, range(result.nTasks));

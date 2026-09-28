@@ -174,8 +174,12 @@ pub fn forecast(
     };
 
     /// 完了したタスク。総工数は実際にかかったぶん、残りは 0。
-    fn done(spent: f64, original: TaskEstimate) -> Forecast {
-        let value = if spent > 0.0 {
+    ///
+    /// `reported` は申告された実績。**申告された 0 は 0 のまま使う** (見込みで
+    /// 置いたタスクが、別のタスクの中で片付いて実績ゼロ、はふつうにある)。
+    /// 申告が無く、測った値も 0 なら、当初の最可能値で代用する。
+    fn done(spent: f64, reported: bool, original: TaskEstimate) -> Forecast {
+        let value = if reported || spent > 0.0 {
             spent
         } else {
             original.likely()
@@ -197,7 +201,7 @@ pub fn forecast(
             // 着手日が無いと消化量を測れないので、当初の最可能値で代用する。
             (None, None) => original.likely(),
         };
-        return done(spent, original);
+        return done(spent, reported.is_some(), original);
     }
 
     // --- 進捗 100%: 完了日が未入力でも完了として扱う
@@ -207,7 +211,7 @@ pub fn forecast(
             (None, Some(start)) => calendar.capacity_between(start, today - 1),
             (None, None) => 0.0,
         };
-        return done(spent, original);
+        return done(spent, reported.is_some(), original);
     }
 
     // --- 未着手: 着手日も進捗も実績工数も無ければ、当初の見積もりのまま
@@ -653,6 +657,24 @@ mod tests {
         assert_eq!(f.state, TaskState::InProgress);
         assert_eq!(f.spent, 1.0);
         assert_eq!(f.remaining, original, "進捗 0% なので残りは当初のまま");
+    }
+
+    /// 完了したタスクに申告された 0 は、0 のまま (空欄と区別する)。
+    ///
+    /// シミュレーションで見つかったもの。実績ゼロと入れても、担当者の
+    /// 4 日ぶんの稼働が消化として数えられ、着地見込みが 4 人日膨らんでいた。
+    #[test]
+    fn a_reported_zero_on_a_finished_task_stays_zero() {
+        let actual = Actual {
+            start_day: Some(day(0)),
+            progress: 1.0,
+            end_day: Some(day(3)),
+            spent: Some(0.0),
+        };
+        let f = plan(est(2.0, 4.0, 6.0), &actual, &calendar(), day(10));
+        assert_eq!(f.state, TaskState::Done);
+        assert_eq!(f.spent, 0.0);
+        assert_eq!(f.estimate.likely(), 0.0);
     }
 
     /// 不正な申告 (負・NaN) は、無かったものとして扱う。

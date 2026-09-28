@@ -66,6 +66,7 @@
           "today": "",
           "useJapaneseHolidays": true
         },
+        "calibrate": false,
         "editedAt": "",
         "history": [],
         "onHold": false,

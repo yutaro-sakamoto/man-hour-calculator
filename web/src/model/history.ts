@@ -17,6 +17,7 @@ export function snapshotOf(
   status: ProjectStatus,
   remaining: number,
   tasks: readonly { id: string; progress: number }[] = [],
+  chances: { due: number | null; budget: number | null } = { due: null, budget: null },
 ): Snapshot {
   return {
     date,
@@ -29,6 +30,8 @@ export function snapshotOf(
     taskCount: status.taskCount,
     doneCount: status.doneCount,
     taskProgress: Object.fromEntries(tasks.map((task) => [task.id, task.progress])),
+    dueProbability: chances.due,
+    budgetProbability: chances.budget,
   };
 }
 

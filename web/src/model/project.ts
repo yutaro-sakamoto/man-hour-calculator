@@ -101,6 +101,7 @@ export function emptyDocument(): ProjectDocument {
     editedAt: "",
     history: [],
     budget: null,
+    calibrate: false,
   };
 }
 
@@ -507,7 +508,14 @@ export function normalizeDocument(raw: unknown): ProjectDocument {
       typeof record.budget === "number" && Number.isFinite(record.budget) && record.budget > 0
         ? record.budget
         : null,
+    calibrate: asBoolean(record.calibrate, false),
   };
+}
+
+function probability(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value))
+    : null;
 }
 
 function normalizeSnapshot(raw: unknown): Snapshot | null {
@@ -526,6 +534,8 @@ function normalizeSnapshot(raw: unknown): Snapshot | null {
     remaining: asNumber(record.remaining, 0),
     taskCount: Math.max(0, Math.round(asNumber(record.taskCount, 0))),
     doneCount: Math.max(0, Math.round(asNumber(record.doneCount, 0))),
+    dueProbability: probability(record.dueProbability),
+    budgetProbability: probability(record.budgetProbability),
     taskProgress: Object.fromEntries(
       Object.entries(asRecord(record.taskProgress)).filter(
         (entry): entry is [string, number] =>

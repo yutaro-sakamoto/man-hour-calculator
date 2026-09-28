@@ -88,3 +88,21 @@ test("見積もりが空の行があっても、残りで計算を続ける", as
   ).not.toHaveAttribute("data-value", "—");
   await expect(page.locator("#status")).toContainText("計算に入れていません");
 });
+
+test("期限を変えると、期限までの確率がその場で変わる", async ({ page }) => {
+  // 期限を 12/25 から 1/8 に変えても、古い期限のまま 100% と出ていた。
+  await open(page);
+  await openTab(page, "forecast");
+  const due = page.locator('[data-card="report"] [data-key="due"]');
+  await expect(due).toContainText("%");
+
+  await openTab(page, "projects");
+  await page
+    .locator('tr[data-project][data-open="true"] input[type="date"]')
+    .fill("2026-09-02");
+  await openTab(page, "forecast");
+  await expect(page.locator('[data-card="report"] dt').nth(1)).toContainText(
+    "2026-09-02",
+  );
+  await expect(due).toContainText("0%");
+});

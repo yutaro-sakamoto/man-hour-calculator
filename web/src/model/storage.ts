@@ -116,6 +116,8 @@ const CSV_HEADER = [
   // 後ろに足す。見出しの無い古い CSV は、先頭から 11 列の並びで読めるように。
   "assignee",
   "spent",
+  // 前提はタスク名を `;` で区切って書く (id は表計算ソフトの上で意味を持たない)。
+  "after",
 ] as const;
 
 /**
@@ -155,6 +157,7 @@ const HEADER_ALIASES: Record<string, (typeof CSV_HEADER)[number]> = {
   担当者: "assignee",
   実績: "spent",
   実績工数: "spent",
+  前提: "after",
 };
 
 function canonicalHeader(cell: string): string {
@@ -207,6 +210,7 @@ function escapeCsv(value: string): string {
 export function projectToCsv(rows: readonly TreeRow[], members: readonly Member[] = []): string {
   const lines = [CSV_HEADER.join(",")];
   const names = new Map(members.map((member) => [member.id, member.name]));
+  const taskNames = new Map(rows.map((row) => [row.task.id, row.task.name]));
   for (const row of rows) {
     const t = row.task;
     lines.push(
@@ -225,6 +229,12 @@ export function projectToCsv(rows: readonly TreeRow[], members: readonly Member[
         t.endDate ?? "",
         quoteFormula(t.assigneeId === null ? "" : (names.get(t.assigneeId) ?? "")),
         row.hasChildren ? "" : quoteFormula(t.spent),
+        quoteFormula(
+          t.after
+            .map((id) => taskNames.get(id) ?? "")
+            .filter((name) => name !== "")
+            .join("; "),
+        ),
       ]
         .map(escapeCsv)
         .join(","),
@@ -412,6 +422,20 @@ export function readCsv(
     parents[depth] = task.id;
     parents.length = depth + 1;
   }
+  // 前提は名前で照らす。自分より上の行だけ (下を待つ前提は効かないため)。
+  const afterCells = body.map((cells) => unquoteFormula(raw(cells, "after")));
+  tasks.forEach((task, index) => {
+    const wanted = (afterCells[index] ?? "")
+      .split(";")
+      .map((name) => name.normalize("NFKC").trim())
+      .filter((name) => name !== "");
+    task.after = wanted
+      .map(
+        (name) =>
+          tasks.slice(0, index).find((other) => other.name.normalize("NFKC").trim() === name)?.id,
+      )
+      .filter((id): id is string => id !== undefined);
+  });
   result.unknownAssignees = [...unknown];
   const parentIds = new Set(tasks.map((task) => task.parentId).filter((id) => id !== null));
   result.parentEstimates = tasks.filter(

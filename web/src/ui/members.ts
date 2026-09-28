@@ -173,6 +173,7 @@ export function renderMembersTab(state: AppState, actions: AppActions): HTMLElem
 
   return card(t("members.heading"), [
     h("p", { class: "hint", text: t("members.hint") }),
+    h("p", { class: "hint", text: t("members.allocationHint") }),
     members.length === 0
       ? h("p", { class: "empty", text: t("members.empty") })
       : h(

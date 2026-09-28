@@ -13,11 +13,13 @@ import type { AppActions, AppState } from "../app.ts";
 import { canWrite } from "../app.ts";
 import { dayFromIso, formatDayShort, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
+import { CALIBRATION_MIN_TASKS, calibrationOf } from "../model/calibration.ts";
 import { deltaOf, previousSnapshot, snapshotOf } from "../model/history.ts";
 import { buildStatus } from "../model/status.ts";
-import type { ScheduleModel } from "../model/schedule.ts";
+import { criticalChain, type ScheduleModel } from "../model/schedule.ts";
+import { dependencyPairs } from "../model/tree.ts";
 import type { ComputeResult } from "../wasm.ts";
-import { button, card, foldout, h, numberInput } from "./dom.ts";
+import { button, card, checkbox, foldout, h, numberInput } from "./dom.ts";
 import { cumulativeAt } from "./results.ts";
 
 /** 1 週間。止まっているタスクを見るときの幅。 */
@@ -49,24 +51,18 @@ function dueLine(schedule: ScheduleModel, due: string | null): Line {
   return { key: "due", label, value: formatPercent(probability, lang(), 0) };
 }
 
-/** 完了日を決めている人 (P80 がいちばん遅い人)。2 人以上のときだけ意味がある。 */
-function bottleneck(schedule: ScheduleModel): string | null {
-  const working = schedule.members.filter((member) => member.taskCount > 0);
-  if (working.length < 2) return null;
-  let latest = working[0];
-  if (latest === undefined) return null;
-  const finish = (mark: number | null): number => mark ?? Number.POSITIVE_INFINITY;
-  for (const member of working) {
-    if (finish(member.marks.p80) > finish(latest.marks.p80)) latest = member;
-  }
-  const l = lang();
-  return t("report.bottleneckValue", {
-    name: latest.label,
+/** 完了日を決めている流れ (タスクの名前を前から後ろへ)。2 件以上のときだけ。 */
+function chainLine(state: AppState, result: ComputeResult, schedule: ScheduleModel): string | null {
+  const chain = criticalChain(result, schedule, state.rows, dependencyPairs(state.rows));
+  if (chain.length < 2) return null;
+  const names = new Map(
+    state.rows.filter((row) => row.leafIndex !== null).map((row) => [row.leafIndex, row.task.name]),
+  );
+  const mark = schedule.overallMarks.p80;
+  return t("report.chainValue", {
+    chain: chain.map((leaf) => names.get(leaf) ?? "?").join(" → "),
     date:
-      latest.marks.p80 === null
-        ? t("sched.notFinishing")
-        : formatDayShort(schedule.startDay + latest.marks.p80, l),
-    days: formatNumber(latest.remaining, l, 1),
+      mark === null ? t("sched.notFinishing") : formatDayShort(schedule.startDay + mark, lang()),
   });
 }
 
@@ -85,6 +81,26 @@ function stalledTasks(state: AppState): string[] {
         old.taskProgress[task.id] === task.progress,
     )
     .map((task) => t("report.stalledItem", { name: task.name, progress: task.progress }));
+}
+
+/**
+ * 前回より進捗が下がったタスク。手戻りや申告の見直しの合図なので、黙って
+ * 数字を差し替えない (シミュレーションで 30% → 15% が素通りしていた)。
+ */
+function droppedTasks(state: AppState): string[] {
+  const previous = previousSnapshot(state.document.history, state.document.calendar.today);
+  if (previous === null) return [];
+  return state.rows
+    .filter((row) => row.leafIndex !== null)
+    .map((row) => row.task)
+    .filter((task) => (previous.taskProgress[task.id] ?? 0) > task.progress)
+    .map((task) =>
+      t("report.droppedItem", {
+        name: task.name,
+        before: previous.taskProgress[task.id] ?? 0,
+        after: task.progress,
+      }),
+    );
 }
 
 /** ばらつきの元になっているタスク (上位 3)。 */
@@ -156,8 +172,8 @@ function buildLines(
   const lines: Line[] = [
     {
       key: "finish",
-      label: `${t("summary.finishP50")} / ${t("summary.finishP80")}`,
-      value: `${day(schedule.overallMarks.p50)} / ${day(schedule.overallMarks.p80)}`,
+      label: `${t("summary.finishP50")} / ${t("summary.finishP80")} / P90`,
+      value: `${day(schedule.overallMarks.p50)} / ${day(schedule.overallMarks.p80)} / ${day(schedule.overallMarks.p90)}`,
       delta: finishDelta(delta),
     },
     dueLine(schedule, due),
@@ -197,16 +213,57 @@ function buildLines(
     );
   }
 
-  const neck = bottleneck(schedule);
-  if (neck !== null) lines.push({ key: "bottleneck", label: t("report.bottleneck"), value: neck });
+  const chain = chainLine(state, result, schedule);
+  if (chain !== null) lines.push({ key: "chain", label: t("report.chain"), value: chain });
   const stalled = stalledTasks(state);
   if (stalled.length > 0) {
     lines.push({ key: "stalled", label: t("report.stalled"), value: stalled.join(", ") });
+  }
+  const dropped = droppedTasks(state);
+  if (dropped.length > 0) {
+    lines.push({ key: "dropped", label: t("report.dropped"), value: dropped.join(", ") });
   }
   const risks = topRisks(state, result);
   if (risks.length > 0)
     lines.push({ key: "risks", label: t("report.risks"), value: risks.join(", ") });
   return lines;
+}
+
+/**
+ * 見積もりの偏り。終わったタスクが見積もりの何倍かかったかと、それを残りに
+ * 掛けるかどうか。掛けるかどうかは PM が決める (既定は掛けない)。
+ */
+function biasBlock(state: AppState, actions: AppActions): HTMLElement {
+  const calibration = calibrationOf(
+    state.document.tasks,
+    state.document.calendar.hoursPerPersonDay,
+  );
+  if (calibration === null) {
+    return h("p", { class: "hint", text: t("report.biasNeed", { count: CALIBRATION_MIN_TASKS }) });
+  }
+  return h("div", { class: "report-bias", dataset: { key: "bias" } }, [
+    h("p", {
+      text: t("report.biasValue", {
+        count: calibration.count,
+        factor: formatNumber(calibration.factor, lang(), 2),
+      }),
+    }),
+    h("label", { class: "toggle" }, [
+      checkbox(
+        state.document.calibrate,
+        (checked) => {
+          actions.mutate((document) => {
+            document.calibrate = checked;
+          });
+        },
+        {
+          dataset: { focus: "report:calibrate" },
+          attrs: { disabled: !canWrite(state), "aria-label": t("report.biasApply") },
+        },
+      ),
+      h("span", { text: t("report.biasApply") }),
+    ]),
+  ]);
 }
 
 /** 週報に貼るためのテキスト。 */
@@ -223,6 +280,8 @@ function historyTable(state: AppState): HTMLElement | null {
   if (history.length < 2) return null;
   const l = lang();
   const day = (value: number | null): string => (value === null ? "—" : formatDayShort(value, l));
+  const chance = (value: number | null): string =>
+    value === null ? "—" : formatPercent(value, l, 0);
   const key = "panel-history";
   return foldout(
     {
@@ -243,6 +302,8 @@ function historyTable(state: AppState): HTMLElement | null {
               h("th", { class: "num", text: t("summary.effortP80") }),
               h("th", { class: "num", text: t("report.progress") }),
               h("th", { class: "num", text: t("progress.spent") }),
+              h("th", { class: "num", text: t("report.dueChance") }),
+              h("th", { class: "num", text: t("report.budgetChance") }),
             ]),
           ]),
           h(
@@ -258,6 +319,8 @@ function historyTable(state: AppState): HTMLElement | null {
                   h("td", { class: "num", text: formatNumber(item.effortP80, l) }),
                   h("td", { class: "num", text: formatPercent(item.progress, l, 0) }),
                   h("td", { class: "num", text: formatNumber(item.spent, l) }),
+                  h("td", { class: "num", text: chance(item.dueProbability) }),
+                  h("td", { class: "num", text: chance(item.budgetProbability) }),
                 ]),
               ),
           ),
@@ -320,6 +383,7 @@ export function renderReportCard(state: AppState, actions: AppActions): HTMLElem
         ]),
       ),
       previous === null ? h("p", { class: "hint", text: t("report.noPrevious") }) : null,
+      biasBlock(state, actions),
       h("div", { class: "row-actions" }, [
         h("label", { class: "inline-field" }, [
           h("span", { text: t("report.budget") }),

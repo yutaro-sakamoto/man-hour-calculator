@@ -9,7 +9,7 @@ import { canWrite, type AppActions, type AppState } from "../app.ts";
 import type { ProjectDocument } from "../api/types.ts";
 import { formatDayShort, formatEstimateRange, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { stateOfProgress } from "../model/progress.ts";
+import { stateOfEntered, stateOfProgress } from "../model/progress.ts";
 import { createTask, sampleDocument } from "../model/project.ts";
 import type { ScheduleRow } from "../model/schedule.ts";
 import {
@@ -46,7 +46,7 @@ function stateOf(state: AppState, row: TreeRow, scheduleRow: ScheduleRow | undef
   if (row.hasChildren) {
     return scheduleRow === undefined ? "notStarted" : stateOfProgress(scheduleRow.progress);
   }
-  if (row.leafIndex === null) return "notStarted";
+  if (row.leafIndex === null) return stateOfEntered(row.task);
   const code = state.result?.states[row.leafIndex] ?? 0;
   return STATE_ORDER[code] ?? "notStarted";
 }

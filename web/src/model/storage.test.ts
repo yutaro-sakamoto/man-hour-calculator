@@ -304,3 +304,12 @@ test("親の行に書いた見積もりは使わないが、数えて知らせ�
   const result = readCsv("level,name,min,likely,max\n0,移行,1,2,4\n1,手順書,1,1,2\n0,単独,1,2,3");
   assert.equal(result.parentEstimates, 1);
 });
+
+test("前提は名前で書き出して、読み戻せる", () => {
+  const design = createTask({ name: "設計" });
+  const build = createTask({ name: "実装", after: [design.id] });
+  const csv = projectToCsv(buildRows([design, build]));
+  const [first, second] = readCsv(csv).tasks;
+  assert.ok(first && second);
+  assert.deepEqual(second.after, [first.id]);
+});

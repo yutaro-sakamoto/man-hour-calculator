@@ -18,7 +18,7 @@ import {
   parseEffort,
 } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { stateOfProgress, type Progress } from "../model/progress.ts";
+import { stateOfEntered, stateOfProgress, type Progress } from "../model/progress.ts";
 import { collectGroups, moveToFirst, type TreeRow } from "../model/tree.ts";
 import type { ScheduleRow } from "../model/schedule.ts";
 import type { TaskState } from "../types.ts";
@@ -52,7 +52,7 @@ function readout(label: string, value: string, key: string): HTMLElement {
 }
 
 function stateOf(state: AppState, row: TreeRow): TaskState {
-  if (row.leafIndex === null) return "notStarted";
+  if (row.leafIndex === null) return stateOfEntered(row.task);
   return STATE_ORDER[state.result?.states[row.leafIndex] ?? 0] ?? "notStarted";
 }
 
@@ -80,10 +80,14 @@ function forecastSection(
   const l = lang();
   const schedule = state.schedule;
   const result = state.result;
+  // 計算に入っていない行 (`scheduleRow` が無い) は「—」。「期間内に終わり
+  // ません」と出すと、使用を外しただけの完了済みタスクが遅れて見える。
   const day = (mark: number | null | undefined): string =>
-    mark === null || mark === undefined || schedule === null
-      ? t("sched.notFinishing")
-      : formatDayShort(schedule.startDay + mark, l);
+    scheduleRow === undefined || schedule === null
+      ? "—"
+      : mark === null || mark === undefined
+        ? t("sched.notFinishing")
+        : formatDayShort(schedule.startDay + mark, l);
 
   const remaining = row.leafIndex === null ? null : remainingEstimate(state, row.leafIndex);
   const share =
