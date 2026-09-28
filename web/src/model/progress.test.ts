@@ -5,6 +5,7 @@ import {
   progressOfLeaves,
   progressOfSubtree,
   progressOfTask,
+  progressChange,
   progressOverall,
   stateOfEntered,
   stateOfProgress,
@@ -179,4 +180,31 @@ test("計算に入っていないタスクの状態は、入れた実績から�
   assert.equal(stateOfEntered({ endDate: "2026-10-01", progress: 90, startDate: null }), "done");
   assert.equal(stateOfEntered({ endDate: null, progress: 30, startDate: null }), "inProgress");
   assert.equal(stateOfEntered({ endDate: null, progress: 0, startDate: null }), "notStarted");
+});
+
+test("完了日のあるタスクの進捗を 100 未満にしたら、完了日も消える", () => {
+  // 消さないと、表は 60% なのに状態は「完了」、計算も残り 0 のままだった。
+  const task = createTask({ endDate: "2026-09-21", progress: 100 });
+  Object.assign(task, progressChange("60", task.endDate));
+  assert.equal(task.progress, 60);
+  assert.equal(task.endDate, null);
+  assert.equal(stateOfEntered(task), "inProgress");
+});
+
+test("100 を打ち直す途中で消えた完了日は、100 に戻せば戻る", () => {
+  const task = createTask({ endDate: "2026-09-21", progress: 100 });
+  const atRender = task.endDate;
+  // 「100」を消して打ち直す: 10 → 1 → 10 → 100
+  for (const typed of ["10", "1", "10", "100"]) {
+    Object.assign(task, progressChange(typed, atRender));
+  }
+  assert.equal(task.progress, 100);
+  assert.equal(task.endDate, "2026-09-21");
+});
+
+test("完了日の無いタスクは、100 にしても完了日を作らない。値は 0〜100 に収める", () => {
+  assert.deepEqual(progressChange("100", null), { progress: 100 });
+  assert.deepEqual(progressChange("150", null), { progress: 100 });
+  assert.deepEqual(progressChange("-5", null), { progress: 0, endDate: null });
+  assert.deepEqual(progressChange("", null), { progress: 0, endDate: null });
 });
