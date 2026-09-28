@@ -41,6 +41,31 @@ export function addDays(iso: IsoDate, days: number): IsoDate {
   return day === null ? iso : isoFromDay(day + days);
 }
 
+/**
+ * 工数の書き方の揺れをならして、人日の数にする。
+ *
+ * Excel や日報から写した値は、全角数字・`4h`・`3人日` のように揺れる。
+ * それを全部「読めない」で弾くと、利用者は何が悪いのか分からない。
+ *
+ * - 空なら `null` (未入力)
+ * - 全角は半角に (`NFKC`)。桁区切りのカンマは捨てる
+ * - `h` / `時間` / `hr` が付けば時間とみなし、`hoursPerDay` で割る
+ * - `d` / `日` / `人日` / `md` は人日
+ * - それ以外の形・負の数は `NaN`
+ */
+export function parseEffort(text: string, hoursPerDay: number): number | null {
+  const normalized = text.normalize("NFKC").replace(/[,\s]/g, "").toLowerCase();
+  if (normalized === "") return null;
+  const match = /^(\d+(?:\.\d*)?|\.\d+)(h|hr|hrs|時間|d|md|日|人日)?$/.exec(normalized);
+  if (!match) return Number.NaN;
+  const value = Number(match[1]);
+  const unit = match[2] ?? "";
+  if (unit === "h" || unit === "hr" || unit === "hrs" || unit === "時間") {
+    return hoursPerDay > 0 ? value / hoursPerDay : Number.NaN;
+  }
+  return value;
+}
+
 /** 曜日 (0 = 日曜)。 */
 export function weekdayOfDay(day: number): number {
   return (((day + 4) % 7) + 7) % 7;

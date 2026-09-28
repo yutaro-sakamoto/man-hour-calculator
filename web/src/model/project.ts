@@ -43,6 +43,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     startDate: null,
     progress: 0,
     endDate: null,
+    spent: "",
     assigneeId: null,
     ...overrides,
   };
@@ -322,6 +323,7 @@ function normalizeTask(raw: unknown, knownIds: Set<string>, memberIds: Set<strin
     startDate: asIsoDate(record.startDate),
     progress: Math.min(100, Math.max(0, asNumber(record.progress, 0))),
     endDate: asIsoDate(record.endDate),
+    spent: typeof record.spent === "string" ? record.spent : asNumericString(record.spent, ""),
     assigneeId: memberIds.has(asString(record.assigneeId)) ? asString(record.assigneeId) : null,
   };
 }

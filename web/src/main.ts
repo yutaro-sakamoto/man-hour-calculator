@@ -123,6 +123,7 @@ const state: AppState = {
   status: { text: "", tone: "info" },
   probeDate: null,
   taskDetailId: null,
+  hoursDraft: null,
 };
 
 const root = document.createElement("div");
@@ -222,7 +223,9 @@ function runEngine(document: ProjectDocument): Computed {
   );
   const result = compute(
     buildRequest(
-      leaves.map((row) => leafInputFromTask(row.task, members)),
+      leaves.map((row) =>
+        leafInputFromTask(row.task, members, document.calendar.hoursPerPersonDay),
+      ),
       document.calendar,
       members,
       document.settings,

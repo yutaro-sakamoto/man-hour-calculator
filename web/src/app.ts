@@ -127,6 +127,13 @@ export interface AppState {
    * 窓が別のタスクに化けるのは事故でしかない。
    */
   taskDetailId: string | null;
+  /**
+   * 詳細の窓で「今回の作業時間」に書きかけの時間。
+   *
+   * 状態に置くのは、自動保存などの関係のない再描画で消えないようにするため。
+   * タスクの id と組にして、別のタスクへ持ち越さない。
+   */
+  hoursDraft: { taskId: string; value: string } | null;
 }
 
 /** プロジェクト一覧の絞り込み。空文字は「すべて」。 */

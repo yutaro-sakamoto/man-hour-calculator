@@ -109,8 +109,10 @@ test("行ごとに完了確率・進捗・実績がそろう", () => {
 
   // 同じ人の後ろのタスクが終われば前も終わっているので、親は最後の葉と同じ。
   assert.deepEqual([...parent.probabilities], [...b.probabilities]);
-  assert.deepEqual([...a.probabilities], [0.5, 1, 1, 1]);
-  assert.equal(a.marks.p50, 0);
+  // a は終わっている。予測ではなく、入れた完了日 (9/03 = 添字 2) に終わる。
+  // 予測から引いていたころは、残り 0 のタスクが期間の初日に「終わって」いた。
+  assert.deepEqual([...a.probabilities], [0, 0, 1, 1]);
+  assert.equal(a.marks.p50, 2);
   assert.equal(b.marks.p50, 2);
   assert.equal(b.label, "untitled");
   assert.ok(a.done);
@@ -130,6 +132,34 @@ test("行ごとに完了確率・進捗・実績がそろう", () => {
   assert.equal(model.todayIndex, 1);
   assert.equal(model.overallMarks.p80, 3);
   assert.equal(model.members[0]?.taskCount, 2);
+});
+
+test("すべて終わっていれば、全体の完了日は最後の完了日", () => {
+  const parent = createTask({ name: "parent" });
+  const a = createTask({ parentId: parent.id, startDate: "2026-09-01", endDate: "2026-09-02" });
+  const b = createTask({ parentId: parent.id, startDate: "2026-09-02", endDate: "2026-09-04" });
+  const result = {
+    ...tinyResult(),
+    spent: new Float64Array([2, 2]),
+    states: new Float64Array([2, 2]),
+  } as ComputeResult;
+  const model = buildScheduleModel(result, buildRows([parent, a, b]), START + 3, "u", ["A"]);
+  assert.equal(model.overallMarks.p80, 3);
+  assert.equal(model.rows[0]?.marks.p80, 3, "親も最後の完了日");
+  assert.equal(model.rows[1]?.marks.p80, 1);
+});
+
+test("進捗 100% だけで完了日が無ければ、基準日の前日に終わったとみなす", () => {
+  const only = createTask({ progress: 100 });
+  const result = {
+    ...tinyResult(),
+    nTasks: 1,
+    assignees: new Float64Array([0]),
+    spent: new Float64Array([2]),
+    states: new Float64Array([2]),
+  } as ComputeResult;
+  const model = buildScheduleModel(result, buildRows([only]), START + 3, "u", ["A"]);
+  assert.equal(model.rows[0]?.marks.p50, 2);
 });
 
 test("基準日が期間の外なら、今日の印は無い", () => {

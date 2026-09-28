@@ -9,7 +9,9 @@ import type { AppActions, AppState } from "../app.ts";
 import { t } from "../i18n.ts";
 import { memberLabel } from "../model/members.ts";
 import { PRIORITIES, type Priority, type Task } from "../types.ts";
-import { dateInput, h, numberInput, select, textInput } from "./dom.ts";
+import { formatNumber, parseEffort } from "../format.ts";
+import { lang } from "../i18n.ts";
+import { button, dateInput, h, numberInput, select, textInput } from "./dom.ts";
 
 /** タスクを書き換える口。添字ではなく id で引く (並べ替えでずれるため)。 */
 export type SetTask = (change: Partial<Task>) => void;
@@ -160,6 +162,104 @@ export function progressField(task: Task, set: SetTask, options: FieldOptions): 
       },
     },
   );
+}
+
+/**
+ * 実績工数の欄。人日 (`3.5`) でも時間 (`28h`) でも書ける。
+ *
+ * 書いたままの文字で持つ (`Task.spent`)。読めない形なら赤くするだけで、
+ * 計算は止めない — 見積もりと違い、無くても推し量れるものなので。
+ */
+export function spentField(
+  task: Task,
+  set: SetTask,
+  options: FieldOptions & { hoursPerDay: number },
+): HTMLElement {
+  const parsed = parseEffort(task.spent, options.hoursPerDay);
+  return textInput(
+    task.spent,
+    (value) => {
+      set({ spent: value });
+    },
+    {
+      class: "num",
+      dataset: { focus: `${options.focusPrefix}:spent` },
+      attrs: {
+        inputmode: "decimal",
+        placeholder: "3.5 / 28h",
+        "aria-label": `${options.label} — ${t("col.spent")}`,
+        "aria-invalid": parsed !== null && Number.isNaN(parsed),
+      },
+    },
+  );
+}
+
+/**
+ * 今週の作業時間を、これまでの実績工数に足し込む。
+ *
+ * 日報は「今週 6 時間」の形で届く。合計を暗算して書き直させると、
+ * 足し忘れ・二重に足すが起きる。時間で書かれた実績には時間で足す
+ * (`28h` + 6 → `34h`)。人日で書かれていれば人日に直して足す。
+ */
+export function addHoursField(
+  state: AppState,
+  task: Task,
+  actions: AppActions,
+  options: FieldOptions & { hoursPerDay: number },
+): HTMLElement {
+  const hours = h("input", {
+    class: "num",
+    dataset: { focus: `${options.focusPrefix}:addHours` },
+    attrs: {
+      type: "number",
+      min: 0,
+      step: 0.5,
+      value: state.hoursDraft?.taskId === task.id ? state.hoursDraft.value : "",
+      "aria-label": `${options.label} — ${t("detail.addHours")}`,
+    },
+    on: {
+      input: (event) => {
+        // 描き直さない。キャレットを失わないように、値だけ持っておく。
+        state.hoursDraft = { taskId: task.id, value: (event.target as HTMLInputElement).value };
+      },
+      keydown: (event) => {
+        if (event.key === "Enter") add();
+      },
+    },
+  });
+  function add(): void {
+    const extra = state.hoursDraft?.taskId === task.id ? Number(state.hoursDraft.value) : 0;
+    if (!(extra > 0) || !(options.hoursPerDay > 0)) return;
+    state.hoursDraft = null;
+    actions.mutate((document) => {
+      const target = document.tasks.find((item) => item.id === task.id);
+      if (target) target.spent = addHours(target.spent, extra, options.hoursPerDay);
+    });
+  }
+  return h("span", { class: "inline-add" }, [
+    hours,
+    button(t("detail.addHoursButton"), add, { class: "small" }),
+  ]);
+}
+
+/** `addHoursField` の足し算。読めない実績には足さずに、足す分だけにする。 */
+export function addHours(current: string, hours: number, hoursPerDay: number): string {
+  const inHours = /(h|hr|hrs|時間)\s*$/i.test(current.normalize("NFKC").trim());
+  const days = parseEffort(current, hoursPerDay);
+  const base = days !== null && Number.isFinite(days) ? days : 0;
+  if (inHours) return `${formatPlain(base * hoursPerDay + hours)}h`;
+  return formatPlain(base + hours / hoursPerDay);
+}
+
+/** 桁区切りを付けない、小数 2 桁までの数。欄に書き戻すため。 */
+function formatPlain(value: number): string {
+  return String(Math.round(value * 100) / 100);
+}
+
+/** 実績工数の読み取り表示 (人日)。 */
+export function spentReadout(task: Task, hoursPerDay: number): string | null {
+  const days = parseEffort(task.spent, hoursPerDay);
+  return days === null || Number.isNaN(days) ? null : formatNumber(days, lang(), 1);
 }
 
 export function assigneeField(

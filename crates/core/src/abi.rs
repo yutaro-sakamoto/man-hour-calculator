@@ -23,14 +23,14 @@ use crate::stats::{self, PCT_LEVELS};
 /// リクエストが正しいバッファであることを確認するための印。
 pub const MAGIC: f64 = 20_250_920.0;
 /// ABI のバージョン。レイアウトを変えたら上げる。
-pub const VERSION: f64 = 4.0;
+pub const VERSION: f64 = 5.0;
 
 /// リクエストのヘッダ長 (f64 の個数)。
 pub const REQ_HEADER: usize = 32;
 /// レスポンスのヘッダ長 (f64 の個数)。
 pub const RESP_HEADER: usize = 24;
 /// タスク 1 件がリクエストで占める要素数。
-pub const REQ_TASK_STRIDE: usize = 7;
+pub const REQ_TASK_STRIDE: usize = 8;
 /// 人員 1 人がリクエストで占める要素数 (曜日ごとの開始 7 + 終了 7 + 休憩 1)。
 pub const REQ_MEMBER_STRIDE: usize = 15;
 /// 予定 1 件がリクエストで占める要素数。
@@ -122,6 +122,8 @@ pub struct TaskInput {
     pub end_day: Option<i64>,
     /// 担当する人員の添字。
     pub assignee: usize,
+    /// 申告された実績工数 (人日)。無ければ `None`。
+    pub spent: Option<f64>,
 }
 
 impl TaskInput {
@@ -135,6 +137,7 @@ impl TaskInput {
             progress: 0.0,
             end_day: None,
             assignee: 0,
+            spent: None,
         }
     }
 
@@ -285,6 +288,7 @@ impl Request {
                 task.progress,
                 day_to_f64(task.end_day),
                 task.assignee as f64,
+                task.spent.unwrap_or(f64::NAN),
             ]);
         }
         for member in &self.members {
@@ -414,6 +418,8 @@ impl Request {
                 end_day: f64_to_day(buf[at + 5]),
                 // 存在しない人員を指していたら先頭に倒す。
                 assignee: if assignee < n_members { assignee } else { 0 },
+                // 負や非有限は「申告なし」。0 は「まだ使っていない」という申告。
+                spent: Some(buf[at + 7]).filter(|v| v.is_finite() && *v >= 0.0),
             });
         }
 
@@ -592,6 +598,7 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
                 start_day: input.start_day,
                 progress: input.progress,
                 end_day: input.end_day,
+                spent: input.spent,
             };
             let calendar = calendars
                 .get(input.assignee)
@@ -717,8 +724,12 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     for calendar in &calendars {
         out.extend_from_slice(calendar.capacity());
     }
+    // 累積の稼働は**基準日から**数える。残りの工数は今日から先の稼働で
+    // 賄うもので、過ぎた日の稼働は使えない。開始日から数えていたころは、
+    // 何週間も放っておいた案件でも完了予測が 1 日も動かず、未着手の
+    // タスクが過去の日付に終わる見込みになっていた。
     for calendar in &calendars {
-        out.extend_from_slice(calendar.cumulative());
+        out.extend(calendar.cumulative_from(request.today_day));
     }
     for calendar in &calendars {
         out.extend(calendar.flags().iter().map(|&f| f64::from(f)));
@@ -1346,7 +1357,7 @@ mod tests {
             progress: 0.25,
             ..TaskInput::estimate_only(8.0, 8.0, 8.0)
         }];
-        r.today_day = monday() + 4;
+        r.today_day = monday() + 7; // 翌週の月曜の朝
 
         let raw = handle(&r.encode());
         let resp = Response::parse(&raw);
@@ -1356,6 +1367,54 @@ mod tests {
             (resp.percentiles()[4] - 11.0).abs() < 1e-9,
             "総工数は 5 + 6 = 11 人日 (当初の 8 より重い)"
         );
+    }
+
+    /// 残りの仕事は基準日から先の稼働で賄う。
+    ///
+    /// シミュレーションで見つかったもの。累積の稼働を開始日から返していた
+    /// ため、2 週間手を付けていない案件でも完了予測が動かず、未着手の
+    /// タスクが過去の日付に終わる見込みになっていた。
+    #[test]
+    fn remaining_work_is_scheduled_from_the_reference_day() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.tasks = vec![TaskInput::estimate_only(3.0, 3.0, 3.0)];
+        r.today_day = monday() + 14;
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        let cumulative = resp.cumulative(0);
+        assert!(
+            cumulative[..14].iter().all(|&c| c == 0.0),
+            "過ぎた日の稼働が残りの仕事に使われている: {:?}",
+            &cumulative[..14]
+        );
+        assert_eq!(cumulative[14], 1.0, "基準日の稼働は使える");
+    }
+
+    /// 申告した実績工数がバッファを往復して、消化工数になる。
+    #[test]
+    fn a_reported_effort_travels_through_the_buffer() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.tasks = vec![TaskInput {
+            start_day: Some(monday()),
+            progress: 0.5,
+            spent: Some(2.5),
+            ..TaskInput::estimate_only(4.0, 6.0, 9.0)
+        }];
+        r.today_day = monday() + 14;
+        let decoded = Request::decode(&r.encode()).unwrap();
+        assert_eq!(decoded.tasks[0].spent, Some(2.5));
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert_eq!(resp.spent()[0], 2.5, "カレンダーの 10 人日ではなく申告の 2.5 人日");
+
+        // 負の値は「申告なし」として読む。
+        let mut buf = r.encode();
+        buf[REQ_HEADER + 7] = -1.0;
+        assert_eq!(Request::decode(&buf).unwrap().tasks[0].spent, None);
     }
 
     #[test]

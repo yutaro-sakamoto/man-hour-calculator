@@ -274,6 +274,34 @@ impl Calendar {
         &self.cumulative
     }
 
+    /// `day` から数えた累積の稼働。`day` より前の日は 0。
+    ///
+    /// これからの仕事を割り付けるときに使う。`day` が期間より前なら
+    /// `cumulative()` と同じ、期間より後ならすべて 0。
+    pub fn cumulative_from(&self, day: i64) -> Vec<f64> {
+        let offset = day - self.start_day;
+        let before = match usize::try_from(offset) {
+            Ok(0) | Err(_) => 0.0,
+            Ok(at) => self
+                .cumulative
+                .get(at - 1)
+                .or(self.cumulative.last())
+                .copied()
+                .unwrap_or(0.0),
+        };
+        self.cumulative
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| {
+                if (i as i64) < offset {
+                    0.0
+                } else {
+                    (c - before).max(0.0)
+                }
+            })
+            .collect()
+    }
+
     #[inline]
     pub fn flags(&self) -> &[u8] {
         &self.flags
@@ -761,6 +789,23 @@ mod tests {
         assert!(cal.cumulative().windows(2).all(|w| w[1] >= w[0]));
         assert!(cal.capacity().iter().all(|&c| c >= 0.0));
         assert_eq!(cal.len(), 400);
+    }
+
+    #[test]
+    fn cumulative_from_a_day_ignores_the_days_before_it() {
+        let cal = Calendar::build(&config(21), &MemberSchedule::default(), &[], &[], &[]);
+        // 期間より前から数えるなら、そのままの累積。
+        assert_eq!(cal.cumulative_from(day(-3)), cal.cumulative().to_vec());
+        assert_eq!(cal.cumulative_from(day(0)), cal.cumulative().to_vec());
+
+        let from = cal.cumulative_from(day(7));
+        assert!(from[..7].iter().all(|&c| c == 0.0), "過ぎた日の稼働は使えない");
+        for (i, (&got, &whole)) in from.iter().zip(cal.cumulative()).enumerate().skip(7) {
+            let expected = whole - cal.cumulative()[6];
+            assert!((got - expected).abs() < 1e-12, "{i}");
+        }
+        // 期間の後から数えると、何も残らない。
+        assert!(cal.cumulative_from(day(40)).iter().all(|&c| c == 0.0));
     }
 
     #[test]

@@ -240,8 +240,14 @@ export function buildScheduleModel(
     const last = lastTaskPerMember(rows, i, result);
     if (last.size === 0) continue;
     const parts = [...last.values()].map(probabilitiesOf);
-    const probabilities =
-      parts.length === 1 ? (parts[0] ?? new Float64Array(days)) : combine(parts, days);
+    const progress = progressOfSubtree(result, rows, i);
+    const actual = actualSpanOf(subtreeLeafRows(rows, i), result.calendarStartDay);
+    const finished = progress.leafCount > 0 && progress.doneCount === progress.leafCount;
+    const probabilities = finished
+      ? finishedOn(finishIndex(actual, todayDay - result.calendarStartDay), days)
+      : parts.length === 1
+        ? (parts[0] ?? new Float64Array(days))
+        : combine(parts, days);
     scheduleRows.push({
       id: row.task.id,
       label: row.task.name.trim() === "" ? untitled : row.task.name,
@@ -251,8 +257,8 @@ export function buildScheduleModel(
       members: [...last.keys()].sort((a, b) => a - b),
       probabilities,
       marks: marksOf(probabilities),
-      progress: progressOfSubtree(result, rows, i),
-      actual: actualSpanOf(subtreeLeafRows(rows, i), result.calendarStartDay),
+      progress,
+      actual,
     });
   }
 
@@ -278,9 +284,15 @@ export function buildScheduleModel(
     });
   }
 
-  // 全体は「全員が担当ぶんを終えている」確率。
-  const overall = combine(
-    members.filter((member) => member.taskCount > 0).map((member) => member.probabilities),
+  const overallProgress = progressOverall(result);
+  const overallActual = actualSpanOf(
+    rows.filter((row) => row.leafIndex !== null),
+    result.calendarStartDay,
+  );
+  const overall = overallProbabilities(
+    members,
+    overallProgress,
+    finishIndex(overallActual, todayDay - result.calendarStartDay),
     days,
   );
 
@@ -316,12 +328,51 @@ export function buildScheduleModel(
     members,
     overall,
     overallMarks: marksOf(overall),
-    overallProgress: progressOverall(result),
-    overallActual: actualSpanOf(
-      rows.filter((row) => row.leafIndex !== null),
-      result.calendarStartDay,
-    ),
+    overallProgress,
+    overallActual,
   };
+}
+
+/**
+ * 全体は「全員が担当ぶんを終えている」確率。すべて終わっていれば、
+ * 最後に終わった日 (予測ではなく実績)。
+ */
+function overallProbabilities(
+  members: readonly MemberSummary[],
+  progress: Progress,
+  finishedAt: number,
+  days: number,
+): Float64Array {
+  if (progress.leafCount > 0 && progress.doneCount === progress.leafCount) {
+    return finishedOn(finishedAt, days);
+  }
+  return combine(
+    members.filter((member) => member.taskCount > 0).map((member) => member.probabilities),
+    days,
+  );
+}
+
+/**
+ * 終わったものの完了日 (期間の初日からの日数)。
+ *
+ * 完了日が入っていればそれ。進捗 100% だけで完了日が無いものは、基準日の
+ * 前日に終わったとみなす (少なくとも今朝には終わっていた)。
+ */
+function finishIndex(actual: ActualSpan, todayIndex: number): number {
+  return actual.end ?? todayIndex - 1;
+}
+
+/**
+ * 終わった日から先がずっと 1 の確率。
+ *
+ * **終わったものの日付を予測から引かない。** 残りが 0 のタスクは、累積の
+ * 稼働が 0 の日 (= 期間の初日) にもう「終わっている」ので、予測から引くと
+ * 完了日が開始日になっていた。入力された完了日をそのまま出す。
+ */
+function finishedOn(index: number, days: number): Float64Array {
+  const out = new Float64Array(days);
+  out.fill(1, Math.max(0, Math.min(days, index)));
+  return out;
 }
 
 /** その日が稼働日でないか (週末・祝日、かつ休日出勤でもない)。 */

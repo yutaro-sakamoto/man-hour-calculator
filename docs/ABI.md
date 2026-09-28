@@ -1,4 +1,4 @@
-# JS ↔ WASM の ABI (version 4)
+# JS ↔ WASM の ABI (version 5)
 
 `crates/core/src/abi.rs` と `web/src/wasm.ts` / `web/src/abi.ts` は、この文書の表どおりの
 バッファをやり取りする。どちらかを変えたら `VERSION` を上げること。起動時に
@@ -32,7 +32,7 @@ new Float64Array(memory.buffer, ptr, length)
 | `dealloc` | `(ptr: *mut u8, len_bytes: usize)` | `alloc` した領域を解放する |
 | `compute` | `(ptr: *const f64, len: usize) -> *const f64` | 計算してレスポンス先頭を返す |
 | `last_response_len` | `() -> usize` | 直前のレスポンスの長さ (`f64` の個数) |
-| `abi_version` | `() -> u32` | この文書のバージョン (= 4) |
+| `abi_version` | `() -> u32` | この文書のバージョン (= 5) |
 
 `compute` が返すポインタは**次に `compute` を呼ぶまで**しか有効でない。
 JS 側は必ずコピーしてから使う。また `compute` の内部で線形メモリが伸びると
@@ -52,7 +52,7 @@ wasm.dealloc(ptr, bytes);
 ## リクエスト
 
 長さは
-`32 + 7 * n_tasks + 15 * n_members + 6 * n_events + 2 * n_event_members
+`32 + 8 * n_tasks + 15 * n_members + 6 * n_events + 2 * n_event_members
 + 2 * n_event_exceptions + n_forced_workdays`。
 
 ### ヘッダ (32 要素)
@@ -60,7 +60,7 @@ wasm.dealloc(ptr, bytes);
 | 添字 | 名前 | 値 |
 |---:|---|---|
 | 0 | `magic` | `20250920` 固定 |
-| 1 | `version` | `4` |
+| 1 | `version` | `5` |
 | 2 | `engine` | `0` = モンテカルロ、`1` = 数値畳み込み |
 | 3 | `dist_kind` | `0` = PERT、`1` = 三角分布 (未知の値は PERT にフォールバック) |
 | 4 | `lambda` | PERT の形状パラメータ。`0..=100` に丸められる。既定 `4` |
@@ -79,7 +79,7 @@ wasm.dealloc(ptr, bytes);
 | 17 | `hours_per_person_day` | 1 人日あたりの時間 (`> 0`) |
 | 18 | `n_event_members` | 予定と人員の割当件数。`0..=10000` |
 | 19 | `use_japanese_holidays` | `0` / `1` |
-| 20 | `today_day` | 進捗を測る基準日 (日数) |
+| 20 | `today_day` | 進捗を測る基準日 (日数)。その日の朝の時点を指す |
 | 21 | `n_event_exceptions` | 予定の除外日の件数。`0..=10000` |
 | 22..31 | — | 予約 (`0`) |
 
@@ -87,7 +87,7 @@ wasm.dealloc(ptr, bytes);
 
 | 区画 | 要素数 | 内容 |
 |---|---:|---|
-| タスク | `7 * n_tasks` | `min, likely, max, start_day, progress, end_day, assignee` |
+| タスク | `8 * n_tasks` | `min, likely, max, start_day, progress, end_day, assignee, spent` |
 | 人員 | `15 * n_members` | 稼働開始 × 7、稼働終了 × 7、休憩分数 |
 | 予定 | `6 * n_events` | `start_day, end_day, start_minute, end_minute, repeat_weeks, until_day` |
 | 予定の参加者 | `2 * n_event_members` | `event_index, member_index` |
@@ -96,6 +96,10 @@ wasm.dealloc(ptr, bytes);
 
 - `start_day` / `end_day` / `until_day` は未入力なら `NaN`。
 - `progress` は `0.0..=1.0`。`assignee` は人員の添字 (範囲外なら 0 に倒す)。
+- `spent` は申告された実績工数 (人日)。未入力なら `NaN`。負・非有限も未入力として読む。
+  **入っていればカレンダーから推し量らずにこれを使う** (兼務・割り込みがあると、
+  担当者が働けた時間はこのタスクに使った時間より大きい)。無ければ着手日から
+  `today_day` の**前日**までに担当者が投入できた工数を消化とみなす。
 - 人員の稼働時間は曜日ごとの `[開始, 終了)` を分で表す。添字 0 が日曜。
   開始と終了が同じ曜日は非稼働。**休憩分数は稼働日から一律で差し引く**。
 - 予定の `start_minute` / `end_minute` が `NaN` なら終日 (稼働時間をまるごと潰す)。
@@ -133,7 +137,7 @@ wasm.dealloc(ptr, bytes);
 | 添字 | 名前 | 内容 |
 |---:|---|---|
 | 0 | `status` | `0` なら成功。それ以外はエラー (下表) |
-| 1 | `version` | `4` |
+| 1 | `version` | `5` |
 | 2 | `n_bins` | 本体のビン数 |
 | 3 | `n_percentiles` | 分位点の個数 (現在は 7) |
 | 4 | `n_tasks` | タスク数 |
@@ -163,13 +167,13 @@ wasm.dealloc(ptr, bytes);
 | `percentile_values` | `n_percentiles` | 上に対応する総工数 |
 | `sensitivity` | `n_tasks` | 各タスクの分散が総分散に占める割合 (総和 1) |
 | `effective` | `3 * n_tasks` | 実績を反映した `min, likely, max` |
-| `spent` | `n_tasks` | 消化済み工数 (担当者のカレンダーで測ったもの) |
+| `spent` | `n_tasks` | 消化済み工数 (申告があればそれ、無ければ担当者のカレンダーで測ったもの) |
 | `state` | `n_tasks` | `0` 未着手 / `1` 進行中 / `2` 完了 |
 | `assignee` | `n_tasks` | 実際に使われた担当者の添字 |
 | `prefix_cdf` | `n_tasks * prefix_width` | 担当者内での累積工数の CDF |
 | `member_grid_hi` | `n_members` | 担当者ごとの累積和グリッドの上限 |
 | `member_capacity` | `n_members * n_days` | その日に投入できる工数 (人員ごと) |
-| `member_cumulative` | `n_members * n_days` | 開始日からの累積 (人員ごと) |
+| `member_cumulative` | `n_members * n_days` | **`today_day` から**の累積 (人員ごと)。それより前の日は `0` |
 | `member_flags` | `n_members * n_days` | ビット: 1 週末 / 2 祝日 / 4 予定あり / 8 休日出勤 |
 
 人員ごとの配列は `member * n_days + day` の順に並ぶ。
@@ -182,6 +186,10 @@ i 番目のビンは `[lo + i*step, lo + (i+1)*step)`、`step = (hi - lo) / n_bi
 ここでの「そこまで」は**同じ担当者のタスクの中で**数える。別の人のタスクは
 並行して進むので、一列に足してはいけない。これを `member_cumulative` と
 突き合わせると、**タスク i が d 日までに終わっている確率**が出る。
+
+`member_cumulative` を基準日から数えるのは、`prefix_cdf` が**残り**の工数の
+分布だから。残りは今日から先の稼働でしか賄えない。開始日から数えると、
+放っておいた案件でも完了予測が動かず、未着手のタスクが過去の日付に終わる。
 
 複数人にまたがるまとまり (親タスクや全体) が終わっている確率は、
 関わる人ごとの確率の**積**になる。タスクは独立としているので、

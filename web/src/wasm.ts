@@ -13,7 +13,7 @@ import {
   STATUS_OK,
   responseOffsets,
 } from "./abi.ts";
-import { dayFromIso, minutesFromTime } from "./format.ts";
+import { dayFromIso, minutesFromTime, parseEffort } from "./format.ts";
 import { memberIndexOf, participantsOf, type ResolvedMembers } from "./model/members.ts";
 import type { CalendarSettings, ComputeSettings, Task } from "./types.ts";
 
@@ -120,9 +120,16 @@ export interface LeafInput {
   endDay: number | null;
   /** 担当する人員の添字。 */
   assignee: number;
+  /** 申告された実績工数 (人日)。無ければ `null`。 */
+  spent: number | null;
 }
 
-export function leafInputFromTask(task: Task, members: ResolvedMembers): LeafInput {
+export function leafInputFromTask(
+  task: Task,
+  members: ResolvedMembers,
+  hoursPerDay: number,
+): LeafInput {
+  const spent = parseEffort(task.spent, hoursPerDay);
   return {
     min: Number(task.min),
     likely: Number(task.likely),
@@ -131,6 +138,9 @@ export function leafInputFromTask(task: Task, members: ResolvedMembers): LeafInp
     progress: Math.min(1, Math.max(0, task.progress / 100)),
     endDay: dayFromIso(task.endDate),
     assignee: memberIndexOf(members, task),
+    // 読めない申告は「無し」として送る。見積もりと違って計算を止めるほどの
+    // ものではない (詳細の欄が赤くなるので、利用者には見える)。
+    spent: spent !== null && Number.isFinite(spent) && spent >= 0 ? spent : null,
   };
 }
 
@@ -241,6 +251,7 @@ export function buildRequest(
     request[at++] = leaf.progress;
     request[at++] = leaf.endDay ?? NOT_SET;
     request[at++] = leaf.assignee;
+    request[at++] = leaf.spent ?? NOT_SET;
   }
   for (const member of members.all) {
     for (const window of member.workdays) request[at++] = minutesFromTime(window.start) ?? 0;

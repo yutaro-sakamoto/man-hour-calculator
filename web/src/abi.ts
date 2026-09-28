@@ -1,10 +1,10 @@
 /** WASM とやり取りするバッファのレイアウト。`crates/core/src/abi.rs` と対応する。 */
 
 export const MAGIC = 20250920;
-export const ABI_VERSION = 4;
+export const ABI_VERSION = 5;
 export const REQ_HEADER = 32;
 export const RESP_HEADER = 24;
-export const REQ_TASK_STRIDE = 7;
+export const REQ_TASK_STRIDE = 8;
 export const REQ_MEMBER_STRIDE = 15;
 export const REQ_EVENT_STRIDE = 6;
 export const REQ_EVENT_MEMBER_STRIDE = 2;

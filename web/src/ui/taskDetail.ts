@@ -10,7 +10,13 @@
 
 import type { AppActions, AppState } from "../app.ts";
 import { canWrite } from "../app.ts";
-import { formatDayShort, formatEstimateRange, formatNumber, formatPercent } from "../format.ts";
+import {
+  formatDayShort,
+  formatEstimateRange,
+  formatNumber,
+  formatPercent,
+  parseEffort,
+} from "../format.ts";
 import { lang, t } from "../i18n.ts";
 import { stateOfProgress, type Progress } from "../model/progress.ts";
 import { collectGroups, type TreeRow } from "../model/tree.ts";
@@ -27,7 +33,9 @@ import {
   groupOptions,
   nameField,
   priorityField,
+  addHoursField,
   progressField,
+  spentField,
   startField,
   taskWriter,
   type FieldOptions,
@@ -135,6 +143,9 @@ function editSection(state: AppState, actions: AppActions, row: TreeRow): HTMLEl
     label: task.name.trim() === "" ? t("tasks.untitled") : task.name,
   };
   const l = lang();
+  const hoursPerDay = state.document.calendar.hoursPerPersonDay;
+  const parsedSpent = parseEffort(task.spent, hoursPerDay);
+  const spentInvalid = parsedSpent !== null && Number.isNaN(parsedSpent);
   const rolled = (key: "min" | "likely" | "max"): HTMLElement =>
     h("span", {
       class: "rollup",
@@ -196,6 +207,16 @@ function editSection(state: AppState, actions: AppActions, row: TreeRow): HTMLEl
           ? h("span", { class: "muted", text: t("detail.fromChildren") })
           : endField(task, set, options),
       ),
+      row.hasChildren
+        ? null
+        : field(
+            `${t("col.spent")} (${t("unit.days")})`,
+            spentField(task, set, { ...options, hoursPerDay }),
+            spentInvalid ? t("detail.spentInvalid") : t("detail.spentHint"),
+          ),
+      row.hasChildren || !canWrite(state)
+        ? null
+        : field(t("detail.addHours"), addHoursField(state, task, actions, { ...options, hoursPerDay })),
     ]),
     row.hasChildren ? h("p", { class: "hint", text: t("detail.parentNote") }) : null,
     groupOptions(collectGroups(state.document.tasks)),

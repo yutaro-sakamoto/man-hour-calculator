@@ -50,6 +50,14 @@ export interface Task {
   /** 進捗率 (0〜100)。 */
   progress: number;
   endDate: IsoDate | null;
+  /**
+   * 実際に使った工数。日報から書き写す。空文字なら未入力。
+   *
+   * 人日の数 (`3.5`) か、時間 (`28h`)。書かれたままの文字で持つのは、
+   * `h` で入れた人が次に開いたとき、自分の書いた形で読めるようにするため。
+   * 人日に直すのは計算に渡すとき (`parseEffort`)。
+   */
+  spent: string;
   /** 担当する人員の id。`null` なら未割当。 */
   assigneeId: string | null;
 }

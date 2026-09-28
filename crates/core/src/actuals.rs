@@ -33,10 +33,19 @@
 //! すでに終えた work をもう一度これからの稼働で賄うことになり、8 割
 //! 終わっているタスクでも完了日が動かない。
 //!
+//! # 消化工数の測り方
+//!
+//! **日報などで実際の工数が申告されていれば、それを使う** (`Actual::spent`)。
+//! カレンダーで測れるのは「その人がその間に働けた時間」でしかなく、兼務・
+//! 割り込み・並行作業があると実際の何倍にもなるため。
+//!
+//! 申告が無ければ、担当者のカレンダー上で、着手日から基準日の**前日**までに
+//! 投入できた工数として測る。基準日は「その朝の時点」で、日程はこの日から
+//! 残りを積む。
+//!
 //! # 消化工数が測れないとき
 //!
-//! `spent` は担当者のカレンダー上で、着手日から基準日までに投入できた
-//! 工数として測る。着手日が無い、あるいは着手日が計算期間の外にあると
+//! 申告も着手日も無い、あるいは着手日が計算期間の外にあると
 //! 測れない。そのときは**見積もりどおりに進んだ**とみなし、
 //! `spent = p * (見積もりの期待値)` を置く。
 //!
@@ -83,6 +92,12 @@ pub struct Actual {
     /// 進捗率 `0.0..=1.0`。
     pub progress: f64,
     pub end_day: Option<i64>,
+    /// 日報などから分かっている、実際に使った工数 (人日)。
+    ///
+    /// **分かっているならカレンダーから推し量らない。** カレンダーで測れるのは
+    /// 「その人がその間に働けた時間」であって、このタスクに使った時間ではない。
+    /// 兼務・割り込み・並行作業のある現場では、測った値は実際の何倍にもなる。
+    pub spent: Option<f64>,
 }
 
 /// 実績を織り込んだ見通し。
@@ -140,8 +155,9 @@ fn point_mass(value: f64, fallback: TaskEstimate) -> TaskEstimate {
 
 /// 当初の見積もりと実績から、現在の見通しを求める。
 ///
-/// `today` は進捗の基準日 (日数)。着手済みで未完了のタスクは、着手日から
-/// この日までにカレンダー上で投入できた工数を「消化済み」とみなす。
+/// `today` は進捗の基準日 (日数)。着手済みで未完了のタスクは、実績工数が
+/// 申告されていればそれを、無ければ着手日から基準日の前日までにカレンダー上で
+/// 投入できた工数を「消化済み」とみなす。
 /// `planned` は当初見積もりの期待値 (分布の平均)。消化工数が測れないときに、
 /// 進んだぶんがどれだけの工数を使ったとみなすかに使う。
 pub fn forecast(
@@ -173,26 +189,29 @@ pub fn forecast(
     }
 
     // --- 完了済み: 実際にかかった工数で置き換える
+    let reported = actual.spent.filter(|v| v.is_finite() && *v >= 0.0);
     if let Some(end) = actual.end_day {
-        let spent = match actual.start_day {
-            Some(start) => calendar.capacity_between(start, end),
+        let spent = match (reported, actual.start_day) {
+            (Some(spent), _) => spent,
+            (None, Some(start)) => calendar.capacity_between(start, end),
             // 着手日が無いと消化量を測れないので、当初の最可能値で代用する。
-            None => original.likely(),
+            (None, None) => original.likely(),
         };
         return done(spent, original);
     }
 
     // --- 進捗 100%: 完了日が未入力でも完了として扱う
     if progress >= 1.0 {
-        let spent = match actual.start_day {
-            Some(start) => calendar.capacity_between(start, today),
-            None => 0.0,
+        let spent = match (reported, actual.start_day) {
+            (Some(spent), _) => spent,
+            (None, Some(start)) => calendar.capacity_between(start, today - 1),
+            (None, None) => 0.0,
         };
         return done(spent, original);
     }
 
-    // --- 未着手: 着手日も進捗も無ければ、当初の見積もりのまま
-    if actual.start_day.is_none() && progress <= 0.0 {
+    // --- 未着手: 着手日も進捗も実績工数も無ければ、当初の見積もりのまま
+    if actual.start_day.is_none() && progress <= 0.0 && reported.is_none() {
         return Forecast {
             estimate: original,
             remaining: original,
@@ -204,21 +223,27 @@ pub fn forecast(
     // 消化工数はカレンダーで測る。着手日が無い、あるいは着手日が計算期間の
     // 外にあって測れないときは、予定どおりに進んだものとみなす。
     // そうしないと「タダで 25% 進んだ」= 総工数が減った、と読めてしまう。
-    let measured = match actual.start_day {
+    //
+    // 測るのは**基準日の前日まで**。基準日は「その朝の時点で」の意味で、
+    // 日程はこの日から残りを積む (`abi::handle`)。当日まで数えると、今日の
+    // 稼働を消化ぶんと残りの両方に使ってしまう。
+    let measured = match (reported, actual.start_day) {
+        (Some(spent), _) => spent,
         // 着手日が計算期間より前だと、測れるのは窓のなかだけになる。
         // 切り詰めた値をそのまま使うと、**窓の外で使った工数が黙って消える**
         // (3 か月前に着手したタスクが、今日着手したものと同じ数字になる)。
         // 測れないものとして扱い、下の `progress * baseline` に倒す。
-        Some(start) if start < calendar.start_day() => 0.0,
-        Some(start) => calendar.capacity_between(start, today),
-        None => 0.0,
+        (None, Some(start)) if start < calendar.start_day() => 0.0,
+        (None, Some(start)) => calendar.capacity_between(start, today - 1),
+        (None, None) => 0.0,
     };
     let baseline = if planned.is_finite() && planned > 0.0 {
         planned
     } else {
         original.likely()
     };
-    let spent = if measured > 0.0 {
+    // 申告された実績は 0 でもそのまま使う (「まだ手を付けていない」も実績)。
+    let spent = if reported.is_some() || measured > 0.0 {
         measured
     } else {
         progress * baseline
@@ -338,6 +363,7 @@ mod tests {
             start_day: Some(day(10)),
             progress: 0.25,
             end_day: None,
+            spent: None,
         };
         let f = plan(original, &actual, &calendar(), day(0));
 
@@ -363,6 +389,7 @@ mod tests {
             start_day: None,
             progress: 0.5,
             end_day: None,
+            spent: None,
         };
         let f = plan(original, &actual, &calendar(), day(0));
         assert_eq!(f.remaining, est(2.0, 4.0, 6.0));
@@ -387,6 +414,7 @@ mod tests {
             start_day: Some(day(0)),
             progress: 1.0,
             end_day: None,
+            spent: None,
         };
         let f = plan(original, &actual, &calendar(), day(3));
         assert_eq!(f.remaining.max(), 0.0, "日程が消化するものは残っていない");
@@ -413,6 +441,7 @@ mod tests {
             start_day: Some(day(0)),
             progress: 1.0,
             end_day: Some(day(4)),
+            spent: None,
         };
         let f = plan(est(5.0, 8.0, 20.0), &actual, &calendar(), day(10));
         assert_eq!(f.state, TaskState::Done);
@@ -428,6 +457,7 @@ mod tests {
             start_day: Some(day(4)),
             progress: 1.0,
             end_day: Some(day(8)),
+            spent: None,
         };
         let f = plan(est(1.0, 2.0, 9.0), &actual, &calendar(), day(20));
         assert_eq!(f.spent, 3.0);
@@ -439,8 +469,10 @@ mod tests {
             start_day: Some(day(0)),
             progress: 1.0,
             end_day: None,
+            spent: None,
         };
-        let f = plan(est(5.0, 8.0, 20.0), &actual, &calendar(), day(2));
+        // 基準日は「その朝」なので、消化は前日 (水) まで = 月〜水の 3 日。
+        let f = plan(est(5.0, 8.0, 20.0), &actual, &calendar(), day(3));
         assert_eq!(f.state, TaskState::Done);
         assert_eq!(f.spent, 3.0);
         assert!(f.estimate.is_degenerate());
@@ -454,8 +486,9 @@ mod tests {
             start_day: Some(day(0)),
             progress: 0.5,
             end_day: None,
+            spent: None,
         };
-        let f = plan(original, &actual, &calendar(), day(3)); // 月〜木 = 4 人日
+        let f = plan(original, &actual, &calendar(), day(4)); // 金曜の朝 = 月〜木 = 4 人日
         assert_eq!(f.spent, 4.0);
         assert!((f.estimate.likely() - 8.0).abs() < 1e-12, "{f:?}");
         // 幅は半分に縮む。
@@ -471,8 +504,9 @@ mod tests {
             start_day: Some(day(0)),
             progress: 0.5,
             end_day: None,
+            spent: None,
         };
-        let f = plan(original, &actual, &calendar(), day(9)); // 8 稼働日
+        let f = plan(original, &actual, &calendar(), day(10)); // 前日までに 8 稼働日
         assert_eq!(f.spent, 8.0);
         // (1-0.5)*8 + 8 = 12
         assert!((f.estimate.likely() - 12.0).abs() < 1e-12);
@@ -486,8 +520,9 @@ mod tests {
             start_day: Some(day(0)),
             progress: 0.1,
             end_day: None,
+            spent: None,
         };
-        let f = plan(original, &actual, &calendar(), day(11)); // 10 稼働日
+        let f = plan(original, &actual, &calendar(), day(12)); // 前日までに 10 稼働日
         assert_eq!(f.spent, 10.0);
         assert!(
             f.estimate.min() >= f.spent,
@@ -506,6 +541,7 @@ mod tests {
                 start_day: Some(day(0)),
                 progress: step as f64 / 10.0,
                 end_day: None,
+                spent: None,
             };
             let f = plan(original, &actual, &calendar(), day(3));
             let width = f.estimate.max() - f.estimate.min();
@@ -526,6 +562,7 @@ mod tests {
                         start_day: Some(day(offset)),
                         progress,
                         end_day: end,
+                        spent: None,
                     };
                     let f = plan(original, &actual, &cal, day(10));
                     let e = f.estimate;
@@ -543,9 +580,90 @@ mod tests {
             start_day: None,
             progress: 1.0,
             end_day: Some(day(5)),
+            spent: None,
         };
         let f = plan(est(5.0, 8.0, 20.0), &actual, &calendar(), day(10));
         assert_eq!(f.state, TaskState::Done);
         assert_eq!(f.spent, 8.0, "最可能値で代用する");
+    }
+
+    /// 基準日の稼働は、消化ぶんに数えない。
+    ///
+    /// 日程は基準日から残りを積むので、当日まで消化に数えると今日の稼働を
+    /// 二重に使うことになる。今日着手したタスクは、まだ何も消化していない。
+    #[test]
+    fn the_reference_day_itself_is_not_counted_as_spent() {
+        let original = est(4.0, 8.0, 12.0);
+        let actual = Actual {
+            start_day: Some(day(2)),
+            progress: 0.0,
+            end_day: None,
+            spent: None,
+        };
+        let f = plan(original, &actual, &calendar(), day(2));
+        assert_eq!(f.spent, 0.0, "{f:?}");
+        assert_eq!(f.remaining, original);
+    }
+
+    /// 日報で分かっている実績工数は、カレンダーで測った値より優先する。
+    ///
+    /// シミュレーションで見つかったもの。兼務の人が 2 週間で 3 人日しか
+    /// 使っていないのに、カレンダーからは 10 人日と測られ、総工数と進捗が
+    /// 実際と大きくずれていた。
+    #[test]
+    fn a_reported_effort_overrides_the_calendar() {
+        let original = est(5.0, 8.0, 20.0);
+        let actual = Actual {
+            start_day: Some(day(0)),
+            progress: 0.5,
+            end_day: None,
+            spent: Some(3.0),
+        };
+        let f = plan(original, &actual, &calendar(), day(14));
+        assert_eq!(f.spent, 3.0, "カレンダーの 10 人日ではなく申告の 3 人日");
+        assert!((f.estimate.likely() - 7.0).abs() < 1e-12, "(1-0.5)*8 + 3 = 7");
+        assert_eq!(f.state, TaskState::InProgress);
+    }
+
+    #[test]
+    fn a_reported_effort_is_the_total_of_a_finished_task() {
+        let actual = Actual {
+            start_day: Some(day(0)),
+            progress: 1.0,
+            end_day: Some(day(9)),
+            spent: Some(6.5),
+        };
+        let f = plan(est(5.0, 8.0, 20.0), &actual, &calendar(), day(20));
+        assert_eq!(f.state, TaskState::Done);
+        assert_eq!(f.estimate.likely(), 6.5);
+    }
+
+    /// 着手日も進捗も無くても、使った工数が分かっていれば着手済み。
+    #[test]
+    fn a_reported_effort_alone_marks_the_task_as_started() {
+        let original = est(2.0, 3.0, 5.0);
+        let actual = Actual {
+            spent: Some(1.0),
+            ..Actual::default()
+        };
+        let f = plan(original, &actual, &calendar(), day(3));
+        assert_eq!(f.state, TaskState::InProgress);
+        assert_eq!(f.spent, 1.0);
+        assert_eq!(f.remaining, original, "進捗 0% なので残りは当初のまま");
+    }
+
+    /// 不正な申告 (負・NaN) は、無かったものとして扱う。
+    #[test]
+    fn an_invalid_reported_effort_is_ignored() {
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            let actual = Actual {
+                start_day: Some(day(0)),
+                progress: 0.5,
+                end_day: None,
+                spent: Some(bad),
+            };
+            let f = plan(est(5.0, 8.0, 20.0), &actual, &calendar(), day(4));
+            assert_eq!(f.spent, 4.0, "{bad}");
+        }
     }
 }
