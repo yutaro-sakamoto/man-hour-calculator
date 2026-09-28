@@ -19,11 +19,11 @@ import {
 } from "../format.ts";
 import { lang, t } from "../i18n.ts";
 import { stateOfProgress, type Progress } from "../model/progress.ts";
-import { collectGroups, type TreeRow } from "../model/tree.ts";
+import { collectGroups, moveToFirst, type TreeRow } from "../model/tree.ts";
 import type { ScheduleRow } from "../model/schedule.ts";
 import type { TaskState } from "../types.ts";
 import { commentButton } from "./comments.ts";
-import { checkbox, field, foldout, h, iconButton, openLink } from "./dom.ts";
+import { button, checkbox, field, foldout, h, iconButton, openLink } from "./dom.ts";
 import { sparkline } from "./sparkline.ts";
 import {
   assigneeField,
@@ -366,6 +366,17 @@ export function renderTaskDetailModal(state: AppState, actions: AppActions): HTM
         h("span", { class: `pill pill-${taskState}`, text: t(`state.${taskState}`) }),
         row.hasChildren ? h("span", { class: "chip muted", text: t("detail.group") }) : null,
         h("span", { class: "spacer" }),
+        canWrite(state) && at > 0
+          ? button(
+              t("detail.moveFirst"),
+              () => {
+                actions.mutate((document) => {
+                  document.tasks = moveToFirst(document.tasks, row.task.id);
+                });
+              },
+              { class: "small", title: t("detail.moveFirstHint") },
+            )
+          : null,
         commentButton(state, actions, row.task.id, t("comments.taskButton")),
         iconButton(
           "←",

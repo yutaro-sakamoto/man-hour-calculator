@@ -10,6 +10,7 @@ import {
   indentTask,
   insertAfterSubtree,
   moveSubtree,
+  moveToFirst,
   outdentTask,
   parseEstimate,
   removeSubtree,
@@ -245,4 +246,17 @@ test("自分より下の行を待つ前提と、計算から外した行は落�
   const off = createTask({ name: "off", enabled: false });
   const c = createTask({ name: "c", after: [off.id] });
   assert.deepEqual(dependencyPairs(buildRows([a, b, off, c])), []);
+});
+
+test("最初に着手する: 同じ親の下で一番上に動く", () => {
+  const parent = createTask({ name: "p" });
+  const a = createTask({ name: "a", parentId: parent.id });
+  const b = createTask({ name: "b", parentId: parent.id });
+  const c = createTask({ name: "c", parentId: parent.id });
+  const other = createTask({ name: "other" });
+  const moved = moveToFirst([parent, a, b, c, other], c.id);
+  assert.deepEqual(
+    moved.map((task) => task.name),
+    ["p", "c", "a", "b", "other"],
+  );
 });

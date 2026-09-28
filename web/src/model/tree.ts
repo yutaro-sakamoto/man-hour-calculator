@@ -311,3 +311,23 @@ export function dependencyPairs(rows: readonly TreeRow[]): [number, number][] {
   }
   return pairs;
 }
+
+/**
+ * 同じ親の下で一番上へ動かす (部分木ごと)。
+ *
+ * 途中で割り込んだ緊急のタスクを先に着手させるのに、↑ を何度も押して
+ * いた (追加 1 件に 15 操作)。1 回で済むようにする。
+ */
+export function moveToFirst(tasks: Task[], id: string): Task[] {
+  let current = tasks;
+  // 1 回で 1 つ上がる。兄弟の数より多くは回らない (止まったら終わり)。
+  let index = current.findIndex((task) => task.id === id);
+  while (index > 0) {
+    const next = moveSubtree(current, index, -1);
+    const moved = next.findIndex((task) => task.id === id);
+    if (moved === index) break;
+    current = next;
+    index = moved;
+  }
+  return current;
+}

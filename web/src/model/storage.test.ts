@@ -293,11 +293,14 @@ test("担当者と実績工数は書き出して読み戻せる。完了日が�
 
 test("Shift_JIS の CSV は Shift_JIS として読む (UTF-8 として化けさせない)", async () => {
   // 「設計」を Shift_JIS で書いたもの。
-  const bytes = new Uint8Array([
-    0x6e, 0x61, 0x6d, 0x65, 0x0a, 0x90, 0xdd, 0x8c, 0x76,
-  ]);
+  const bytes = new Uint8Array([0x6e, 0x61, 0x6d, 0x65, 0x0a, 0x90, 0xdd, 0x8c, 0x76]);
   assert.equal(await readCsvText(new Blob([bytes])), "name\n設計");
   // UTF-8 (BOM 付き) はそのまま。BOM は落とす。
   const utf8 = new Blob([new Uint8Array([0xef, 0xbb, 0xbf]), "name\n設計"]);
   assert.equal(await readCsvText(utf8), "name\n設計");
+});
+
+test("親の行に書いた見積もりは使わないが、数えて知らせる", () => {
+  const result = readCsv("level,name,min,likely,max\n0,移行,1,2,4\n1,手順書,1,1,2\n0,単独,1,2,3");
+  assert.equal(result.parentEstimates, 1);
 });

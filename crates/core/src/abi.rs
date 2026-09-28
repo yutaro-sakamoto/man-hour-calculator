@@ -595,8 +595,7 @@ fn widen_for_waits(
     grid_hi: &mut [f64],
     forecasts: &[actuals::Forecast],
     assignees: &[usize],
-    preds: &[Vec<usize>],
-    cumulative: &[Vec<f64>],
+    waits: &montecarlo::Waits<'_>,
 ) {
     let maxima: Vec<f64> = forecasts.iter().map(|f| f.remaining.max()).collect();
     let bound = montecarlo::upper_ends(
@@ -605,9 +604,9 @@ fn widen_for_waits(
             members: assignees,
             grid_hi,
         },
-        &montecarlo::Waits { preds, cumulative },
+        waits,
     );
-    for ((slot, line), &end) in grid_hi.iter_mut().zip(cumulative).zip(&bound) {
+    for ((slot, line), &end) in grid_hi.iter_mut().zip(waits.cumulative).zip(&bound) {
         let whole = line.last().copied().unwrap_or(0.0);
         let reach = if end.is_finite() {
             end.min(whole.max(*slot))
@@ -616,6 +615,40 @@ fn widen_for_waits(
         };
         *slot = slot.max(reach);
     }
+}
+
+/// 着手を待たせる条件 (前提と、未来の着手日)。どちらも無ければ `None`。
+///
+/// 未来の着手日は、その前日までの担当者の稼働を「使えない」位置にする。
+/// 入れても黙って無視していたころは、着手日より前に完了する予測が出ていた。
+fn start_limits(
+    request: &Request,
+    forecasts: &[actuals::Forecast],
+    cumulative: &[Vec<f64>],
+) -> Option<(Vec<Vec<usize>>, Vec<f64>)> {
+    let not_before: Vec<f64> = request
+        .tasks
+        .iter()
+        .zip(forecasts)
+        .map(|(task, forecast)| match task.start_day {
+            Some(start) if forecast.state == TaskState::NotStarted && start > request.today_day => {
+                let line = cumulative.get(task.assignee).map_or(&[][..], Vec::as_slice);
+                let before = start - request.calendar.start_day - 1;
+                usize::try_from(before)
+                    .ok()
+                    .map_or(0.0, |at| line.get(at).copied().unwrap_or(f64::INFINITY))
+            }
+            _ => 0.0,
+        })
+        .collect();
+    let preds = request.predecessors();
+    if preds.is_none() && not_before.iter().all(|&v| v == 0.0) {
+        return None;
+    }
+    Some((
+        preds.unwrap_or_else(|| vec![Vec::new(); request.tasks.len()]),
+        not_before,
+    ))
 }
 
 /// 前提の区画を読む。範囲外や、自分より下のタスクを待つものは捨てる。
@@ -731,33 +764,31 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     }
     // --- 前提。あれば、待ちを試行ごとに解くのでモンテカルロで回す
     // (畳み込みは「担当者ごとの工数の和」しか扱えず、日を待つことを表せない)。
-    let predecessors = request.predecessors();
     let cumulative: Vec<Vec<f64>> = calendars
         .iter()
         .map(|calendar| calendar.cumulative_from(request.today_day))
         .collect();
-    if let Some(preds) = predecessors.as_deref() {
-        widen_for_waits(
-            &mut member_grid_hi,
-            &forecasts,
-            &assignees,
-            preds,
-            &cumulative,
-        );
+    let limits = start_limits(&request, &forecasts, &cumulative);
+    let waits_needed = limits.is_some();
+    let (preds, not_before) = limits.unwrap_or_default();
+    let waits = montecarlo::Waits {
+        preds: &preds,
+        cumulative: &cumulative,
+        not_before: &not_before,
+    };
+    if waits_needed {
+        widen_for_waits(&mut member_grid_hi, &forecasts, &assignees, &waits);
     }
     let assignment = Assignment {
         members: &assignees,
         grid_hi: &member_grid_hi,
     };
-    let engine = if predecessors.is_some() {
+    let engine = if waits_needed {
         Engine::MonteCarlo
     } else {
         request.engine
     };
-    let waits = predecessors.as_deref().map(|preds| montecarlo::Waits {
-        preds,
-        cumulative: &cumulative,
-    });
+    let waits = waits_needed.then_some(waits);
 
     // --- 分布を求める
     let spec = PrefixSpec {
@@ -1587,6 +1618,25 @@ mod tests {
         assert!(done_by(&resp, 0, 2) > 0.99);
         // 総工数は待ちに関係なく 5 人日。
         assert!((resp.percentiles()[4] - 5.0).abs() < 1e-9);
+    }
+
+    /// 未来の着手日は、その日より前に仕事を始めさせない。
+    ///
+    /// シミュレーションで見つかったもの。着手日を入れても黙って無視され、
+    /// 着手日より前に完了する予測が出ていた。
+    #[test]
+    fn a_future_start_date_holds_the_task_back() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.tasks = vec![TaskInput {
+            start_day: Some(monday() + 7),
+            ..TaskInput::estimate_only(1.0, 1.0, 1.0)
+        }];
+        r.prefix_bins = 1024;
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert!(done_by(&resp, 0, 4) < 0.01, "着手日の前の週に終わっている");
+        assert!(done_by(&resp, 0, 7) > 0.99, "着手日の当日に終わる");
     }
 
     /// 自分より下のタスクを待つ前提は効かない (循環を作らせない)。

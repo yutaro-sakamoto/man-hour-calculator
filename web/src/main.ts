@@ -119,6 +119,7 @@ const state: AppState = {
   calendarMember: null,
   editingEventId: null,
   editingEventDay: null,
+  editingEventIsNew: false,
   expandedDay: null,
   connectionDraft: null,
   comments: [],
@@ -214,9 +215,9 @@ interface Computed {
 function runEngine(document: ProjectDocument): Computed {
   const rows = buildRows(document.tasks);
   const leaves = rows.filter((row) => row.leafIndex !== null);
-  const broken = invalidRows(rows);
-  if (broken.length > 0)
-    throw new EngineUnavailable(t("error.invalidRows", { count: broken.length }), "error");
+  // 見積もりが未入力・読めない行は、**除いて計算する**。1 件のために全体の
+  // 数字を伏せていたころは、上の帯が全部「—」になり、どの行が悪いのかも
+  // 分かりにくかった。除いたことは状態表示と行の印で知らせる (`recompute`)。
   // **「まだ無い」と「あるのに選ばれていない」を分ける。** 前者で
   // 「選んでください」と言っても、選ぶものが無い。次にやることが
   // 変わるのだから、言うことも変える。
@@ -305,6 +306,11 @@ function recompute(): void {
   state.schedule = withDueDate(computed.schedule, dayFromIso(openDueDate()));
   if (state.calendarMember !== null && state.calendarMember >= state.members.all.length) {
     state.calendarMember = null;
+  }
+  const broken = invalidRows(computed.rows);
+  if (broken.length > 0) {
+    setStatus(t("error.invalidRows", { count: broken.length }), "error");
+    return;
   }
   setStatus(
     t("status.done", {
@@ -602,6 +608,9 @@ async function importCsv(file: File, mode: "replace" | "new"): Promise<void> {
     notes.push(t("file.csvFilled", { count: imported.filledEstimates }));
   }
   if (imported.unreadable > 0) notes.push(t("file.csvUnreadable", { count: imported.unreadable }));
+  if (imported.parentEstimates > 0) {
+    notes.push(t("file.csvParentEstimates", { count: imported.parentEstimates }));
+  }
   // UTF-8 でも Shift_JIS でもない (あるいは途中が壊れた) ときに出る置換文字。
   const garbled = text.includes("\uFFFD");
   if (garbled) notes.push(t("file.csvGarbled"));

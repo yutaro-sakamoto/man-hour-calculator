@@ -285,6 +285,11 @@ export interface CsvImport {
   filledEstimates: number;
   /** 見積もりが読めなかった行の数。 */
   unreadable: number;
+  /**
+   * 子を持つ行に書かれていた見積もりの数。親は配下の合計なので使わない。
+   * 黙って捨てると、Excel で小計行に書いた値がどこへ行ったか分からない。
+   */
+  parentEstimates: number;
 }
 
 /** CSV からタスク一覧を復元する。level 列から親子関係を組み直す。 */
@@ -338,7 +343,14 @@ export function readCsv(
 ): CsvImport {
   const members = options.members ?? [];
   const hoursPerDay = options.hoursPerDay ?? 8;
-  const result: CsvImport = { tasks: [], unknownAssignees: [], filledEstimates: 0, unreadable: 0 };
+  const result: CsvImport = {
+    tasks: [],
+    unknownAssignees: [],
+    filledEstimates: 0,
+    unreadable: 0,
+    parentEstimates: 0,
+  };
+  const written = new Set<string>();
   const rows = parseCsv(text);
   const first = rows[0];
   if (!first) return result;
@@ -369,6 +381,9 @@ export function readCsv(
       { min: at(cells, "min"), likely: at(cells, "likely"), max: at(cells, "max") },
       hoursPerDay,
     );
+    if ([at(cells, "min"), at(cells, "likely"), at(cells, "max")].some((v) => v !== "")) {
+      written.add(String(tasks.length));
+    }
     if (estimate.filled) result.filledEstimates += 1;
     if (estimate.unreadable) result.unreadable += 1;
     const assigneeName = unquoteFormula(raw(cells, "assignee")).normalize("NFKC").trim();
@@ -398,6 +413,10 @@ export function readCsv(
     parents.length = depth + 1;
   }
   result.unknownAssignees = [...unknown];
+  const parentIds = new Set(tasks.map((task) => task.parentId).filter((id) => id !== null));
+  result.parentEstimates = tasks.filter(
+    (task, index) => parentIds.has(task.id) && written.has(String(index)),
+  ).length;
   return result;
 }
 

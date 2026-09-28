@@ -1977,3 +1977,41 @@ td select.assignee {
     margin-bottom: 8px;
   }
 }
+
+/* ===== 狭い画面 ===== */
+.mobile-meta {
+  display: none;
+}
+@media (max-width: 720px) {
+  /* タブは折り返す。横に流すと「見通し」が画面の外に隠れていた。 */
+  .tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+  .tabs button {
+    padding: 6px 10px 8px;
+  }
+  /*
+   * タスクの表は「使用・名前・状態」だけを残し、進捗・担当・完了予測は
+   * 名前の下の 1 行に寄せる。列を横に流すと、要る数字が画面の外に出ていた。
+   */
+  .task-table {
+    min-width: 0;
+  }
+  .task-table th:nth-child(n + 4),
+  .task-table td:nth-child(n + 4) {
+    display: none;
+  }
+  .task-table .name-cell {
+    min-width: 0;
+  }
+  .task-table .name-inner {
+    flex-wrap: wrap;
+  }
+  .mobile-meta {
+    display: block;
+    flex-basis: 100%;
+    font-size: 12px;
+    color: var(--ink-muted);
+  }
+}

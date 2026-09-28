@@ -26,9 +26,36 @@ const openTab = (page, tab) => page.click(`.tabs button[data-tab="${tab}"]`);
 /** 畳んであるカードを id で開く。言語に依らないので、英語の画面でも使える。 */
 async function openCard(page, id) {
   // `foldout` (カードそのもの) と `subfold` (カードの中の節) の両方。
-  const panel = page.locator(`details#${id}`);
-  if (await panel.evaluate((node) => node.open)) return;
-  await panel.locator("summary").click();
+  await openDetails(page.locator(`details#${id}`));
+}
+
+/**
+ * 畳みを開く。**外側の畳みから順に**開く (チームで使う設定のように、
+ * 畳みの中に畳みがあるため。外が閉じたままだと中の見出しは押せない)。
+ */
+async function openDetails(panel) {
+  const page = panel.page();
+  // 1 段開くたびに描き直されうるので、毎回いちばん外の閉じた畳みを探し直す。
+  for (let step = 0; step < 5; step++) {
+    const id = await panel.evaluate((node) => {
+      let outer = null;
+      for (
+        let at = node;
+        at !== null;
+        at = at.parentElement?.closest("details") ?? null
+      ) {
+        if (!at.open) outer = at;
+      }
+      document.querySelectorAll("[data-open-next]").forEach((element) => {
+        element.removeAttribute("data-open-next");
+      });
+      if (outer === null) return null;
+      outer.setAttribute("data-open-next", "");
+      return true;
+    });
+    if (id === null) break;
+    await page.locator("details[data-open-next] > summary").click();
+  }
   await expect(panel).toHaveAttribute("open", "");
 }
 
@@ -736,7 +763,7 @@ test("プロジェクトを改名・複製・削除できる", async ({ page }) 
   await open(page);
   await openTab(page, "projects");
 
-  const nameInput = page.locator("tr[data-project] input").first();
+  const nameInput = page.locator('tr[data-project] input[type="text"]').first();
   await nameInput.fill("名前を変えた案件");
   await nameInput.blur();
   await expect(page.locator(".project-picker option").first()).toHaveText(
@@ -749,7 +776,9 @@ test("プロジェクトを改名・複製・削除できる", async ({ page }) 
     .click();
   await expect(page.locator("tr[data-project]")).toHaveCount(2);
   await expect(
-    page.locator('tr[data-project][data-open="true"] input').first(),
+    page
+      .locator('tr[data-project][data-open="true"] input[type="text"]')
+      .first(),
   ).toHaveValue(/のコピー/);
   // 複製した中身も引き継がれる。
   await openTab(page, "tasks");
@@ -1212,14 +1241,12 @@ async function addProject(page, name, due) {
  * 開いているものをもう一度押すと閉じてしまう。
  */
 async function openPanel(page, title) {
+  // 見出しそのもので選ぶ。中身の文字で選ぶと、それを含む外側の畳みに当たる。
   const panel = page
     .locator("details.foldout")
-    .filter({ hasText: title })
+    .filter({ has: page.locator(":scope > summary", { hasText: title }) })
     .first();
-  if (!(await panel.evaluate((element) => element.open))) {
-    await panel.locator("summary").click();
-  }
-  await expect(panel).toHaveAttribute("open", "");
+  await openDetails(panel);
 }
 
 const listRow = (page, name) =>

@@ -14,13 +14,16 @@ const ja = {
   "file.exportCsv": "CSV で書き出す",
   "file.importCsv": "CSV で今のタスクを置き換える…",
   "file.importCsvNew": "CSV から別のプロジェクトを作る…",
-  "file.confirmReplace": "「{name}」のタスク {count} 件を、CSV の {next} 件で置き換えます。元に戻せません。よろしいですか? (残したいときは「CSV から別のプロジェクトを作る」を使ってください)",
+  "file.confirmReplace":
+    "「{name}」のタスク {count} 件を、CSV の {next} 件で置き換えます。元に戻せません。よろしいですか? (残したいときは「CSV から別のプロジェクトを作る」を使ってください)",
   "file.importedCsv": "{name} から {count} 件のタスクを読み込みました。",
   "file.csvNewMembers": "担当者の列にあった {names} を人員に追加しました (稼働時間は既定のまま)。",
   "file.csvFilled": "見積もりが 1 点か 2 点しか無い {count} 行は、ある値から残りを補いました。",
   "file.csvUnreadable": "見積もりが読めない行が {count} 件あります。赤い行を直してください。",
   "file.csvGarbled":
     "文字が化けている可能性があります。Excel では「CSV UTF-8」で保存し直してください。",
+  "file.csvParentEstimates":
+    "親の行に書かれていた見積もり {count} 件は使っていません (親は配下の合計です)。",
   "file.projectName": "プロジェクト名",
   "file.badFile": "このファイルは読み込めませんでした。",
   "file.imported": "{name} を読み込みました。",
@@ -67,6 +70,13 @@ const ja = {
   "projects.slack": "余裕",
   "projects.slackDays": "余裕 {days} 日",
   "projects.updatedAt": "更新 {at}",
+  "projects.editedAt": "最終入力 {at}",
+  "projects.onHold": "保留にする",
+  "projects.onHoldHint":
+    "止めている案件は「保留」として一覧に出し、遅延と見分けます。再開したら外してください。",
+  "projects.teamSettings": "チームで使う設定 (共有・アカウント・サーバ)",
+  "projects.teamSettingsHint":
+    "1 人で、このブラウザだけで使うなら触らなくてかまいません。複数人で共有するときに使います。",
   "projects.slackShort": "期限より {days} 日遅れる見込み",
   "projects.slackSpare": "期限まで {days} 日の余裕",
   "projects.progress": "進捗",
@@ -300,6 +310,7 @@ const ja = {
   "tasks.totals":
     "計算に使う末端のタスク {count} 件 (親の行は数えません) / 最小 {min} ・ 最可能 {likely} ・ 最大 {max} {unit}",
   "tasks.unreadableEstimate": "読めません",
+  "tasks.missingEstimate": "見積もり未入力",
   "tasks.sortByPriority": "優先度順に並べ替え",
 
   "col.use": "使用",
@@ -330,13 +341,17 @@ const ja = {
   "cal.basics": "基本設定",
   "cal.start": "開始日",
   "cal.today": "基準日 (今日)",
+  "cal.startHint": "計算する期間の初日。これより前の実績は測りません。",
+  "cal.todayHint":
+    "その日の朝の時点として見通しを出します。残りの仕事はこの日から積みます。開くたびに今日に戻ります。",
   "cal.horizon": "計算する日数",
   "cal.hoursPerPersonDay": "1 人日の時間",
   "cal.useHolidays": "日本の祝日を休みにする",
-  "cal.capacityPerDay": "全員あわせて 1 日あたり {value} 人日",
+  "cal.capacityPerDay": "全員あわせて 1 日あたり {value} 人日 (土日・祝日も含めた平均)",
   "cal.totalCapacity": "期間全体で {value} 人日",
   "cal.events": "予定",
-  "cal.addEvent": "予定を追加",
+  "cal.addEvent": "この予定を追加",
+  "cal.cancelNew": "やめる",
   "cal.addEventOn": "{date} に予定を追加",
   "cal.newEventName": "新しい予定",
   "cal.untitledEvent": "(名前なし)",
@@ -465,6 +480,8 @@ const ja = {
   "detail.spentInvalid": "読めません。3.5 や 28h の形で入れてください。",
   "detail.addHours": "今回の作業時間 (h) を足す",
   "detail.addHoursButton": "足す",
+  "detail.moveFirst": "最初に着手する",
+  "detail.moveFirstHint": "同じ親の下で一番上に動かします (上から順に着手するため)。",
   "detail.after": "前提 (これが終わってから着手)",
   "detail.afterHint":
     "一覧で上にあるタスクだけを選べます。親を選ぶと、その配下がすべて終わるのを待ちます。前提があると、計算はモンテカルロで行います。",
@@ -503,7 +520,7 @@ const ja = {
   "error.8":
     "人員の指定が不正です。1 人以上 30 人以下で、期間 × 人数が大きすぎないようにしてください。",
   "error.invalidRows":
-    "{count} 件のタスクで見積もりが読めません。赤い行を直すか、「使用」を外すと計算できます。",
+    "{count} 件のタスクは見積もりが未入力か読めないため、計算に入れていません。印の付いた行を直してください。",
   "error.unknown": "未知のエラー (コード {code}) が発生しました。",
   "error.boot": "WASM の読み込みに失敗しました: {message}",
 
@@ -571,7 +588,8 @@ const en: Dictionary = {
   "file.exportCsv": "Export CSV",
   "file.importCsv": "Replace tasks from CSV…",
   "file.importCsvNew": "Create a project from CSV…",
-  "file.confirmReplace": "Replace the {count} tasks in “{name}” with {next} tasks from the CSV? This cannot be undone. (To keep them, use “Create a project from CSV”.)",
+  "file.confirmReplace":
+    "Replace the {count} tasks in “{name}” with {next} tasks from the CSV? This cannot be undone. (To keep them, use “Create a project from CSV”.)",
   "file.importedCsv": "Imported {count} tasks from {name}.",
   "file.csvNewMembers": "Added {names} from the assignee column as people (default working hours).",
   "file.csvFilled":
@@ -579,6 +597,8 @@ const en: Dictionary = {
   "file.csvUnreadable":
     "{count} row(s) have estimates that could not be read. Fix the rows marked in red.",
   "file.csvGarbled": "The text may be garbled. In Excel, save again as “CSV UTF-8”.",
+  "file.csvParentEstimates":
+    "Ignored estimates on {count} parent row(s) (a parent is the total of its children).",
   "file.projectName": "Project name",
   "file.badFile": "That file could not be read.",
   "file.imported": "Loaded {name}.",
@@ -625,6 +645,13 @@ const en: Dictionary = {
   "projects.slack": "Slack",
   "projects.slackDays": "{days} d slack",
   "projects.updatedAt": "Updated {at}",
+  "projects.editedAt": "Last edited {at}",
+  "projects.onHold": "On hold",
+  "projects.onHoldHint":
+    "A paused project shows as “On hold” in the list, so it is not mistaken for a late one. Untick when work resumes.",
+  "projects.teamSettings": "Team settings (sharing, accounts, server)",
+  "projects.teamSettingsHint":
+    "If you use this alone in this browser, you can leave these alone. They are for sharing with others.",
   "projects.slackShort": "Expected to miss the due date by {days} days",
   "projects.slackSpare": "{days} days of slack before the due date",
   "projects.progress": "Progress",
@@ -860,6 +887,7 @@ const en: Dictionary = {
   "tasks.totals":
     "{count} leaf task(s) in use (parent rows are not counted) / min {min} · likely {likely} · max {max} {unit}",
   "tasks.unreadableEstimate": "Unreadable",
+  "tasks.missingEstimate": "No estimate yet",
   "tasks.sortByPriority": "Sort by priority",
 
   "col.use": "Use",
@@ -890,13 +918,18 @@ const en: Dictionary = {
   "cal.basics": "Basics",
   "cal.start": "Start date",
   "cal.today": "Reference date (today)",
+  "cal.startHint": "First day of the projected range. Actuals before it are not measured.",
+  "cal.todayHint":
+    "The forecast is as of the morning of this day; remaining work is scheduled from here. It resets to today each time you open the project.",
   "cal.horizon": "Days to project",
   "cal.hoursPerPersonDay": "Hours per person-day",
   "cal.useHolidays": "Treat Japanese public holidays as days off",
-  "cal.capacityPerDay": "{value} person-days per day across everyone",
+  "cal.capacityPerDay":
+    "{value} person-days per day for everyone (averaged over all days, including weekends and holidays)",
   "cal.totalCapacity": "{value} person-days over the whole range",
   "cal.events": "Events",
-  "cal.addEvent": "Add event",
+  "cal.addEvent": "Add this event",
+  "cal.cancelNew": "Cancel",
   "cal.addEventOn": "Add an event on {date}",
   "cal.newEventName": "New event",
   "cal.untitledEvent": "(untitled)",
@@ -1030,6 +1063,8 @@ const en: Dictionary = {
   "detail.spentInvalid": "Not a number. Use a form like 3.5 or 28h.",
   "detail.addHours": "Add hours worked",
   "detail.addHoursButton": "Add",
+  "detail.moveFirst": "Do this first",
+  "detail.moveFirstHint": "Moves it to the top among its siblings (tasks start top to bottom).",
   "detail.after": "Waits for (start after these finish)",
   "detail.afterHint":
     "Only tasks above this one can be chosen. Choosing a parent waits for everything under it. With any prerequisite, the forecast uses Monte Carlo.",
@@ -1068,7 +1103,7 @@ const en: Dictionary = {
   "error.8":
     "Invalid people setup — between 1 and 30, and the range times the headcount must not be too large.",
   "error.invalidRows":
-    "{count} task(s) have estimates that cannot be read. Fix the rows in red, or untick “Use”, to compute.",
+    "{count} task(s) are left out of the forecast because their estimates are missing or unreadable. Fix the marked rows.",
   "error.unknown": "Unexpected error (code {code}).",
   "error.boot": "Failed to load the WASM module: {message}",
 

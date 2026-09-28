@@ -36,6 +36,9 @@ pub struct Waits<'a> {
     pub preds: &'a [Vec<usize>],
     /// 担当者ごとの累積の稼働 (人日)。基準日より前は 0。
     pub cumulative: &'a [Vec<f64>],
+    /// タスクごとの、これより前には着手しない位置 (担当者の稼働の座標)。
+    /// 未来の着手日が入っているタスク用。無ければ 0。
+    pub not_before: &'a [f64],
 }
 
 impl Waits<'_> {
@@ -203,6 +206,7 @@ fn waited_start(
     ends: &[f64],
 ) -> f64 {
     let member = assignment.member_of(index);
+    let running = running.max(waits.not_before.get(index).copied().unwrap_or(0.0));
     let Some(preds) = waits.preds.get(index) else {
         return running;
     };

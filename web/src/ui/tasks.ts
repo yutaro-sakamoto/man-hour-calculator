@@ -274,6 +274,31 @@ function assigneeCell(state: AppState, actions: AppActions, row: TreeRow): HTMLE
   ]);
 }
 
+/**
+ * 狭い画面でだけ出す、名前の下の 1 行 (進捗・担当・完了予測)。
+ *
+ * スマホ幅では表の列が画面の外に出て、見積もりも担当も完了予測も、1 件ずつ
+ * 開かないと見えなかった。狭い画面では列を隠し、要るものをここに寄せる。
+ */
+function mobileMeta(
+  state: AppState,
+  row: TreeRow,
+  scheduleRow: ScheduleRow | undefined,
+): HTMLElement {
+  const l = lang();
+  const progress = row.hasChildren
+    ? formatPercent(scheduleRow?.progress.ratio ?? 0, l, 0)
+    : `${String(row.task.progress)}%`;
+  const finish =
+    state.schedule === null || scheduleRow?.marks.p80 == null
+      ? "—"
+      : formatDayShort(state.schedule.startDay + scheduleRow.marks.p80, l);
+  return h("span", {
+    class: "mobile-meta",
+    text: `${progress} · ${assigneeText(state, row)} · P80 ${finish}`,
+  });
+}
+
 function assigneeText(state: AppState, row: TreeRow): string {
   if (row.hasChildren) return "—";
   const id = row.task.assigneeId;
@@ -345,6 +370,7 @@ function renderRow(
         task.priority === "high"
           ? h("span", { class: "chip priority-high", text: t("priority.high") })
           : null,
+        mobileMeta(state, row, scheduleRow),
         task.after.length === 0
           ? null
           : h("span", {
@@ -365,7 +391,12 @@ function renderRow(
         : h("span", { text: estimateText(row) }),
       // 読めない見積もりは、その行で言う。上の帯の 1 行だけでは、どの行か分からない。
       row.active && !row.valid && !row.hasChildren
-        ? h("span", { class: "chip warn", text: t("tasks.unreadableEstimate") })
+        ? h("span", {
+            class: "chip warn",
+            text: [row.task.min, row.task.likely, row.task.max].every((v) => v.trim() === "")
+              ? t("tasks.missingEstimate")
+              : t("tasks.unreadableEstimate"),
+          })
         : null,
     ]),
     assigneeCell(state, actions, row),
@@ -430,7 +461,9 @@ function renderRow(
           (document, child) => {
             document.tasks = insertAfterSubtree(document.tasks, index, child);
           },
-          createTask({ parentId: task.id, group: task.group }),
+          // 見積もりは空で始める。仮の値を入れておくと、書き忘れたまま
+          // 合計に入ってしまう (未入力の行は計算から外し、印を付ける)。
+          createTask({ parentId: task.id, group: task.group, min: "", likely: "", max: "" }),
         );
       }),
       commentButton(state, actions, row.task.id, t("comments.taskButton")),
@@ -536,7 +569,7 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
             (document, task) => {
               document.tasks.push(task);
             },
-            createTask(),
+            createTask({ min: "", likely: "", max: "" }),
           );
         },
         { id: "add-row", class: "primary" },
