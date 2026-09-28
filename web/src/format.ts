@@ -117,6 +117,17 @@ export function formatPercent(fraction: number, lang: Lang, digits = 1): string 
   return `${formatNumber(fraction * 100, lang, digits)}%`;
 }
 
+/** 最小・最可能・最大の 3 つを「min – likely – max」の形にまとめる。 */
+export function formatEstimateRange(
+  min: number,
+  likely: number,
+  max: number,
+  lang: Lang,
+  digits?: number,
+): string {
+  return `${formatNumber(min, lang, digits)} – ${formatNumber(likely, lang, digits)} – ${formatNumber(max, lang, digits)}`;
+}
+
 const WEEKDAY_JA = ["日", "月", "火", "水", "木", "金", "土"] as const;
 const WEEKDAY_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
