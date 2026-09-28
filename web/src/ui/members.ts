@@ -122,6 +122,23 @@ function renderMember(
           },
         ),
       ]),
+      h("label", { class: "inline-field", attrs: { title: t("members.allocationHint") } }, [
+        h("span", { text: t("members.allocation") }),
+        numberInput(
+          member.allocation,
+          (value) => {
+            // 値だけを変える (1 打鍵ごとに作り直すとキャレットを失う)。
+            actions.edit((document) => {
+              const target = document.calendar.members[index];
+              if (target) target.allocation = Math.min(100, Math.max(0, Number(value) || 0));
+            });
+          },
+          {
+            dataset: { focus: `${member.id}:allocation` },
+            attrs: { min: 0, max: 100, step: 5, "aria-label": t("members.allocation") },
+          },
+        ),
+      ]),
       h("span", {
         class: `chip${weekly === 0 ? " warn" : ""}`,
         text: t("members.weekly", { value: formatDuration(weekly, lang()) }),
@@ -177,6 +194,7 @@ export function renderMembersTab(state: AppState, actions: AppActions): HTMLElem
                   ? {
                       workdays: first.workdays.map((w) => ({ ...w })),
                       breakMinutes: first.breakMinutes,
+                      allocation: first.allocation,
                     }
                   : {},
               ),

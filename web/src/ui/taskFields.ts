@@ -136,7 +136,9 @@ export function endField(task: Task, set: SetTask, options: FieldOptions): HTMLE
   return dateInput(
     task.endDate,
     (value) => {
-      set({ endDate: value });
+      // 完了日を入れたら進捗も 100% にそろえる。計算は完了日で「終わった」と
+      // 扱うのに、表と CSV には 90% のまま残って、数字が食い違っていた。
+      set(value === null ? { endDate: null } : { endDate: value, progress: 100 });
     },
     {
       dataset: { focus: `${options.focusPrefix}:end` },

@@ -382,7 +382,7 @@ mod tests {
         };
         for kind in [DistKind::Pert, DistKind::Triangular] {
             let ss = samplers(&rows, kind);
-            let mc = montecarlo::run(&ss, 400_000, 20_250_920, spec, &assignment);
+            let mc = montecarlo::run(&ss, 400_000, 20_250_920, spec, &assignment, None);
             let cv = run(&ss, 4096, spec, &assignment);
             assert_prefix_shape(&mc, spec, grid_hi, "モンテカルロ");
             assert_prefix_shape(&cv, spec, grid_hi, "畳み込み");
@@ -410,7 +410,7 @@ mod tests {
         };
         let ss = samplers(&rows, DistKind::Pert);
         for out in [
-            montecarlo::run(&ss, 50_000, 7, spec, &assignment),
+            montecarlo::run(&ss, 50_000, 7, spec, &assignment, None),
             run(&ss, 2048, spec, &assignment),
         ] {
             // 1 番目は 3 人日ちょうどで必ず完了する。
@@ -431,7 +431,7 @@ mod tests {
         };
         let ss = samplers(&rows, DistKind::Pert);
         for out in [
-            montecarlo::run(&ss, 100, 1, spec, &assignment),
+            montecarlo::run(&ss, 100, 1, spec, &assignment, None),
             run(&ss, 512, spec, &assignment),
         ] {
             assert_eq!(out.prefix.row(0)[9], 0.0, "2 人日未満では終わらない");

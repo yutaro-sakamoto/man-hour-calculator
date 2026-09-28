@@ -12,7 +12,15 @@ const ja = {
   "file.save": "このプロジェクトを保存",
   "file.saveAll": "すべて保存 ({count} 件)",
   "file.exportCsv": "CSV で書き出す",
-  "file.importCsv": "CSV を読み込む…",
+  "file.importCsv": "CSV で今のタスクを置き換える…",
+  "file.importCsvNew": "CSV から別のプロジェクトを作る…",
+  "file.confirmReplace": "「{name}」のタスク {count} 件を、CSV の {next} 件で置き換えます。元に戻せません。よろしいですか? (残したいときは「CSV から別のプロジェクトを作る」を使ってください)",
+  "file.importedCsv": "{name} から {count} 件のタスクを読み込みました。",
+  "file.csvNewMembers": "担当者の列にあった {names} を人員に追加しました (稼働時間は既定のまま)。",
+  "file.csvFilled": "見積もりが 1 点か 2 点しか無い {count} 行は、ある値から残りを補いました。",
+  "file.csvUnreadable": "見積もりが読めない行が {count} 件あります。赤い行を直してください。",
+  "file.csvGarbled":
+    "文字が化けている可能性があります。Excel では「CSV UTF-8」で保存し直してください。",
   "file.projectName": "プロジェクト名",
   "file.badFile": "このファイルは読み込めませんでした。",
   "file.imported": "{name} を読み込みました。",
@@ -83,6 +91,7 @@ const ja = {
   "health.onTrack": "順調",
   "health.done": "完了",
   "health.noTasks": "タスクなし",
+  "health.onHold": "保留",
 
   "groups.users": "アカウントのグループ",
   "groups.usersHint":
@@ -210,6 +219,35 @@ const ja = {
   "summary.effortP80": "総工数 P80",
   "summary.finishP80": "完了日 P80",
   "summary.finishP50": "完了日 P50",
+  "report.heading": "要点 (週報用)",
+  "report.asOf": "基準日 {date} の朝の時点",
+  "report.due": "期限 {date} までに終わる確率",
+  "report.noDue": "期限が未設定です (プロジェクトタブで設定すると、間に合う確率が出ます)",
+  "report.dueOutside": "期限が計算の期間の外です (カレンダーの「計算する日数」を延ばしてください)",
+  "report.budget": "予算 (人日)",
+  "report.withinBudget": "予算内に収まる確率",
+  "report.landing": "着地見込み (総工数)",
+  "report.landingValue": "P50 {p50} ・ P80 {p80} 人日",
+  "report.over": "予算を {days} 人日超える見込み (P80)",
+  "report.since": "前回 ({date}) から",
+  "report.noPrevious": "前回の控えがまだありません。次に開いた日から、差が出ます。",
+  "report.deltaDays": "{sign}{days} 日",
+  "report.deltaEffort": "{sign}{value} 人日",
+  "report.deltaPoints": "{sign}{value} pt",
+  "report.deltaTasks": "タスク {sign}{count} 件",
+  "report.bottleneck": "完了日を決めている人",
+  "report.bottleneckValue": "{name} の担当 (P80 {date}、残り {days} 人日)",
+  "report.stalled": "1 週間以上、進捗が動いていないタスク",
+  "report.stalledItem": "{name} ({progress}% のまま)",
+  "report.risks": "ばらつきの元 (上位 3)",
+  "report.copy": "テキストでコピー",
+  "report.copied": "要点をコピーしました。週報に貼り付けられます。",
+  "report.copyFailed": "コピーできませんでした。下の文を選んでコピーしてください。",
+  "report.history": "見通しの推移",
+  "report.historyDate": "基準日",
+  "report.progress": "進捗",
+  "report.dependencyNote":
+    "前後関係は「前提」で入れたものだけを見ています。同じ担当者のタスクは上から順に、別の担当者のタスクは前提が無ければ並行して進む前提です。",
   "summary.progress": "進捗",
   "summary.spent": "消化済み",
   "summary.remaining": "残り",
@@ -223,7 +261,8 @@ const ja = {
   "summary.finishP80Help":
     "80 % の確からしさで、この日までに終わるという見込み。人員の稼働時間と休日を踏まえた日付。",
   "summary.progressHint": "消化した工数 ÷ 全体の工数。件数ではなく工数で重み付けしています。",
-  "summary.remainingHint": "全体の見込み工数から、消化済みを引いた残り (人日)。",
+  "summary.remainingHint": "残りの最可能値の合計 (人日)。見通しタブの「残り」と同じ数字です。",
+  "summary.editedAt": "最終入力 {date}",
 
   "filter.heading": "絞り込み",
   "filter.text": "名前で検索",
@@ -254,11 +293,13 @@ const ja = {
     "まだタスクがありません。下の「行を追加」から 1 つ作るか、「サンプルを読み込む」で見本を入れてください。",
   "tasks.noMatch": "絞り込みに一致するタスクがありません。",
   "tasks.untitled": "無題のタスク",
-  "tasks.estimateCol": "見積もり (最小 – 最可能 – 最大)",
+  "tasks.estimateCol": "見積もり 人日 (最小 – 最可能 – 最大)",
   "tasks.openHint": "行を押すと詳細が開き、名前・見積もり・実績・担当を書き換えられます。",
   "tasks.orderHint": "上から順に着手する前提で日付を計算します。並べ替えると完了日も変わります。",
   "tasks.rollupHint": "子を持つタスクの見積もりは配下の合計です。直接は編集できません。",
-  "tasks.totals": "使用中 {count} 件 / 最小 {min} ・ 最可能 {likely} ・ 最大 {max} {unit}",
+  "tasks.totals":
+    "計算に使う末端のタスク {count} 件 (親の行は数えません) / 最小 {min} ・ 最可能 {likely} ・ 最大 {max} {unit}",
+  "tasks.unreadableEstimate": "読めません",
   "tasks.sortByPriority": "優先度順に並べ替え",
 
   "col.use": "使用",
@@ -419,10 +460,16 @@ const ja = {
   "detail.open": "{name} の詳細を開く",
   "detail.fromChildren": "配下のタスクで決まります",
   "detail.parentNote": "見積もりと実績は配下のタスクの合計です。ここでは変えられません。",
-  "detail.spentHint": "日報の作業時間の合計。人日 (3.5) でも時間 (28h) でも入れられます。空なら、着手日から今日までの稼働を全部このタスクに使ったとみなします。",
+  "detail.spentHint":
+    "日報の作業時間の合計。人日 (3.5) でも時間 (28h) でも入れられます。空なら、着手日から今日までの稼働を全部このタスクに使ったとみなします。",
   "detail.spentInvalid": "読めません。3.5 や 28h の形で入れてください。",
   "detail.addHours": "今回の作業時間 (h) を足す",
   "detail.addHoursButton": "足す",
+  "detail.after": "前提 (これが終わってから着手)",
+  "detail.afterHint":
+    "一覧で上にあるタスクだけを選べます。親を選ぶと、その配下がすべて終わるのを待ちます。前提があると、計算はモンテカルロで行います。",
+  "detail.afterNone": "なし",
+  "detail.afterCount": "前提 {count} 件",
   "detail.remainingEstimate": "残りの見積もり (最小 – 最可能 – 最大)",
   "detail.curveLabel": "{name} の完了確率",
   "detail.curveNote": "横軸は期間、縦軸は完了している確率。縦線は P50 と P80。",
@@ -436,6 +483,7 @@ const ja = {
   "sched.legendCore": "P25〜P75",
   "sched.legendMedian": "P50",
   "sched.today": "基準日",
+  "sched.due": "期限",
 
   "status.loading": "計算エンジンを読み込み中…",
   "status.computing": "計算中…",
@@ -454,7 +502,8 @@ const ja = {
   "error.7": "カレンダーの設定が不正です。稼働時間や期間を確認してください。",
   "error.8":
     "人員の指定が不正です。1 人以上 30 人以下で、期間 × 人数が大きすぎないようにしてください。",
-  "error.invalidRows": "{count} 件のタスクで見積もりが読めません。",
+  "error.invalidRows":
+    "{count} 件のタスクで見積もりが読めません。赤い行を直すか、「使用」を外すと計算できます。",
   "error.unknown": "未知のエラー (コード {code}) が発生しました。",
   "error.boot": "WASM の読み込みに失敗しました: {message}",
 
@@ -466,12 +515,15 @@ const ja = {
   "members.name": "名前",
   "members.schedule": "稼働時間",
   "members.break": "休憩 (分)",
+  "members.allocation": "この案件に使う割合 (%)",
+  "members.allocationHint":
+    "兼務や、問い合わせ・障害対応のような割り込みで取られるぶんを除いた割合。週 3 日だけの兼務なら 60、毎日 1 時間の割り込みなら 88 くらい。",
   "members.weekly": "週 {value}",
   "members.unassigned": "未割当",
   "members.numbered": "人員 {index}",
   "members.empty": "人員がいません。追加するとタスクを割り当てられます。",
   "members.hint":
-    "曜日ごとに稼働時間帯を決めます。開始と終了が同じ曜日は休みです。休憩はその日から一律で差し引きます。",
+    "曜日ごとに、チェックを入れた日が稼働日です。時間帯から休憩を引いた時間が 1 日の稼働になります (6 時間以下の勤務なら、休憩は 0 分にすることが多いはずです)。",
   "members.noCapacity": "稼働時間が 0 の人員がいます。その人のタスクは終わりません。",
   "members.unassignedHint":
     "担当者のいないタスクは「未割当」としてまとめ、既定の稼働時間で計算します。",
@@ -517,7 +569,16 @@ const en: Dictionary = {
   "file.save": "Save this project",
   "file.saveAll": "Save all ({count})",
   "file.exportCsv": "Export CSV",
-  "file.importCsv": "Import CSV…",
+  "file.importCsv": "Replace tasks from CSV…",
+  "file.importCsvNew": "Create a project from CSV…",
+  "file.confirmReplace": "Replace the {count} tasks in “{name}” with {next} tasks from the CSV? This cannot be undone. (To keep them, use “Create a project from CSV”.)",
+  "file.importedCsv": "Imported {count} tasks from {name}.",
+  "file.csvNewMembers": "Added {names} from the assignee column as people (default working hours).",
+  "file.csvFilled":
+    "Filled in the missing points for {count} row(s) with fewer than three estimates.",
+  "file.csvUnreadable":
+    "{count} row(s) have estimates that could not be read. Fix the rows marked in red.",
+  "file.csvGarbled": "The text may be garbled. In Excel, save again as “CSV UTF-8”.",
   "file.projectName": "Project name",
   "file.badFile": "That file could not be read.",
   "file.imported": "Loaded {name}.",
@@ -588,6 +649,7 @@ const en: Dictionary = {
   "health.onTrack": "On track",
   "health.done": "Done",
   "health.noTasks": "No tasks",
+  "health.onHold": "On hold",
 
   "groups.users": "Account groups",
   "groups.usersHint":
@@ -715,6 +777,37 @@ const en: Dictionary = {
   "summary.effortP80": "Effort P80",
   "summary.finishP80": "Finish P80",
   "summary.finishP50": "Finish P50",
+  "report.heading": "At a glance (for the weekly report)",
+  "report.asOf": "As of the morning of {date}",
+  "report.due": "Chance of finishing by the due date {date}",
+  "report.noDue": "No due date (set one on the Projects tab to see the chance of making it)",
+  "report.dueOutside":
+    "The due date is outside the projected range (increase “Days to project” on the Calendar tab)",
+  "report.budget": "Budget (person-days)",
+  "report.withinBudget": "Chance of staying within budget",
+  "report.landing": "Expected total effort",
+  "report.landingValue": "P50 {p50} · P80 {p80} person-days",
+  "report.over": "Over budget by {days} person-days (P80)",
+  "report.since": "Since last time ({date})",
+  "report.noPrevious":
+    "No earlier snapshot yet. Differences appear from the next day you open this.",
+  "report.deltaDays": "{sign}{days} days",
+  "report.deltaEffort": "{sign}{value} person-days",
+  "report.deltaPoints": "{sign}{value} pt",
+  "report.deltaTasks": "{sign}{count} task(s)",
+  "report.bottleneck": "Who sets the finish date",
+  "report.bottleneckValue": "{name}'s work (P80 {date}, {days} person-days left)",
+  "report.stalled": "Tasks whose progress has not moved for a week or more",
+  "report.stalledItem": "{name} (still at {progress}%)",
+  "report.risks": "Biggest sources of uncertainty (top 3)",
+  "report.copy": "Copy as text",
+  "report.copied": "Copied. Paste it into your weekly report.",
+  "report.copyFailed": "Could not copy. Select the text below and copy it.",
+  "report.history": "How the forecast has moved",
+  "report.historyDate": "Date",
+  "report.progress": "Progress",
+  "report.dependencyNote":
+    "Only prerequisites you entered are taken into account. One person's tasks run top to bottom; different people's tasks run in parallel unless linked by a prerequisite.",
   "summary.progress": "Progress",
   "summary.spent": "Spent",
   "summary.remaining": "Remaining",
@@ -726,7 +819,9 @@ const en: Dictionary = {
   "summary.finishP80Help":
     "The date this project is 80 % likely to finish by, given working hours and days off.",
   "summary.progressHint": "Effort spent ÷ total effort. Weighted by effort, not by task count.",
-  "summary.remainingHint": "Total expected effort minus what has been spent (person-days).",
+  "summary.remainingHint":
+    "Sum of the most likely remaining effort (person-days). Same number as “Remaining” on the Outlook tab.",
+  "summary.editedAt": "Last edited {date}",
 
   "filter.heading": "Filter",
   "filter.text": "Search by name",
@@ -757,12 +852,14 @@ const en: Dictionary = {
   "tasks.empty": "No tasks yet. Add one with “Add row” below, or start from “Load sample”.",
   "tasks.noMatch": "No tasks match the filter.",
   "tasks.untitled": "Untitled task",
-  "tasks.estimateCol": "Estimate (min – likely – max)",
+  "tasks.estimateCol": "Estimate, person-days (min – likely – max)",
   "tasks.openHint":
     "Click a row to open its details and edit the name, estimate, actuals and assignee.",
   "tasks.orderHint": "Tasks are worked top to bottom. Reordering changes the finish dates.",
   "tasks.rollupHint": "A parent task shows the sum of its children and cannot be edited directly.",
-  "tasks.totals": "{count} in use / min {min} · likely {likely} · max {max} {unit}",
+  "tasks.totals":
+    "{count} leaf task(s) in use (parent rows are not counted) / min {min} · likely {likely} · max {max} {unit}",
+  "tasks.unreadableEstimate": "Unreadable",
   "tasks.sortByPriority": "Sort by priority",
 
   "col.use": "Use",
@@ -928,10 +1025,16 @@ const en: Dictionary = {
   "detail.fromChildren": "Comes from the child tasks",
   "detail.parentNote":
     "Estimates and actuals are the totals of the child tasks and cannot be edited here.",
-  "detail.spentHint": "Total hours from work reports, in person-days (3.5) or hours (28h). If left empty, all working time since the start date is assumed to have gone into this task.",
+  "detail.spentHint":
+    "Total hours from work reports, in person-days (3.5) or hours (28h). If left empty, all working time since the start date is assumed to have gone into this task.",
   "detail.spentInvalid": "Not a number. Use a form like 3.5 or 28h.",
   "detail.addHours": "Add hours worked",
   "detail.addHoursButton": "Add",
+  "detail.after": "Waits for (start after these finish)",
+  "detail.afterHint":
+    "Only tasks above this one can be chosen. Choosing a parent waits for everything under it. With any prerequisite, the forecast uses Monte Carlo.",
+  "detail.afterNone": "None",
+  "detail.afterCount": "Waits for {count}",
   "detail.remainingEstimate": "Remaining estimate (min \u2013 likely \u2013 max)",
   "detail.curveLabel": "Completion probability for {name}",
   "detail.curveNote": "Time across, probability of being finished up. The lines mark P50 and P80.",
@@ -945,6 +1048,7 @@ const en: Dictionary = {
   "sched.legendCore": "P25–P75",
   "sched.legendMedian": "P50",
   "sched.today": "Reference date",
+  "sched.due": "Due",
 
   "status.loading": "Loading the engine…",
   "status.computing": "Computing…",
@@ -963,7 +1067,8 @@ const en: Dictionary = {
   "error.7": "The calendar settings are invalid. Check the working hours and the range.",
   "error.8":
     "Invalid people setup — between 1 and 30, and the range times the headcount must not be too large.",
-  "error.invalidRows": "{count} task(s) have estimates that cannot be read.",
+  "error.invalidRows":
+    "{count} task(s) have estimates that cannot be read. Fix the rows in red, or untick “Use”, to compute.",
   "error.unknown": "Unexpected error (code {code}).",
   "error.boot": "Failed to load the WASM module: {message}",
 
@@ -975,12 +1080,15 @@ const en: Dictionary = {
   "members.name": "Name",
   "members.schedule": "Working hours",
   "members.break": "Break (min)",
+  "members.allocation": "Share for this project (%)",
+  "members.allocationHint":
+    "What is left after other projects and interruptions such as support requests. Three days a week on this project is 60; an hour a day of interruptions is about 88.",
   "members.weekly": "{value} per week",
   "members.unassigned": "Unassigned",
   "members.numbered": "Person {index}",
   "members.empty": "No people yet. Add one to start assigning tasks.",
   "members.hint":
-    "Set working hours per weekday. A day whose start equals its end is a day off. The break is subtracted from every working day.",
+    "Days with a tick are working days. A day's capacity is its time window minus the break (for shifts of 6 hours or less, the break is usually 0).",
   "members.noCapacity": "Someone has no working hours at all — their tasks will never finish.",
   "members.unassignedHint":
     "Tasks without an assignee are pooled under “Unassigned” and use the default working hours.",

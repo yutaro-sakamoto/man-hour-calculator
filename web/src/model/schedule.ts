@@ -96,8 +96,13 @@ export interface MemberSummary {
   marks: ScheduleMarks;
   /** 担当タスクの件数。 */
   taskCount: number;
-  /** 担当ぶんの工数 (最大側)。 */
-  gridHi: number;
+  /**
+   * 担当ぶんの残り (最可能値の合計、人日)。
+   *
+   * 以前は累積和の目盛りの上限 (残りの**最大値**の合計) を「予測工数」として
+   * 出していた。全員ぶん足すと総工数より大きくなり、人を増やす判断を誤らせる。
+   */
+  remaining: number;
 }
 
 export interface ScheduleModel {
@@ -108,6 +113,8 @@ export interface ScheduleModel {
   /** 全員が非稼働の日を示すフラグ。 */
   dayFlags: Uint8Array;
   todayIndex: number | null;
+  /** 期限 (期間の初日からの日数)。期限が無い・期間の外なら `null`。 */
+  dueIndex: number | null;
   rows: ScheduleRow[];
   members: MemberSummary[];
   overall: Float64Array;
@@ -265,13 +272,7 @@ export function buildScheduleModel(
   // 人員ごとのまとめ。その人の最後のタスクが終われば担当ぶんは終わり。
   const members: MemberSummary[] = [];
   for (let member = 0; member < result.nMembers; member++) {
-    let lastTask: number | null = null;
-    let count = 0;
-    for (let task = 0; task < result.nTasks; task++) {
-      if ((result.assignees[task] ?? 0) !== member) continue;
-      count += 1;
-      lastTask = task;
-    }
+    const { lastTask, count, remaining } = memberLoad(result, member);
     const probabilities =
       lastTask === null ? new Float64Array(days).fill(1) : probabilitiesOf(lastTask);
     members.push({
@@ -280,7 +281,7 @@ export function buildScheduleModel(
       probabilities,
       marks: marksOf(probabilities),
       taskCount: count,
-      gridHi: result.memberGridHi[member] ?? 0,
+      remaining,
     });
   }
 
@@ -324,6 +325,7 @@ export function buildScheduleModel(
     displayDays,
     dayFlags,
     todayIndex,
+    dueIndex: null,
     rows: scheduleRows,
     members,
     overall,
@@ -373,6 +375,41 @@ function finishedOn(index: number, days: number): Float64Array {
   const out = new Float64Array(days);
   out.fill(1, Math.max(0, Math.min(days, index)));
   return out;
+}
+
+/** 担当者 1 人ぶんの件数・最後のタスク・残り (最可能値の合計)。 */
+function memberLoad(
+  result: ComputeResult,
+  member: number,
+): { lastTask: number | null; count: number; remaining: number } {
+  let lastTask: number | null = null;
+  let count = 0;
+  let remaining = 0;
+  for (let task = 0; task < result.nTasks; task++) {
+    if ((result.assignees[task] ?? 0) !== member) continue;
+    count += 1;
+    lastTask = task;
+    remaining += Math.max(0, (result.effective[task * 3 + 1] ?? 0) - (result.spent[task] ?? 0));
+  }
+  return { lastTask, count, remaining };
+}
+
+/**
+ * 期限を載せる。期限が表示の範囲より先なら、そこまで見えるように広げる。
+ *
+ * 期限はプロジェクトの情報 (内容の外) にあるので、組み立てたあとで載せる。
+ * 載せなかったころは、グラフが期限の手前で切れ、期限での確率を
+ * 吹き出しを横に掃いて探すしかなかった。
+ */
+export function withDueDate(model: ScheduleModel, dueDay: number | null): ScheduleModel {
+  if (dueDay === null) return model;
+  const index = dueDay - model.startDay;
+  if (index < 0 || index >= model.days) return { ...model, dueIndex: null };
+  return {
+    ...model,
+    dueIndex: index,
+    displayDays: Math.min(model.days, Math.max(model.displayDays, index + 7)),
+  };
 }
 
 /** その日が稼働日でないか (週末・祝日、かつ休日出勤でもない)。 */

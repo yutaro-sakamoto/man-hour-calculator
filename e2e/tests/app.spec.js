@@ -154,9 +154,13 @@ test("親タスクは配下の合計を表示し、直接は編集できない",
   await expect(rowEstimate(page, 0)).toHaveText("8.0 – 13.0 – 32.0");
   await expect(rowEstimate(page, 0).locator(".rollup")).toHaveCount(1);
 
-  // 一覧には入力欄を置かない。書き換えは詳細の窓で行う。
-  await expect(rows(page).locator('input[type="number"]')).toHaveCount(0);
+  // 一覧に置く入力欄は、毎週書き換える進捗 (と担当の選択) だけ。それも末端の
+  // タスクだけで、親の行には無い。ほかの書き換えは詳細の窓で行う。
   await expect(rows(page).locator('input[type="text"]')).toHaveCount(0);
+  await expect(parent.locator('input[type="number"]')).toHaveCount(0);
+  await expect(rows(page).nth(1).locator('input[type="number"]')).toHaveCount(
+    1,
+  );
 
   // 親の詳細では見積もりは読むだけ、子の詳細では書き換えられる。
   await openDetail(page, 0);
@@ -322,9 +326,10 @@ test("完了日を入れると実績工数に置き換わる", async ({ page }) 
   );
   await closeDetail(page);
   await expect(target.locator(".pill")).toHaveText("完了");
+  // 末端のタスクは、入れた進捗をそのまま出す (計算した比率ではない)。
   await expect(target.locator("td[data-progress]")).toHaveAttribute(
     "data-progress",
-    "1.0000",
+    "100",
   );
   expect(spent).toBeGreaterThan(4.5);
   expect(spent).toBeLessThan(5);
@@ -933,11 +938,17 @@ test("見通しでは 2 つのグラフが両方とも描かれる", async ({ pa
     1000,
   );
 
-  // 区画の並びは「どこまで来たか → いつ終わるか → どれだけぶれるか」。
+  // 区画の並びは「要点 → どこまで来たか → いつ終わるか → どれだけぶれるか」。
+  // 要点は週報に書くこと (期限・予算・前回比) を 1 枚に集めたもの。
   const order = await page.$$eval(".forecast [data-card]", (cards) =>
     cards.map((card) => card.dataset.card),
   );
-  expect(order.slice(0, 3)).toEqual(["progress", "schedule", "distribution"]);
+  expect(order.slice(0, 4)).toEqual([
+    "report",
+    "progress",
+    "schedule",
+    "distribution",
+  ]);
 });
 
 test("進捗カードは summary バーと同じ進捗を出す", async ({ page }) => {

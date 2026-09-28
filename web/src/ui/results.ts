@@ -123,7 +123,7 @@ function renderDataView(result: ComputeResult): HTMLElement {
 }
 
 /** 累積確率を線形補間で読む。グラフの目視とスライダの数字を一致させる。 */
-function cumulativeAt(result: ComputeResult, value: number): number {
+export function cumulativeAt(result: ComputeResult, value: number): number {
   const bins = result.probs.length;
   const step = (result.hi - result.lo) / bins;
   if (value <= result.lo) return result.cdf[0] ?? 0;

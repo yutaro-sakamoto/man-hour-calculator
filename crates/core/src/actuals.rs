@@ -621,7 +621,10 @@ mod tests {
         };
         let f = plan(original, &actual, &calendar(), day(14));
         assert_eq!(f.spent, 3.0, "カレンダーの 10 人日ではなく申告の 3 人日");
-        assert!((f.estimate.likely() - 7.0).abs() < 1e-12, "(1-0.5)*8 + 3 = 7");
+        assert!(
+            (f.estimate.likely() - 7.0).abs() < 1e-12,
+            "(1-0.5)*8 + 3 = 7"
+        );
         assert_eq!(f.state, TaskState::InProgress);
     }
 

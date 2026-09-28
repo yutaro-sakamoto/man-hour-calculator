@@ -4,6 +4,7 @@ import {
   ABI_VERSION,
   MAGIC,
   PCT_LEVELS,
+  REQ_DEPENDENCY_STRIDE,
   REQ_EVENT_EXCEPTION_STRIDE,
   REQ_EVENT_MEMBER_STRIDE,
   REQ_EVENT_STRIDE,
@@ -15,7 +16,7 @@ import {
 } from "./abi.ts";
 import { dayFromIso, minutesFromTime, parseEffort } from "./format.ts";
 import { memberIndexOf, participantsOf, type ResolvedMembers } from "./model/members.ts";
-import type { CalendarSettings, ComputeSettings, Task } from "./types.ts";
+import type { CalendarSettings, ComputeSettings, EngineId, Task } from "./types.ts";
 
 interface WasmExports {
   memory: WebAssembly.Memory;
@@ -196,6 +197,8 @@ export function buildRequest(
   members: ResolvedMembers,
   settings: ComputeSettings,
   prefixBins: number,
+  /** タスクの前提 `[タスク, 前提]` (葉の添字)。 */
+  dependencies: readonly (readonly [number, number])[] = [],
 ): Float64Array {
   const startDay = dayFromIso(calendar.startDate) ?? 0;
   const today = dayFromIso(calendar.today) ?? startDay;
@@ -217,7 +220,8 @@ export function buildRequest(
       events.length * REQ_EVENT_STRIDE +
       links.length * REQ_EVENT_MEMBER_STRIDE +
       skips.length * REQ_EVENT_EXCEPTION_STRIDE +
-      forced.length,
+      forced.length +
+      dependencies.length * REQ_DEPENDENCY_STRIDE,
   );
   request[0] = MAGIC;
   request[1] = ABI_VERSION;
@@ -241,6 +245,7 @@ export function buildRequest(
   request[19] = calendar.useJapaneseHolidays ? 1 : 0;
   request[20] = today;
   request[21] = skips.length;
+  request[22] = dependencies.length;
 
   let at = REQ_HEADER;
   for (const leaf of leaves) {
@@ -257,6 +262,7 @@ export function buildRequest(
     for (const window of member.workdays) request[at++] = minutesFromTime(window.start) ?? 0;
     for (const window of member.workdays) request[at++] = minutesFromTime(window.end) ?? 0;
     request[at++] = Math.max(0, Math.round(member.breakMinutes));
+    request[at++] = Math.min(100, Math.max(0, Math.round(member.allocation)));
   }
   for (const event of events) {
     request[at++] = event.startDay;
@@ -275,6 +281,10 @@ export function buildRequest(
     request[at++] = day;
   }
   for (const day of forced) request[at++] = day;
+  for (const [task, after] of dependencies) {
+    request[at++] = task;
+    request[at++] = after;
+  }
   return request;
 }
 
@@ -293,6 +303,8 @@ export interface ComputeResult {
   totalMax: number;
   totalSpent: number;
   totalCapacity: number;
+  /** 実際に使ったエンジン。前提があるとモンテカルロに切り替わる。 */
+  engineUsed: EngineId;
   probs: Float64Array;
   cdf: Float64Array;
   percentiles: Float64Array;
@@ -381,6 +393,7 @@ export function compute(request: Float64Array): ComputeResult {
     totalMax: raw[12] ?? 0,
     totalSpent: raw[16] ?? 0,
     totalCapacity: raw[18] ?? 0,
+    engineUsed: raw[19] === 1 ? 1 : 0,
     probs: take(0, nBins),
     cdf: take(1, nBins + 1),
     percentiles: take(3, nPct),

@@ -176,10 +176,15 @@ impl<T: Store + ?Sized> Store for &mut T {
 
 /// 保存データの版。
 ///
+/// 4 は内容に実績工数 (`Task::spent`)・使える割合 (`Member::allocation`)・
+/// 保留・見通しの控え (`Document::history`) が入った版。どれも `default` で
+/// 読めるので、版 3 の中身はそのまま開ける。版を上げるのは、版 4 で書いた
+/// 実績工数を、それを知らない古いバイナリが**黙って落として書き戻さない**ため。
+///
 /// 3 はコメントの添付が入った版。`Attachment` は `#[serde(default)]` なので、
 /// 版 2 の中身は**そのまま読める** (添付が空として入る)。版を上げるのは、
 /// 新しい版で書いたものを古いバイナリに読ませないため。
-pub const STORE_VERSION: u32 = 3;
+pub const STORE_VERSION: u32 = 4;
 
 impl MemoryStore {
     pub fn new() -> Self {
@@ -609,6 +614,8 @@ mod tests {
             progress: 0.0,
             end_date: None,
             assignee_id: None,
+            spent: String::new(),
+            after: Vec::new(),
         });
         // 数えるのは呼ぶ側。`Store` は渡された数をそのまま持つ
         // (`conformance::counts_are_stored_as_given`)。

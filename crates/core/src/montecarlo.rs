@@ -12,6 +12,53 @@ use crate::empirical::EmpiricalDist;
 use crate::prefix::{Assignment, EngineOutput, PrefixCdfs, PrefixSpec};
 use crate::rng::Rng;
 
+/// タスクの前提を日程に効かせるための材料。
+///
+/// 前提のタスクが終わる**日**が分からないと、後ろのタスクがいつ着手できるかは
+/// 決まらない。別の人の仕事は別の暦で進むので、担当者ごとの累積の稼働
+/// (`cumulative[member][day]`、基準日から数えたもの) で日と工数を行き来する。
+///
+/// 試行ごとに、タスク i の「終わる位置」を担当者の稼働の座標で求める:
+///
+/// ```text
+/// 着手位置 = max(担当者の直前のタスクの終わる位置,
+///                前提が終わった日までに担当者が働ける量)   ← 待ち
+/// 終わる位置 = 着手位置 + 工数
+/// ```
+///
+/// 待ちの間は何もしないとみなす (手の空いた人が別の仕事に回ることは
+/// 見込まない。保守的)。終わる位置の分布は、前提が無ければ従来の累積和と
+/// 一致するので、画面側の読み方 (`P(終わる位置 <= その日までの稼働)`) は
+/// 変わらない。
+#[derive(Debug, Clone, Copy)]
+pub struct Waits<'a> {
+    /// タスクごとの前提 (添字)。自分より前のタスクだけ。
+    pub preds: &'a [Vec<usize>],
+    /// 担当者ごとの累積の稼働 (人日)。基準日より前は 0。
+    pub cumulative: &'a [Vec<f64>],
+}
+
+impl Waits<'_> {
+    /// 担当者 `member` が、`other` の仕事 (`other` の座標で `end` に終わる) を
+    /// 待ってから着手できる位置。期間内に終わらなければ無限大。
+    fn ready_at(&self, member: usize, other: usize, end: f64) -> f64 {
+        if end <= 0.0 {
+            return 0.0;
+        }
+        if !end.is_finite() {
+            return f64::INFINITY;
+        }
+        let (Some(theirs), Some(mine)) = (self.cumulative.get(other), self.cumulative.get(member))
+        else {
+            return 0.0;
+        };
+        // その日に終わる。着手はその翌日から (同じ日に並べると、半日ずれた
+        // 引き継ぎを 0 日で済ませることになる)。
+        let day = theirs.partition_point(|&c| c < end - 1e-9);
+        mine.get(day).copied().unwrap_or(f64::INFINITY)
+    }
+}
+
 /// 総工数のモンテカルロ・シミュレーションを実行する。
 ///
 /// `iterations` が 0 の場合やタスクが空の場合は点質量を返す。
@@ -27,6 +74,7 @@ pub fn simulate(samplers: &[Sampler], iterations: usize, seed: u64) -> Empirical
             members: &members,
             grid_hi: &grid_hi,
         },
+        None,
     )
     .total
 }
@@ -42,6 +90,7 @@ pub fn run(
     seed: u64,
     spec: PrefixSpec,
     assignment: &Assignment<'_>,
+    waits: Option<&Waits<'_>>,
 ) -> EngineOutput {
     let mut prefix = PrefixCdfs::new(samplers.len(), spec);
     let members = assignment.members_count().max(1);
@@ -66,6 +115,7 @@ pub fn run(
     let width = prefix.width();
     let mut counts = vec![0u32; samplers.len() * width];
     let mut running = vec![0.0; members];
+    let mut ends = vec![0.0; samplers.len()];
 
     let mut rng = Rng::new(seed);
     let mut totals = Vec::with_capacity(iterations);
@@ -77,9 +127,19 @@ pub fn run(
             total += drawn;
             if width > 0 {
                 let member = assignment.member_of(index);
-                running[member] += drawn;
-                let bin = spec.bin_of(assignment.grid_hi_of(index), running[member]);
-                counts[index * width + bin] += 1;
+                let start = match waits {
+                    Some(waits) => waited_start(waits, assignment, index, running[member], &ends),
+                    None => running[member],
+                };
+                let end = start + drawn;
+                running[member] = end;
+                ends[index] = end;
+                let grid_hi = assignment.grid_hi_of(index);
+                // 目盛りの外 (期間内に終わらない) は数えない。上限の点に寄せると
+                // 「期間の最後の日には必ず終わっている」ことになってしまう。
+                if end <= grid_hi * (1.0 + 1e-9) + 1e-12 {
+                    counts[index * width + spec.bin_of(grid_hi, end)] += 1;
+                }
             }
         }
         totals.push(total);
@@ -112,6 +172,46 @@ pub fn run(
         total: EmpiricalDist::from_sorted_samples(totals, mean, variance.max(0.0).sqrt()),
         prefix,
     }
+}
+
+/// どの試行でも超えない「終わる位置」(担当者ごと)。
+///
+/// 待ちは前のタスクの工数について**単調**なので (前が遅れれば後ろも遅れる)、
+/// 全タスクを最大値で流したときの終わる位置が、各担当者の上限になる。
+/// これを累積和の目盛りの上限に使う。期間いっぱいの稼働を上限にすると、
+/// 刻みが粗くなって完了日が 1 日ずれていた。期間内に終わらなければ無限大。
+pub fn upper_ends(maxima: &[f64], assignment: &Assignment<'_>, waits: &Waits<'_>) -> Vec<f64> {
+    let mut running = vec![0.0; assignment.members_count().max(1)];
+    let mut ends = vec![0.0; maxima.len()];
+    for (index, &longest) in maxima.iter().enumerate() {
+        let member = assignment.member_of(index);
+        let start = waited_start(waits, assignment, index, running[member], &ends);
+        running[member] = start + longest;
+        ends[index] = running[member];
+    }
+    running
+}
+
+/// 前提を待ったうえでの着手位置 (担当者の稼働の座標)。
+///
+/// 同じ担当者の前提は、並び順で既に待てている (`running` がその先にある)。
+fn waited_start(
+    waits: &Waits<'_>,
+    assignment: &Assignment<'_>,
+    index: usize,
+    running: f64,
+    ends: &[f64],
+) -> f64 {
+    let member = assignment.member_of(index);
+    let Some(preds) = waits.preds.get(index) else {
+        return running;
+    };
+    preds
+        .iter()
+        .filter(|&&p| assignment.member_of(p) != member)
+        .fold(running, |start, &p| {
+            start.max(waits.ready_at(member, assignment.member_of(p), ends[p]))
+        })
 }
 
 /// 添字 `at` 以降が 1.0 になる階段状の CDF。確定値のタスク用。

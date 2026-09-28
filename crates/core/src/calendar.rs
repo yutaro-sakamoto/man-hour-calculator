@@ -229,6 +229,10 @@ impl Calendar {
                 None => 0.0,
             };
 
+            // 兼務・割り込みのぶんを除く。時間帯と予定の重なりは丸ごとの
+            // 稼働で測り、使える割合は最後に掛ける (予定は割合に関係なく
+            // その時間を潰すので、先に掛けると予定の重さが変わってしまう)。
+            let available = available * f64::from(schedule.allocation()) / 100.0;
             let available = if available.is_finite() {
                 available.max(0.0)
             } else {
@@ -470,6 +474,38 @@ mod tests {
         // 予定が無ければ、これまでどおり 1 人日ぶん働く。
         let empty = Calendar::build(&config(7), &eight_hour_weekdays(), &[], &[saturday], &[]);
         assert_eq!(empty.capacity()[at], 1.0);
+    }
+
+    /// 兼務の人は、稼働の一部しかこの案件に使えない。
+    ///
+    /// シミュレーションで見つかったもの。休憩の欄を 180 分に増やして割り込みを
+    /// 表していたが、他の人には意味が読めず、予定との重なりも狂っていた。
+    #[test]
+    fn allocation_scales_the_capacity_after_events_are_subtracted() {
+        let meeting = CalendarEvent {
+            start_minute: Some(10 * 60),
+            end_minute: Some(12 * 60),
+            ..CalendarEvent::all_day(day(1), day(1))
+        };
+        let half = MemberSchedule::default().with_allocation(50);
+        let cal = Calendar::build(&config(7), &half, &[meeting], &[], &[]);
+        // 月曜: 8 時間 → 半分で 0.5 人日。
+        assert!(
+            (cal.capacity()[0] - 0.5).abs() < 1e-12,
+            "{:?}",
+            cal.capacity()
+        );
+        // 火曜: 2 時間の会議で 6 時間 → 半分で 3/8 人日。
+        assert!(
+            (cal.capacity()[1] - 0.375).abs() < 1e-12,
+            "{:?}",
+            cal.capacity()
+        );
+
+        let none = MemberSchedule::default().with_allocation(-20);
+        assert_eq!(none.allocation(), 0);
+        let cal = Calendar::build(&config(7), &none, &[], &[], &[]);
+        assert!(cal.capacity().iter().all(|&c| c == 0.0));
     }
 
     #[test]
@@ -799,7 +835,10 @@ mod tests {
         assert_eq!(cal.cumulative_from(day(0)), cal.cumulative().to_vec());
 
         let from = cal.cumulative_from(day(7));
-        assert!(from[..7].iter().all(|&c| c == 0.0), "過ぎた日の稼働は使えない");
+        assert!(
+            from[..7].iter().all(|&c| c == 0.0),
+            "過ぎた日の稼働は使えない"
+        );
         for (i, (&got, &whole)) in from.iter().zip(cal.cumulative()).enumerate().skip(7) {
             let expected = whole - cal.cumulative()[6];
             assert!((got - expected).abs() < 1e-12, "{i}");

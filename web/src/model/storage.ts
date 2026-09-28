@@ -11,7 +11,8 @@
  */
 
 import type { ProjectDocument } from "../api/types.ts";
-import type { Task } from "../types.ts";
+import { parseEffort } from "../format.ts";
+import type { Member, Task } from "../types.ts";
 import {
   createTask,
   readBundle,
@@ -48,10 +49,14 @@ export function downloadText(filename: string, text: string, mime: string): void
   }, 1000);
 }
 
-export function downloadProject(name: string, document: ProjectDocument): void {
+export function downloadProject(
+  name: string,
+  document: ProjectDocument,
+  dueDate: string | null = null,
+): void {
   downloadText(
     `${safeFileName(name)}.mhc.json`,
-    JSON.stringify(toFile(name, document), null, 2),
+    JSON.stringify(toFile(name, document, dueDate), null, 2),
     "application/json",
   );
 }
@@ -108,7 +113,55 @@ const CSV_HEADER = [
   "startDate",
   "progress",
   "endDate",
+  // 後ろに足す。見出しの無い古い CSV は、先頭から 11 列の並びで読めるように。
+  "assignee",
+  "spent",
 ] as const;
+
+/**
+ * 見出しの別名。Excel で作った表は、見出しが日本語のことが多い。
+ *
+ * 英語の見出しに寄せてから読む。知らない見出しの列は読み飛ばす。
+ */
+const HEADER_ALIASES: Record<string, (typeof CSV_HEADER)[number]> = {
+  階層: "level",
+  レベル: "level",
+  名前: "name",
+  タスク: "name",
+  タスク名: "name",
+  グループ: "group",
+  優先度: "priority",
+  使用: "enabled",
+  最小: "min",
+  最小値: "min",
+  楽観: "min",
+  最可能: "likely",
+  最可能値: "likely",
+  最頻: "likely",
+  最頻値: "likely",
+  見積もり: "likely",
+  見積: "likely",
+  最大: "max",
+  最大値: "max",
+  悲観: "max",
+  着手日: "startDate",
+  開始日: "startDate",
+  進捗: "progress",
+  "進捗%": "progress",
+  進捗率: "progress",
+  完了日: "endDate",
+  終了日: "endDate",
+  担当: "assignee",
+  担当者: "assignee",
+  実績: "spent",
+  実績工数: "spent",
+};
+
+function canonicalHeader(cell: string): string {
+  const trimmed = cell.normalize("NFKC").trim();
+  const bare = trimmed.replace(/\s*[(（].*[)）]\s*$/, "");
+  return HEADER_ALIASES[bare] ?? HEADER_ALIASES[trimmed] ?? bare;
+}
 
 /**
  * 表計算ソフトで式として読まれる書き出し。`=`・`+`・`-`・`@` と、その前に
@@ -148,8 +201,12 @@ function escapeCsv(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-export function projectToCsv(rows: readonly TreeRow[]): string {
+/**
+ * 表を CSV にする。`members` を渡すと担当者を名前で書く (読み戻すときも名前で照らす)。
+ */
+export function projectToCsv(rows: readonly TreeRow[], members: readonly Member[] = []): string {
   const lines = [CSV_HEADER.join(",")];
+  const names = new Map(members.map((member) => [member.id, member.name]));
   for (const row of rows) {
     const t = row.task;
     lines.push(
@@ -163,8 +220,11 @@ export function projectToCsv(rows: readonly TreeRow[]): string {
         row.hasChildren ? "" : t.likely,
         row.hasChildren ? "" : t.max,
         t.startDate ?? "",
-        String(t.progress),
+        // 完了日があれば画面では完了 (100%)。CSV でも同じに見せる。
+        String(t.endDate !== null && !row.hasChildren ? 100 : t.progress),
         t.endDate ?? "",
+        quoteFormula(t.assigneeId === null ? "" : (names.get(t.assigneeId) ?? "")),
+        row.hasChildren ? "" : quoteFormula(t.spent),
       ]
         .map(escapeCsv)
         .join(","),
@@ -216,14 +276,75 @@ function parseCsv(text: string): string[][] {
   return rows.filter((cells) => cells.some((value) => value.trim() !== ""));
 }
 
+/** CSV を読んだ結果。 */
+export interface CsvImport {
+  tasks: Task[];
+  /** 担当者の列に書かれていたが、人員にいない名前 (出てきた順)。 */
+  unknownAssignees: string[];
+  /** 3 点のうち足りない値を補った行の数。 */
+  filledEstimates: number;
+  /** 見積もりが読めなかった行の数。 */
+  unreadable: number;
+}
+
 /** CSV からタスク一覧を復元する。level 列から親子関係を組み直す。 */
 export function csvToTasks(text: string): Task[] {
+  return readCsv(text).tasks;
+}
+
+/**
+ * 見積もりの 3 つの欄を読む。
+ *
+ * Excel の見積もり表は 1 点 (最可能値) しか無いことがよくある。そこで
+ * **足りない値は、ある値から補う**: 1 点だけなら 3 つとも同じ値、最小と
+ * 最大だけなら最可能はその中間。全角数字や `4h` も読む (`parseEffort`)。
+ */
+function readEstimate(
+  cells: { min: string; likely: string; max: string },
+  hoursPerDay: number,
+): { min: string; likely: string; max: string; filled: boolean; unreadable: boolean } {
+  const parse = (text: string): number | null => parseEffort(text, hoursPerDay);
+  const values = [parse(cells.min), parse(cells.likely), parse(cells.max)];
+  if (values.some((value) => value !== null && Number.isNaN(value))) {
+    // 読めない値は、そのまま残して利用者に直してもらう (0 で埋めると、
+    // 入れていない 0 が入っているように見える)。
+    return { ...cells, filled: false, unreadable: true };
+  }
+  const known = values.filter((value): value is number => value !== null);
+  if (known.length === 0)
+    return { min: "0", likely: "0", max: "0", filled: false, unreadable: false };
+  const [min, likely, max] = values;
+  const lo = min ?? Math.min(...known);
+  const hi = max ?? Math.max(...known);
+  const mid = likely ?? (lo + hi) / 2;
+  const text = (value: number): string => String(Math.round(value * 1000) / 1000);
+  return {
+    min: text(lo),
+    likely: text(mid),
+    max: text(hi),
+    filled: known.length < 3,
+    unreadable: false,
+  };
+}
+
+/**
+ * CSV を読む。担当者は `members` の名前と照らす。
+ *
+ * 見出しは英語でも日本語でもよい (`HEADER_ALIASES`)。
+ */
+export function readCsv(
+  text: string,
+  options: { members?: readonly Member[]; hoursPerDay?: number } = {},
+): CsvImport {
+  const members = options.members ?? [];
+  const hoursPerDay = options.hoursPerDay ?? 8;
+  const result: CsvImport = { tasks: [], unknownAssignees: [], filledEstimates: 0, unreadable: 0 };
   const rows = parseCsv(text);
   const first = rows[0];
-  if (!first) return [];
+  if (!first) return result;
 
   // ヘッダ行があればそれに従い、無ければ既定の並びとみなす。
-  const header = first.map((cell) => cell.trim());
+  const header = first.map(canonicalHeader);
   const hasHeader = header.includes("name") || header.includes("likely");
   const columns = hasHeader ? header : [...CSV_HEADER];
   const body = hasHeader ? rows.slice(1) : rows;
@@ -233,33 +354,88 @@ export function csvToTasks(text: string): Task[] {
   };
   const at = (cells: string[], key: string): string => raw(cells, key).trim();
 
-  const tasks: Task[] = [];
+  const tasks = result.tasks;
   // 深さごとの「直近の親候補」。
   const parents: (string | null)[] = [];
+  const byName = new Map(members.map((member) => [member.name.normalize("NFKC").trim(), member]));
+  const unknown = new Set<string>();
 
   for (const cells of body) {
     const depth = Math.max(0, Math.round(Number(at(cells, "level")) || 0));
     const parentId = depth === 0 ? null : (parents[depth - 1] ?? null);
-    const priority = at(cells, "priority");
+    const priority = normalizePriority(at(cells, "priority"));
     const enabled = at(cells, "enabled");
+    const estimate = readEstimate(
+      { min: at(cells, "min"), likely: at(cells, "likely"), max: at(cells, "max") },
+      hoursPerDay,
+    );
+    if (estimate.filled) result.filledEstimates += 1;
+    if (estimate.unreadable) result.unreadable += 1;
+    const assigneeName = unquoteFormula(raw(cells, "assignee")).normalize("NFKC").trim();
+    const assignee = assigneeName === "" ? undefined : byName.get(assigneeName);
+    if (assigneeName !== "" && assignee === undefined) unknown.add(assigneeName);
+    const endDate = isoDateCell(at(cells, "endDate"));
     const task = createTask({
       name: unquoteFormula(raw(cells, "name")),
       parentId,
       group: unquoteFormula(raw(cells, "group")),
-      priority: priority === "high" || priority === "low" ? priority : "normal",
+      priority,
       enabled: enabled !== "0" && enabled.toLowerCase() !== "false",
-      min: at(cells, "min") || "0",
-      likely: at(cells, "likely") || "0",
-      max: at(cells, "max") || "0",
-      startDate: /^\d{4}-\d{2}-\d{2}$/.test(at(cells, "startDate")) ? at(cells, "startDate") : null,
-      progress: Math.min(100, Math.max(0, Number(at(cells, "progress")) || 0)),
-      endDate: /^\d{4}-\d{2}-\d{2}$/.test(at(cells, "endDate")) ? at(cells, "endDate") : null,
+      min: estimate.min,
+      likely: estimate.likely,
+      max: estimate.max,
+      startDate: isoDateCell(at(cells, "startDate")),
+      progress: Math.min(
+        100,
+        Math.max(0, Number(at(cells, "progress").normalize("NFKC").replace("%", "")) || 0),
+      ),
+      endDate,
+      assigneeId: assignee?.id ?? null,
+      spent: unquoteFormula(raw(cells, "spent")),
     });
     tasks.push(task);
     parents[depth] = task.id;
     parents.length = depth + 1;
   }
-  return tasks;
+  result.unknownAssignees = [...unknown];
+  return result;
+}
+
+/** `high` / `高` のどちらでも読む。 */
+function normalizePriority(value: string): Task["priority"] {
+  const v = value.normalize("NFKC").trim().toLowerCase();
+  if (v === "high" || v === "高") return "high";
+  if (v === "low" || v === "低") return "low";
+  return "normal";
+}
+
+/**
+ * 日付の欄。`2026-10-05` のほか、Excel が書きがちな `2026/10/5` も読む。
+ * 読めなければ `null`。
+ */
+function isoDateCell(value: string): string | null {
+  const match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(value.normalize("NFKC").trim());
+  if (!match) return null;
+  const iso = `${match[1] ?? ""}-${(match[2] ?? "").padStart(2, "0")}-${(match[3] ?? "").padStart(2, "0")}`;
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : null;
+}
+
+/**
+ * CSV ファイルを文字にする。**UTF-8 として読めなければ Shift_JIS で読む。**
+ *
+ * 日本語版の Excel が「CSV (コンマ区切り)」で保存すると Shift_JIS になる。
+ * UTF-8 のつもりで読むと、全部の文字が化けたまま黙って取り込まれていた。
+ * BOM は落とす。
+ */
+export async function readCsvText(file: Blob): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    text = new TextDecoder("shift_jis").decode(bytes);
+  }
+  return text.startsWith("\uFEFF") ? text.slice(1) : text;
 }
 
 /** Excel が UTF-8 と判別できるようにする byte order mark。 */

@@ -55,20 +55,72 @@
       ],
       "createdAt": "2026-01-05T00:00:00Z",
       "document": {
-        "budget": null,
+        "budget": 110.0,
         "calendar": {
           "events": [],
           "forcedWorkdays": [],
           "horizonDays": 365,
           "hoursPerPersonDay": 8.0,
-          "members": [],
+          "members": [
+            {
+              "allocation": 60.0,
+              "breakMinutes": 60.0,
+              "id": "m1",
+              "name": "佐藤",
+              "workdays": [
+                {
+                  "end": "00:00",
+                  "start": "00:00"
+                },
+                {
+                  "end": "18:00",
+                  "start": "09:00"
+                },
+                {
+                  "end": "18:00",
+                  "start": "09:00"
+                },
+                {
+                  "end": "18:00",
+                  "start": "09:00"
+                },
+                {
+                  "end": "18:00",
+                  "start": "09:00"
+                },
+                {
+                  "end": "18:00",
+                  "start": "09:00"
+                },
+                {
+                  "end": "00:00",
+                  "start": "00:00"
+                }
+              ]
+            }
+          ],
           "startDate": "",
           "today": "",
           "useJapaneseHolidays": true
         },
-        "editedAt": "",
-        "history": [],
-        "onHold": false,
+        "editedAt": "2026-01-09T08:00:00Z",
+        "history": [
+          {
+            "date": "2026-01-09",
+            "doneCount": 0,
+            "effortP80": 3.4,
+            "finishP50": 20465,
+            "finishP80": 20467,
+            "progress": 0.5,
+            "remaining": 1.0,
+            "spent": 3.5,
+            "taskCount": 1,
+            "taskProgress": {
+              "t1": 50.0
+            }
+          }
+        ],
+        "onHold": true,
         "settings": {
           "bins": 48,
           "dist": 0,
@@ -81,7 +133,7 @@
         "tasks": [
           {
             "after": [],
-            "assigneeId": null,
+            "assigneeId": "m1",
             "enabled": true,
             "endDate": null,
             "group": "",
@@ -92,6 +144,25 @@
             "name": "設計",
             "parentId": null,
             "priority": "high",
+            "progress": 50.0,
+            "spent": "28h",
+            "startDate": "2026-01-06"
+          },
+          {
+            "after": [
+              "t1"
+            ],
+            "assigneeId": "m1",
+            "enabled": true,
+            "endDate": null,
+            "group": "",
+            "id": "t2",
+            "likely": "3",
+            "max": "6",
+            "min": "2",
+            "name": "実装",
+            "parentId": null,
+            "priority": "normal",
             "progress": 0.0,
             "spent": "",
             "startDate": null
@@ -101,11 +172,24 @@
       "dueDate": "2026-12-01",
       "groupId": "pg1",
       "id": "p1",
-      "memberCount": 0,
+      "memberCount": 1,
       "name": "案件",
-      "status": null,
-      "taskCount": 1,
-      "updatedAt": "2026-01-05T00:00:00Z"
+      "status": {
+        "basedOn": "2026-01-09T08:00:00Z",
+        "computedAt": "2026-01-09T08:00:00Z",
+        "doneCount": 0,
+        "editedAt": "2026-01-09T08:00:00Z",
+        "effortP50": 3.1,
+        "effortP80": 3.4,
+        "finishP50": 20465,
+        "finishP80": 20467,
+        "onHold": true,
+        "progress": 0.5,
+        "spent": 3.5,
+        "taskCount": 1
+      },
+      "taskCount": 2,
+      "updatedAt": "2026-01-09T08:00:00Z"
     }
   ],
   "userGroups": [

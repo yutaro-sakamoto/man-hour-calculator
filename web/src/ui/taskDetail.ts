@@ -23,7 +23,7 @@ import { collectGroups, type TreeRow } from "../model/tree.ts";
 import type { ScheduleRow } from "../model/schedule.ts";
 import type { TaskState } from "../types.ts";
 import { commentButton } from "./comments.ts";
-import { checkbox, field, h, iconButton, openLink } from "./dom.ts";
+import { checkbox, field, foldout, h, iconButton, openLink } from "./dom.ts";
 import { sparkline } from "./sparkline.ts";
 import {
   assigneeField,
@@ -216,11 +216,74 @@ function editSection(state: AppState, actions: AppActions, row: TreeRow): HTMLEl
           ),
       row.hasChildren || !canWrite(state)
         ? null
-        : field(t("detail.addHours"), addHoursField(state, task, actions, { ...options, hoursPerDay })),
+        : field(
+            t("detail.addHours"),
+            addHoursField(state, task, actions, { ...options, hoursPerDay }),
+          ),
     ]),
     row.hasChildren ? h("p", { class: "hint", text: t("detail.parentNote") }) : null,
     groupOptions(collectGroups(state.document.tasks)),
   ]);
+}
+
+/**
+ * 前提 (これが終わってから着手するもの)。一覧で上にある行だけを並べる。
+ *
+ * 前提が入れられなかったころは、結合テストが製造より先に終わる計画が
+ * 「期限までに 100%」と出ていた (4 つの立場のすべてが最初に挙げたもの)。
+ */
+function afterSection(state: AppState, actions: AppActions, row: TreeRow): HTMLElement | null {
+  const above = state.rows.slice(0, row.index);
+  if (above.length === 0) return null;
+  const chosen = new Set(row.task.after);
+  const label = (item: TreeRow): string =>
+    item.task.name.trim() === "" ? t("tasks.untitled") : item.task.name;
+  const key = `detail-after:${row.task.id}`;
+  const summary =
+    chosen.size === 0
+      ? t("detail.afterNone")
+      : above
+          .filter((item) => chosen.has(item.task.id))
+          .map(label)
+          .join(", ");
+
+  return foldout(
+    {
+      id: key,
+      title: `${t("detail.after")}: ${summary}`,
+      open: state.openPanels[key] ?? false,
+      onToggle: (open) => {
+        state.openPanels[key] = open;
+      },
+    },
+    [
+      h("p", { class: "hint", text: t("detail.afterHint") }),
+      h(
+        "div",
+        { class: "after-list" },
+        above.map((item) =>
+          h("label", { class: "toggle", style: { paddingLeft: `${String(item.depth * 16)}px` } }, [
+            checkbox(
+              chosen.has(item.task.id),
+              (checked) => {
+                actions.mutate((document) => {
+                  const target = document.tasks.find((task) => task.id === row.task.id);
+                  if (!target) return;
+                  const rest = target.after.filter((id) => id !== item.task.id);
+                  target.after = checked ? [...rest, item.task.id] : rest;
+                });
+              },
+              {
+                dataset: { focus: `detail:${row.task.id}:after:${item.task.id}` },
+                attrs: { "aria-label": `${t("detail.after")} — ${label(item)}` },
+              },
+            ),
+            h("span", { class: item.hasChildren ? "strong" : "", text: label(item) }),
+          ]),
+        ),
+      ),
+    ],
+  );
 }
 
 /** 直接の子。押すと窓がその子に移る (掘り下げになる)。 */
@@ -286,6 +349,7 @@ export function renderTaskDetailModal(state: AppState, actions: AppActions): HTM
   const body = h("div", { class: "detail-body" }, [
     forecastSection(state, row, scheduleRow, progress),
     editSection(state, actions, row),
+    afterSection(state, actions, row),
     childrenSection(state, actions, row),
   ]);
 

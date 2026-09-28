@@ -18,6 +18,19 @@ use crate::model::ProjectMeta;
 /// 見積もりにも進捗の申告にも誤差があるので、少しの差で赤くしない。
 pub const PACE_TOLERANCE: f64 = 0.10;
 
+/// P80 が期限に間に合っていても、余裕がこの日数より少なければ「危うい」。
+///
+/// シミュレーションで見つかったもの。余裕 2 日でも緑の「順調」と出て、
+/// 報告を受けた側は安心してしまっていた。見積もりの誤差に比べて、
+/// 数日の余裕は無いのと同じ。
+pub const SLIM_MARGIN_DAYS: i64 = 3;
+
+/// 見通しの控えがこの日数より古ければ、分かったふりをしない。
+///
+/// 見通しは「今日から残りを積む」ので、日が経てば内容が同じでも変わる。
+/// 何週間も前に計算した「順調」を、今日の状態として見せない。
+pub const STALE_AFTER_DAYS: i64 = 7;
+
 /// プロジェクトの状態。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +51,8 @@ pub enum ProjectHealth {
     BehindPace,
     /// 期限が無く、ペースにも問題が無い。
     InProgress,
+    /// 保留中。遅れでも完了でもない。
+    OnHold,
 }
 
 impl ProjectHealth {
@@ -55,8 +70,9 @@ impl ProjectHealth {
             Self::Unknown => 3,
             Self::InProgress => 4,
             Self::OnTrack => 5,
-            Self::NoTasks => 6,
-            Self::Done => 7,
+            Self::OnHold => 6,
+            Self::NoTasks => 7,
+            Self::Done => 8,
         }
     }
 }
@@ -78,14 +94,26 @@ pub fn health(meta: &ProjectMeta, today: i64) -> ProjectHealth {
     if status.task_count > 0 && status.done_count >= status.task_count {
         return ProjectHealth::Done;
     }
+    // 保留は、期限やペースより先に見る。止めているのだから遅れて当然で、
+    // それを「遅延」と赤くすると本当の遅れが埋もれる。
+    if status.on_hold {
+        return ProjectHealth::OnHold;
+    }
+    let computed = status.computed_at.get(..10).and_then(day_of);
+    if computed.is_some_and(|day| today - day > STALE_AFTER_DAYS) {
+        return ProjectHealth::Unknown;
+    }
 
     if let Some(due) = meta.due_date.as_deref().and_then(crate::health::day_of) {
         // 期間内に終わる見込みが立たないものは、期限に関わらず遅延。
         let Some(p80) = status.finish_p80 else {
             return ProjectHealth::Late;
         };
-        if p80 <= due {
+        if p80 <= due - SLIM_MARGIN_DAYS {
             return ProjectHealth::OnTrack;
+        }
+        if p80 <= due {
+            return ProjectHealth::AtRisk;
         }
         return match status.finish_p50 {
             Some(p50) if p50 <= due => ProjectHealth::AtRisk,
@@ -94,7 +122,6 @@ pub fn health(meta: &ProjectMeta, today: i64) -> ProjectHealth {
     }
 
     // 期限が無い場合はペースで見る。まだ何も進んでいないものは対象外。
-    let _ = today;
     if status.progress > 0.0 && status.effort_p50 > 0.0 {
         let burned = status.spent / status.effort_p50;
         if burned > status.progress + PACE_TOLERANCE {
@@ -170,6 +197,8 @@ mod tests {
             progress: 0.0,
             task_count: 5,
             done_count: 0,
+            on_hold: false,
+            edited_at: String::new(),
         }
     }
 
@@ -242,6 +271,49 @@ mod tests {
         assert_eq!(health(&meta, today()), ProjectHealth::Late);
     }
 
+    /// 余裕がわずかなら、P80 が間に合っていても「危うい」。
+    #[test]
+    fn a_slim_margin_is_at_risk() {
+        let mut meta = meta();
+        meta.status = Some(status()); // P80 = 12/20
+        meta.due_date = Some("2026-12-22".into());
+        assert_eq!(health(&meta, today()), ProjectHealth::AtRisk, "余裕 2 日");
+        meta.due_date = Some("2026-12-23".into());
+        assert_eq!(health(&meta, today()), ProjectHealth::OnTrack, "余裕 3 日");
+    }
+
+    /// 保留は遅延とも完了とも別。期限を過ぎる見込みでも赤くしない。
+    #[test]
+    fn a_project_on_hold_is_neither_late_nor_done() {
+        let mut meta = meta();
+        let mut paused = status();
+        paused.on_hold = true;
+        paused.finish_p80 = None;
+        meta.status = Some(paused);
+        meta.due_date = Some("2026-10-01".into());
+        assert_eq!(health(&meta, today()), ProjectHealth::OnHold);
+        assert!(!ProjectHealth::OnHold.needs_attention());
+    }
+
+    /// 何週間も前の見通しを、今日の状態として見せない。
+    #[test]
+    fn an_old_forecast_needs_recomputing() {
+        let mut meta = meta();
+        meta.status = Some(status());
+        meta.due_date = Some("2026-12-25".into());
+        let computed = day_of("2026-09-20").unwrap();
+        assert_eq!(
+            health(&meta, computed + 7),
+            ProjectHealth::OnTrack,
+            "1 週間はそのまま"
+        );
+        assert_eq!(
+            health(&meta, computed + 8),
+            ProjectHealth::Unknown,
+            "それより古いと再計算"
+        );
+    }
+
     #[test]
     fn a_forecast_that_never_finishes_is_late() {
         let mut meta = meta();
@@ -298,7 +370,7 @@ mod tests {
         for state in [Late, BehindPace] {
             assert!(state.needs_attention(), "{state:?}");
         }
-        for state in [NoTasks, Unknown, Done, OnTrack, AtRisk, InProgress] {
+        for state in [NoTasks, Unknown, Done, OnTrack, AtRisk, InProgress, OnHold] {
             assert!(!state.needs_attention(), "{state:?}");
         }
         // 重い順に並ぶ。

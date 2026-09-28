@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { at } from "../testing.ts";
 import {
+  createMember,
   createTask,
   emptyDocument,
   normalizeDocument,
@@ -13,7 +14,7 @@ import {
   toBundle,
   toFile,
 } from "./project.ts";
-import { csvToTasks, projectToCsv } from "./storage.ts";
+import { csvToTasks, projectToCsv, readCsv, readCsvText } from "./storage.ts";
 import { buildRows } from "./tree.ts";
 
 test("CSV に書き出して読み直すと階層と値が戻る", () => {
@@ -246,4 +247,57 @@ test("数値の欄はそのまま書く (負の数を式として潰さない)",
   };
   const csv = projectToCsv(buildRows([task]));
   assert.match(csv, /,-1,2,3,/);
+});
+
+test("Excel の見積もり表の揺れを読む: 日本語の見出し・全角・時間・1 点だけ", () => {
+  const csv = [
+    "階層,タスク名,最小,最可能,最大,担当者",
+    "0,設計,２,３,５,佐藤",
+    "0,実装,,8,,鈴木",
+    "0,試験,16h,24h,40h,佐藤",
+    "0,移行,2,,6,",
+  ].join("\n");
+  const sato = createMember("佐藤");
+  const result = readCsv(csv, { members: [sato], hoursPerDay: 8 });
+  assert.deepEqual(
+    result.tasks.map((task) => [task.name, task.min, task.likely, task.max]),
+    [
+      ["設計", "2", "3", "5"],
+      ["実装", "8", "8", "8"],
+      ["試験", "2", "3", "5"],
+      ["移行", "2", "4", "6"],
+    ],
+  );
+  assert.equal(result.filledEstimates, 2);
+  assert.equal(result.unreadable, 0);
+  assert.equal(result.tasks[0]?.assigneeId, sato.id);
+  assert.deepEqual(result.unknownAssignees, ["鈴木"]);
+});
+
+test("担当者と実績工数は書き出して読み戻せる。完了日があれば進捗は 100", () => {
+  const sato = createMember("佐藤");
+  const task = createTask({
+    name: "設計",
+    assigneeId: sato.id,
+    spent: "12h",
+    endDate: "2026-10-09",
+    progress: 90,
+  });
+  const csv = projectToCsv(buildRows([task]), [sato]);
+  const [back] = readCsv(csv, { members: [sato] }).tasks;
+  assert.ok(back);
+  assert.equal(back.assigneeId, sato.id);
+  assert.equal(back.spent, "12h");
+  assert.equal(back.progress, 100);
+});
+
+test("Shift_JIS の CSV は Shift_JIS として読む (UTF-8 として化けさせない)", async () => {
+  // 「設計」を Shift_JIS で書いたもの。
+  const bytes = new Uint8Array([
+    0x6e, 0x61, 0x6d, 0x65, 0x0a, 0x90, 0xdd, 0x8c, 0x76,
+  ]);
+  assert.equal(await readCsvText(new Blob([bytes])), "name\n設計");
+  // UTF-8 (BOM 付き) はそのまま。BOM は落とす。
+  const utf8 = new Blob([new Uint8Array([0xef, 0xbb, 0xbf]), "name\n設計"]);
+  assert.equal(await readCsvText(utf8), "name\n設計");
 });

@@ -14,6 +14,8 @@ export interface Palette {
   axis: string;
   ink: string;
   secondary: string;
+  /** 期限の線。面の上で 4.5:1 にしてある色。 */
+  critical: string;
   muted: string;
   offday: string;
   font: string;
@@ -35,6 +37,7 @@ export function readPalette(): Palette {
     axis: token("--axis"),
     ink: token("--ink"),
     secondary: token("--ink-secondary"),
+    critical: token("--critical"),
     muted: token("--ink-muted"),
     offday: token("--offday"),
     font: token("--font"),

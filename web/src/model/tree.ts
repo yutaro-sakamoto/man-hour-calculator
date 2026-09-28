@@ -275,3 +275,39 @@ export function collectGroups(tasks: readonly Task[]): string[] {
   }
   return [...groups].sort((a, b) => a.localeCompare(b));
 }
+
+/**
+ * 前提を、計算に渡す葉の添字の組 `[タスク, 前提]` に直す。
+ *
+ * 前提に親を選んでいれば、その配下の葉すべてを待つ。前提の側が親でも子でも、
+ * 待つのは**葉**どうし (計算は葉しか知らない)。自分より下の行を指す前提は
+ * 効かない (上から順に着手する、という前提と揃えるため) ので、ここで落とす。
+ * 計算から外した行 (使用を外した・読めない見積もり) も落とす。
+ */
+export function dependencyPairs(rows: readonly TreeRow[]): [number, number][] {
+  const leavesOf = new Map<string, number[]>();
+  // 下から見れば、子の葉を親に足していくだけで部分木の葉が集まる。
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (row === undefined) continue;
+    const own = row.leafIndex === null ? [] : [row.leafIndex];
+    const children = rows
+      .filter((child) => child.task.parentId === row.task.id)
+      .flatMap((child) => leavesOf.get(child.task.id) ?? []);
+    leavesOf.set(row.task.id, [...own, ...children]);
+  }
+
+  const pairs: [number, number][] = [];
+  for (const row of rows) {
+    if (row.task.after.length === 0) continue;
+    const targets = leavesOf.get(row.task.id) ?? [];
+    for (const id of row.task.after) {
+      for (const before of leavesOf.get(id) ?? []) {
+        for (const task of targets) {
+          if (before < task) pairs.push([task, before]);
+        }
+      }
+    }
+  }
+  return pairs;
+}

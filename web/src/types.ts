@@ -29,6 +29,13 @@ export interface Member {
   workdays: WorkWindow[];
   /** 稼働日 1 日あたりの休憩分数。 */
   breakMinutes: number;
+  /**
+   * 稼働のうち、この案件に使える割合 (%、0〜100)。
+   *
+   * 兼務や日常の割り込みを表す。休憩の欄を増やして表すと、他の人には
+   * 意味が読めない (シミュレーションで実際にそうしていた)。
+   */
+  allocation: number;
 }
 
 export interface Task {
@@ -58,6 +65,13 @@ export interface Task {
    * 人日に直すのは計算に渡すとき (`parseEffort`)。
    */
   spent: string;
+  /**
+   * 前提となるタスクの id。これらが終わってから着手する。親の id なら配下すべて。
+   *
+   * 一覧で**自分より上**にあるものだけが効く (上から順に着手する、という
+   * 前提と揃えるため。下にあるものを待つと、順番の意味が逆になる)。
+   */
+  after: string[];
   /** 担当する人員の id。`null` なら未割当。 */
   assigneeId: string | null;
 }

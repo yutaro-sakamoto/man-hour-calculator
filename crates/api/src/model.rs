@@ -293,6 +293,12 @@ pub struct ProjectStatus {
     pub progress: f64,
     pub task_count: usize,
     pub done_count: usize,
+    /// 保留中か (内容の `on_hold` の写し)。
+    #[serde(default)]
+    pub on_hold: bool,
+    /// 利用者が最後に内容を変えた時刻 (内容の `edited_at` の写し)。
+    #[serde(default)]
+    pub edited_at: String,
 }
 
 /// 一覧に出すためのプロジェクトの見出し。
@@ -380,6 +386,38 @@ pub struct Document {
     pub tasks: Vec<Task>,
     pub calendar: CalendarSettings,
     pub settings: ComputeSettings,
+    /// 保留中か。一覧で「遅延」と見分けるため (稼働を 0 にして表すと遅延に、
+    /// タスクを外して表すと完了に見えていた)。
+    pub on_hold: bool,
+    /// 利用者が最後に内容を変えた時刻。開いただけでは動かない。
+    ///
+    /// `updated_at` は見通しを計算し直して保存するたびに動くので、
+    /// 「最後に実績を入れたのはいつか」が分からなくなっていた。
+    pub edited_at: String,
+    /// 日ごとの見通しの控え (古い順)。前回からどう変わったかを出すため。
+    pub history: Vec<Snapshot>,
+    /// 予算 (人日)。無ければ `None`。予算内に収まる確率と着地見込みを出すため。
+    pub budget: Option<f64>,
+}
+
+/// ある日の見通しの控え。
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Snapshot {
+    /// 基準日 (`YYYY-MM-DD`)。
+    pub date: String,
+    pub effort_p80: f64,
+    /// 完了日 (1970-01-01 からの日数)。期間内に終わらなければ `None`。
+    pub finish_p50: Option<i64>,
+    pub finish_p80: Option<i64>,
+    pub progress: f64,
+    pub spent: f64,
+    /// 残りの最可能値の合計 (人日)。
+    pub remaining: f64,
+    pub task_count: usize,
+    pub done_count: usize,
+    /// タスクごとの進捗率 (0〜100、タスクの id から)。止まっているタスクを見つけるため。
+    pub task_progress: std::collections::BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -398,6 +436,12 @@ pub struct Task {
     pub progress: f64,
     pub end_date: Option<String>,
     pub assignee_id: Option<String>,
+    /// 日報から書き写した実績工数。`3.5` (人日) か `28h` (時間)。空なら未入力。
+    #[serde(default)]
+    pub spent: String,
+    /// 前提となるタスクの id。これらが終わってから着手する。親の id なら配下すべて。
+    #[serde(default)]
+    pub after: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -418,9 +462,17 @@ pub struct Member {
     /// 日曜から土曜までの 7 件。
     pub workdays: Vec<WorkWindow>,
     pub break_minutes: f64,
+    /// 稼働のうち、この案件に使える割合 (%)。兼務・割り込みを除いたもの。
+    #[serde(default = "full_allocation")]
+    pub allocation: f64,
     /// この人員に対応するアカウント。紐づいていなければ `None`。
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub user_id: Option<UserId>,
+}
+
+/// 使える割合の既定値。版 3 までの保存データには無いので、全部使えるとみなす。
+fn full_allocation() -> f64 {
+    100.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

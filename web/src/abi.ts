@@ -5,11 +5,13 @@ export const ABI_VERSION = 5;
 export const REQ_HEADER = 32;
 export const RESP_HEADER = 24;
 export const REQ_TASK_STRIDE = 8;
-export const REQ_MEMBER_STRIDE = 15;
+export const REQ_MEMBER_STRIDE = 16;
 export const REQ_EVENT_STRIDE = 6;
 export const REQ_EVENT_MEMBER_STRIDE = 2;
 /** 休みにした回 1 件が占める要素数 (`[予定の添字, 回の初日]`)。 */
 export const REQ_EVENT_EXCEPTION_STRIDE = 2;
+/** 前提 1 件が占める要素数 (`[タスクの添字, 前提の添字]`)。 */
+export const REQ_DEPENDENCY_STRIDE = 2;
 
 export const ENGINE = { monteCarlo: 0, convolution: 1 } as const;
 export const DIST = { pert: 0, triangular: 1 } as const;

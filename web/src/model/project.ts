@@ -1,7 +1,7 @@
 /** プロジェクト (保存・読み込みの単位) の生成と検証。 */
 
 import { nextWeekday, todayIso } from "../format.ts";
-import type { ProjectDocument } from "../api/types.ts";
+import type { ProjectDocument, Snapshot } from "../api/types.ts";
 import type {
   CalendarEventItem,
   CalendarSettings,
@@ -44,6 +44,7 @@ export function createTask(overrides: Partial<Task> = {}): Task {
     progress: 0,
     endDate: null,
     spent: "",
+    after: [],
     assigneeId: null,
     ...overrides,
   };
@@ -60,6 +61,7 @@ export function createMember(name: string, overrides: Partial<Member> = {}): Mem
     name,
     workdays: [OFF, weekday, weekday, weekday, weekday, weekday, OFF],
     breakMinutes: 60,
+    allocation: 100,
     ...overrides,
   };
 }
@@ -95,6 +97,10 @@ export function emptyDocument(): ProjectDocument {
     tasks: [],
     calendar: defaultCalendar(),
     settings: defaultSettings(),
+    onHold: false,
+    editedAt: "",
+    history: [],
+    budget: null,
   };
 }
 
@@ -104,15 +110,25 @@ export interface ProjectFile {
   version: typeof SCHEMA_VERSION;
   savedAt: string;
   name: string;
+  /**
+   * 期限 (YYYY-MM-DD)。内容の外 (プロジェクトの情報) にあるが、ファイルには
+   * 一緒に書く。書かなかったころは、別の端末で開くと期限が消えていた。
+   */
+  dueDate?: string | null;
   document: ProjectDocument;
 }
 
-export function toFile(name: string, document: ProjectDocument): ProjectFile {
+export function toFile(
+  name: string,
+  document: ProjectDocument,
+  dueDate: string | null = null,
+): ProjectFile {
   return {
     schema: SCHEMA,
     version: SCHEMA_VERSION,
     savedAt: new Date().toISOString(),
     name,
+    dueDate,
     document,
   };
 }
@@ -302,6 +318,7 @@ function normalizeMember(raw: unknown): Member {
       };
     }),
     breakMinutes: Math.min(1440, Math.max(0, asNumber(record.breakMinutes, base.breakMinutes))),
+    allocation: Math.min(100, Math.max(0, asNumber(record.allocation, 100))),
   };
 }
 
@@ -321,9 +338,18 @@ function normalizeTask(raw: unknown, knownIds: Set<string>, memberIds: Set<strin
     likely: asNumericString(record.likely, "0"),
     max: asNumericString(record.max, "0"),
     startDate: asIsoDate(record.startDate),
-    progress: Math.min(100, Math.max(0, asNumber(record.progress, 0))),
+    // 完了日があれば進捗は 100%。計算は完了日で終わったと扱うので、ここで
+    // そろえておかないと表や CSV に 90% のような値が残る。
+    progress:
+      asIsoDate(record.endDate) === null
+        ? Math.min(100, Math.max(0, asNumber(record.progress, 0)))
+        : 100,
     endDate: asIsoDate(record.endDate),
     spent: typeof record.spent === "string" ? record.spent : asNumericString(record.spent, ""),
+    // 知らない id は落とす (消えたタスクを待ち続けないように)。
+    after: (Array.isArray(record.after) ? record.after : [])
+      .map((value) => asString(value))
+      .filter((value) => value !== "" && value !== id && knownIds.has(value)),
     assigneeId: memberIds.has(asString(record.assigneeId)) ? asString(record.assigneeId) : null,
   };
 }
@@ -472,6 +498,40 @@ export function normalizeDocument(raw: unknown): ProjectDocument {
     tasks: toPreorder(rawTasks.map((task) => normalizeTask(task, knownIds, memberIds))),
     calendar,
     settings: normalizeSettings(record.settings),
+    onHold: asBoolean(record.onHold, false),
+    editedAt: asString(record.editedAt),
+    history: (Array.isArray(record.history) ? record.history : [])
+      .map(normalizeSnapshot)
+      .filter((snapshot): snapshot is Snapshot => snapshot !== null),
+    budget:
+      typeof record.budget === "number" && Number.isFinite(record.budget) && record.budget > 0
+        ? record.budget
+        : null,
+  };
+}
+
+function normalizeSnapshot(raw: unknown): Snapshot | null {
+  const record = asRecord(raw);
+  const date = asIsoDate(record.date);
+  if (date === null) return null;
+  const day = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null;
+  return {
+    date,
+    effortP80: asNumber(record.effortP80, 0),
+    finishP50: day(record.finishP50),
+    finishP80: day(record.finishP80),
+    progress: asNumber(record.progress, 0),
+    spent: asNumber(record.spent, 0),
+    remaining: asNumber(record.remaining, 0),
+    taskCount: Math.max(0, Math.round(asNumber(record.taskCount, 0))),
+    doneCount: Math.max(0, Math.round(asNumber(record.doneCount, 0))),
+    taskProgress: Object.fromEntries(
+      Object.entries(asRecord(record.taskProgress)).filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === "number" && Number.isFinite(entry[1]),
+      ),
+    ),
   };
 }
 
@@ -479,6 +539,8 @@ export function normalizeDocument(raw: unknown): ProjectDocument {
 export interface LoadedFile {
   name: string;
   document: ProjectDocument;
+  /** 期限。古いファイルには無い。 */
+  dueDate?: string | null;
 }
 
 /**
@@ -492,7 +554,7 @@ export interface BundleFile {
   schema: typeof BUNDLE_SCHEMA;
   version: typeof BUNDLE_VERSION;
   savedAt: string;
-  projects: { name: string; document: ProjectDocument }[];
+  projects: { name: string; dueDate: string | null; document: ProjectDocument }[];
 }
 
 export function toBundle(projects: readonly LoadedFile[]): BundleFile {
@@ -500,7 +562,11 @@ export function toBundle(projects: readonly LoadedFile[]): BundleFile {
     schema: BUNDLE_SCHEMA,
     version: BUNDLE_VERSION,
     savedAt: new Date().toISOString(),
-    projects: projects.map((project) => ({ name: project.name, document: project.document })),
+    projects: projects.map((project) => ({
+      name: project.name,
+      dueDate: project.dueDate ?? null,
+      document: project.document,
+    })),
   };
 }
 
@@ -516,6 +582,7 @@ export function readProjectFile(raw: unknown): LoadedFile | null {
   const nested = record.document;
   return {
     name: asString(record.name, "project"),
+    dueDate: asIsoDate(record.dueDate),
     document: normalizeDocument(nested === undefined ? record : nested),
   };
 }
@@ -534,6 +601,7 @@ export function readBundle(raw: unknown): LoadedFile[] | null {
     const item = asRecord(entry);
     return {
       name: asString(item.name, `project ${String(index + 1)}`),
+      dueDate: asIsoDate(item.dueDate),
       document: normalizeDocument(item.document),
     };
   });

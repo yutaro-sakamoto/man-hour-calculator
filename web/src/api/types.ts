@@ -102,6 +102,10 @@ export interface ProjectStatus {
   progress: number;
   taskCount: number;
   doneCount: number;
+  /** 保留中か (内容の `onHold` の写し)。 */
+  onHold: boolean;
+  /** 利用者が最後に内容を変えた時刻 (内容の `editedAt` の写し)。 */
+  editedAt: string;
 }
 
 /**
@@ -109,7 +113,15 @@ export interface ProjectStatus {
  * 画面はその結果を受け取るだけ。
  */
 export type ProjectHealth =
-  "noTasks" | "unknown" | "done" | "onTrack" | "atRisk" | "late" | "behindPace" | "inProgress";
+  | "noTasks"
+  | "unknown"
+  | "done"
+  | "onTrack"
+  | "atRisk"
+  | "late"
+  | "behindPace"
+  | "inProgress"
+  | "onHold";
 
 /** 手当てが要る状態か。色だけでなく並び順と注記にも使う。 */
 export const needsAttention = (health: ProjectHealth): boolean =>
@@ -188,6 +200,32 @@ export interface ProjectDocument {
   tasks: Task[];
   calendar: CalendarSettings;
   settings: ComputeSettings;
+  /** 保留中か。一覧で遅延と見分けるため。 */
+  onHold: boolean;
+  /** 利用者が最後に内容を変えた時刻 (ISO)。開いただけでは動かない。空なら不明。 */
+  editedAt: string;
+  /** 日ごとの見通しの控え (古い順)。前回からどう変わったかを出すため。 */
+  history: Snapshot[];
+  /** 予算 (人日)。無ければ null。 */
+  budget: number | null;
+}
+
+/** ある日の見通しの控え。`crates/api/src/model.rs` の `Snapshot` と対応する。 */
+export interface Snapshot {
+  /** 基準日 (YYYY-MM-DD)。 */
+  date: string;
+  effortP80: number;
+  /** 1970-01-01 からの日数。期間内に終わらなければ null。 */
+  finishP50: number | null;
+  finishP80: number | null;
+  progress: number;
+  spent: number;
+  /** 残りの最可能値の合計 (人日)。 */
+  remaining: number;
+  taskCount: number;
+  doneCount: number;
+  /** タスクごとの進捗率 (0〜100)。止まっているタスクを見つけるため。 */
+  taskProgress: Record<string, number>;
 }
 
 export interface Project {

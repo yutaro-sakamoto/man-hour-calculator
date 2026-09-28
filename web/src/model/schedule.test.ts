@@ -131,7 +131,11 @@ test("行ごとに完了確率・進捗・実績がそろう", () => {
 
   assert.equal(model.todayIndex, 1);
   assert.equal(model.overallMarks.p80, 3);
-  assert.equal(model.members[0]?.taskCount, 2);
+  const alice = model.members[0];
+  assert.ok(alice);
+  assert.equal(alice.taskCount, 2);
+  // 人員の残りは最可能値の合計から消化を引いたもの (目盛りの上限 4 ではない)。
+  assert.equal(alice.remaining, 2);
 });
 
 test("すべて終わっていれば、全体の完了日は最後の完了日", () => {

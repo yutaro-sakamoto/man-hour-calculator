@@ -40,10 +40,17 @@ import {
   todayIso,
 } from "./format.ts";
 import { lang, setLang, t } from "./i18n.ts";
-import { loadConnection, saveConnection, type Connection } from "./model/connection.ts";
+import {
+  loadConnection,
+  loadLastProject,
+  saveConnection,
+  saveLastProject,
+  type Connection,
+} from "./model/connection.ts";
+import { recordSnapshot, snapshotOf } from "./model/history.ts";
 import { memberLabel, resolveMembers } from "./model/members.ts";
-import { emptyDocument, newId, sampleDocument, sampleName } from "./model/project.ts";
-import { buildScheduleModel } from "./model/schedule.ts";
+import { createMember, emptyDocument, newId, sampleDocument, sampleName } from "./model/project.ts";
+import { buildScheduleModel, withDueDate } from "./model/schedule.ts";
 import { buildStatus } from "./model/status.ts";
 import {
   downloadBundle,
@@ -52,10 +59,10 @@ import {
   projectToCsv,
   readAnyFile,
 } from "./model/storage.ts";
-import { csvToTasks } from "./model/storage.ts";
+import { readCsv, readCsvText } from "./model/storage.ts";
 import type { ResolvedMembers } from "./model/members.ts";
 import type { ScheduleModel } from "./model/schedule.ts";
-import { buildRows, invalidRows, type TreeRow } from "./model/tree.ts";
+import { buildRows, dependencyPairs, invalidRows, type TreeRow } from "./model/tree.ts";
 import { renderCalendarTab } from "./ui/calendar.ts";
 import { append, button, clear, h } from "./ui/dom.ts";
 import { renderMembersTab } from "./ui/members.ts";
@@ -230,6 +237,7 @@ function runEngine(document: ProjectDocument): Computed {
       members,
       document.settings,
       PREFIX_BINS,
+      dependencyPairs(rows),
     ),
   );
   const schedule = buildScheduleModel(
@@ -293,15 +301,15 @@ function recompute(): void {
   state.rows = computed.rows;
   state.members = computed.members;
   state.result = computed.result;
-  state.schedule = computed.schedule;
+  // 期限は内容の外 (プロジェクトの情報) にあるので、ここで載せる。
+  state.schedule = withDueDate(computed.schedule, dayFromIso(openDueDate()));
   if (state.calendarMember !== null && state.calendarMember >= state.members.all.length) {
     state.calendarMember = null;
   }
   setStatus(
     t("status.done", {
-      engine: t(
-        state.document.settings.engine === 0 ? "settings.engine.mc" : "settings.engine.conv",
-      ),
+      // 前提があるとモンテカルロに切り替わる。指定ではなく、実際に使ったほうを言う。
+      engine: t(computed.result.engineUsed === 0 ? "settings.engine.mc" : "settings.engine.conv"),
       ms: Math.round(performance.now() - started),
     }),
   );
@@ -444,12 +452,12 @@ function summaryBar(): HTMLElement {
       : finishDay === null
         ? t("summary.notFinishing")
         : formatDayShort(schedule.startDay + finishDay, l);
-  const progress =
-    result === null || result.mean <= 0
-      ? none
-      : formatPercent(result.totalSpent / result.mean, l, 0);
-  const remaining =
-    result === null ? none : formatNumber(Math.max(0, result.mean - result.totalSpent), l);
+  // 進捗と残りは、見通しタブと**同じ定義** (`model/progress.ts`) から出す。
+  // ここだけ平均から引いていたころは、上の帯で 76.5、見通しタブで 72.0 と
+  // 同じ「残り」が 2 つの値になり、どちらを報告すればよいか分からなかった。
+  const overall = schedule?.overallProgress ?? null;
+  const progress = overall === null ? none : formatPercent(overall.ratio, l, 0);
+  const remaining = overall === null ? none : formatNumber(overall.remaining, l);
 
   // **説明は、疑問が起きる場所に置く。** いちばん目立つ数字が「P80」
   // なのに、その意味は「見通し」タブの奥にしか書かれていなかった。
@@ -512,8 +520,12 @@ const fileInput = h("input", {
         let last: Awaited<ReturnType<ApiClient["createProject"]>> | null = null;
         for (const item of loaded) {
           last = await state.client.createProject(newId(), item.name, item.document);
+          // 期限はファイルに一緒に書いてある。内容の外にあるので別に入れる。
+          if (item.dueDate) {
+            await state.client.updateProject(last.id, { dueDate: item.dueDate });
+          }
         }
-        if (last !== null) await openProject(last);
+        if (last !== null) await openProject(await state.client.getProject(last.id));
         setStatus(
           loaded.length === 1
             ? t("file.imported", { name: file.name })
@@ -523,6 +535,15 @@ const fileInput = h("input", {
     },
   },
 });
+
+/**
+ * CSV をどこへ読み込むか。
+ *
+ * 1 つの口で「いま開いているものを置き換える」だけだったころは、開き直した
+ * ときに別のプロジェクトが開いていたのに気づかず、見本や別案件のタスクを
+ * 確認なしで上書きしていた。置き換えと新規を分け、置き換えは確かめる。
+ */
+let csvMode: "replace" | "new" = "replace";
 
 const csvInput = h("input", {
   attrs: { type: "file", accept: ".csv,text/csv" },
@@ -534,25 +555,81 @@ const csvInput = h("input", {
       input.value = "";
       if (!file) return;
       actions.run(async () => {
-        const tasks = csvToTasks(await file.text());
-        if (tasks.length === 0) {
-          setStatus(t("file.badFile"), "error");
-          return;
-        }
-        state.document.tasks = tasks;
-        setStatus(t("file.imported", { name: file.name }));
-        refreshAll();
+        await importCsv(file, csvMode);
       });
     },
   },
 });
+
+async function importCsv(file: File, mode: "replace" | "new"): Promise<void> {
+  const text = await readCsvText(file);
+  const base = mode === "new" ? emptyDocument() : state.document;
+  const members = [...base.calendar.members];
+  const imported = readCsv(text, {
+    members,
+    hoursPerDay: base.calendar.hoursPerPersonDay,
+  });
+  if (imported.tasks.length === 0) {
+    setStatus(t("file.badFile"), "error");
+    return;
+  }
+  if (mode === "replace" && state.document.tasks.length > 0) {
+    const ok = confirm(
+      t("file.confirmReplace", {
+        name: state.open?.name ?? "",
+        count: state.document.tasks.length,
+        next: imported.tasks.length,
+      }),
+    );
+    if (!ok) return;
+  }
+  // 担当者の列にあって人員にいない名前は、人員として足す。1 件ずつ
+  // 担当を選び直させると、16 件で 36 回の操作になっていた。
+  const added = imported.unknownAssignees.map((name) => createMember(name));
+  const tasks =
+    added.length === 0
+      ? imported.tasks
+      : readCsv(text, {
+          members: [...members, ...added],
+          hoursPerDay: base.calendar.hoursPerPersonDay,
+        }).tasks;
+
+  const notes = [t("file.importedCsv", { name: file.name, count: tasks.length })];
+  if (added.length > 0) {
+    notes.push(t("file.csvNewMembers", { names: added.map((m) => m.name).join(", ") }));
+  }
+  if (imported.filledEstimates > 0) {
+    notes.push(t("file.csvFilled", { count: imported.filledEstimates }));
+  }
+  if (imported.unreadable > 0) notes.push(t("file.csvUnreadable", { count: imported.unreadable }));
+  // UTF-8 でも Shift_JIS でもない (あるいは途中が壊れた) ときに出る置換文字。
+  const garbled = text.includes("\uFFFD");
+  if (garbled) notes.push(t("file.csvGarbled"));
+  const tone = imported.unreadable > 0 || garbled ? "error" : "info";
+
+  if (mode === "new") {
+    const document = emptyDocument();
+    document.tasks = tasks;
+    document.calendar.members = added;
+    const name = file.name.replace(/\.csv$/i, "") || "project";
+    const created = await state.client.createProject(newId(), name, document);
+    await openProject(created);
+  } else {
+    applyChange((document) => {
+      document.tasks = tasks;
+      document.calendar.members.push(...added);
+    });
+    refreshAll();
+  }
+  setStatus(notes.join(" "), tone);
+}
 
 function fileMenu(): HTMLElement {
   const menu = h("details", { class: "menu" }, [
     h("summary", { text: t("file.menu") }),
     h("div", { class: "menu-panel" }, [
       button(t("file.save"), () => {
-        downloadProject(state.open?.name ?? "project", state.document);
+        downloadProject(state.open?.name ?? "project", state.document, openDueDate());
         setStatus(t("file.saved"));
         render();
       }),
@@ -565,7 +642,11 @@ function fileMenu(): HTMLElement {
             const projects = [];
             for (const summary of state.projects) {
               const project = await state.client.getProject(summary.id);
-              projects.push({ name: project.name, document: project.document });
+              projects.push({
+                name: project.name,
+                dueDate: summary.dueDate,
+                document: project.document,
+              });
             }
             if (projects.length === 0) {
               setStatus(t("projects.none"), "error");
@@ -582,21 +663,43 @@ function fileMenu(): HTMLElement {
       }),
       h("hr"),
       button(t("file.exportCsv"), () => {
-        downloadCsv(state.open?.name ?? "project", projectToCsv(state.rows));
+        downloadCsv(
+          state.open?.name ?? "project",
+          projectToCsv(state.rows, state.document.calendar.members),
+        );
+      }),
+      button(t("file.importCsvNew"), () => {
+        csvMode = "new";
+        csvInput.click();
       }),
       button(
         t("file.importCsv"),
         () => {
+          csvMode = "replace";
           csvInput.click();
         },
         { attrs: { disabled: !canWrite(state) } },
       ),
     ]),
   ]);
+  // 開閉は状態に持つ。描き直しで作り直されると、開いたばかりのメニューが
+  // 閉じる (最初の計算が終わったときに、押した直後のメニューが閉じていた)。
+  menu.open = state.openPanels["file-menu"] === true;
+  menu.addEventListener("toggle", () => {
+    state.openPanels["file-menu"] = menu.open;
+  });
   menu.addEventListener("click", (event) => {
-    if ((event.target as HTMLElement).tagName === "BUTTON") menu.open = false;
+    if ((event.target as HTMLElement).tagName === "BUTTON") {
+      menu.open = false;
+      state.openPanels["file-menu"] = false;
+    }
   });
   return menu;
+}
+
+/** 開いているプロジェクトの期限。 */
+function openDueDate(): string | null {
+  return state.projects.find((project) => project.id === state.open?.id)?.dueDate ?? null;
 }
 
 /** プロジェクトの切り替え。 */
@@ -836,6 +939,7 @@ function render(): void {
 function refreshAll(): void {
   recompute();
   runCount += 1;
+  rememberForecast();
   distributionChart.setData(
     state.result === null
       ? null
@@ -852,9 +956,33 @@ function refreshAll(): void {
   scheduleSave();
 }
 
+/**
+ * 今日の見通しを控えに残す。週報で「先週から何が変わったか」を答えるため。
+ *
+ * 書ける人のときだけ。閲覧者の手元で控えが増えても保存されず、
+ * 次に開いたときには消えている。
+ */
+function rememberForecast(): void {
+  const status = currentStatus();
+  if (status === undefined || !canWrite(state)) return;
+  const remaining = state.schedule?.overallProgress.remaining ?? 0;
+  state.document.history = recordSnapshot(
+    state.document.history,
+    snapshotOf(
+      state.document.calendar.today,
+      status,
+      remaining,
+      state.rows.filter((row) => row.leafIndex !== null).map((row) => row.task),
+    ),
+  );
+}
+
 /** 内容を変えて、再計算を予約する。描き直しは呼び出し側が決める。 */
 function applyChange(change: (document: ProjectDocument) => void): void {
   change(state.document);
+  // 利用者が内容を変えた印。開いて計算し直しただけでは動かさない
+  // (一覧の「最終入力」で、最後に実績を入れた日が分かるように)。
+  state.document.editedAt = new Date().toISOString();
   window.clearTimeout(computeTimer);
   computeTimer = window.setTimeout(refreshAll, COMPUTE_DELAY_MS);
   state.rows = buildRows(state.document.tasks);
@@ -930,6 +1058,7 @@ async function openProject(project: {
     updatedAt: project.updatedAt,
   };
   state.document = project.document;
+  saveLastProject(loadConnection(), project.id);
   // コメントはまとめて持つ。タスク一覧に件数を出すため、1 件ずつ
   // 数えに行くと行の数だけ問い合わせることになる。
   state.comments = await state.client.listComments(project.id);
@@ -938,6 +1067,12 @@ async function openProject(project: {
   if (state.document.calendar.today !== today) state.document.calendar.today = today;
   await reloadProjects();
   refreshAll();
+}
+
+/** 起動や接続のときに開くもの。前回開いていたものがあればそれ。 */
+function initialProject(): (typeof state.projects)[number] | undefined {
+  const last = loadLastProject(loadConnection());
+  return state.projects.find((project) => project.id === last) ?? state.projects[0];
 }
 
 async function reopen(id: string): Promise<void> {
@@ -1005,7 +1140,7 @@ async function connect(connection: Connection | null): Promise<void> {
   saveConnection(connection);
   state.open = null;
   state.document = emptyDocument();
-  const first = state.projects[0];
+  const first = initialProject();
   if (first) await openProject(await state.client.getProject(first.id));
   else refreshAll();
   setStatus(
@@ -1073,7 +1208,7 @@ async function main(): Promise<void> {
     try {
       state.me = await state.client.me();
       await reloadProjects();
-      const first = state.projects[0];
+      const first = initialProject();
       if (first) await openProject(await state.client.getProject(first.id));
       else refreshAll();
       return;
@@ -1090,7 +1225,7 @@ async function main(): Promise<void> {
     await seed();
     state.me = await state.client.me();
     await reloadProjects();
-    const first = state.projects[0];
+    const first = initialProject();
     if (first) {
       await openProject(await state.client.getProject(first.id));
     } else {

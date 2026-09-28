@@ -422,6 +422,25 @@ export function createScheduleChart(
       ctx.fillText(t("sched.today"), x + 4, plot.rowsTop - 8);
     }
 
+    // --- 期限
+    if (data.dueIndex !== null) {
+      const x = Math.round(xOfDay(data.dueIndex + 1)) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = colors.critical;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, plot.rowsTop - 6);
+      ctx.lineTo(x, plot.curveBottom);
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = colors.critical;
+      ctx.font = `10px ${colors.font}`;
+      ctx.textAlign = "right";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(t("sched.due"), x - 4, plot.rowsTop - 8);
+    }
+
     // --- カーソル
     if (focusDay >= 0) {
       const x = Math.round(xOfDay(focusDay)) + 0.5;

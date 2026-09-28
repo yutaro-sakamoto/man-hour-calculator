@@ -45,6 +45,8 @@ export function buildStatus(
     progress: progress.ratio,
     taskCount: document.tasks.length,
     doneCount: progress.doneCount,
+    onHold: document.onHold,
+    editedAt: document.editedAt,
   };
 }
 
