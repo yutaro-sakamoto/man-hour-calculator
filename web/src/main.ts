@@ -444,6 +444,43 @@ function readSelection(element: Element): { start: number | null; end: number | 
   return { start: element.selectionStart, end: element.selectionEnd };
 }
 
+/**
+ * 焦点のある入力欄は、作り直さずに**同じ要素を新しい画面へ持ち越す**。
+ *
+ * `type="number"` は作り直すと選択とキャレットを戻す手立てが無い。打って
+ * いる最中に、別の欄の再計算や自動保存の描き直しが届くと、全選択して
+ * 打ち直した「7.5」が「7.58」になっていた (E2E が時々落ちて見つかった)。
+ * 同じ要素なら、選択もキャレットもそのまま残る。打つたびに値は状態へ
+ * 書いているので、ふつうは新しく組んだ欄と値が一致する。
+ * 属性 (無効・赤枠など) だけは新しく組んだほうに合わせる。
+ */
+function keepFocusedInput(kept: HTMLElement | null): void {
+  if (kept === null) return;
+  const key = kept.dataset.focus;
+  if (key === undefined) return;
+  const fresh = root.querySelector<HTMLElement>(`[data-focus="${CSS.escape(key)}"]`);
+  if (fresh === null || fresh === kept || fresh.tagName !== kept.tagName) return;
+  if (fresh instanceof HTMLInputElement && kept instanceof HTMLInputElement) {
+    if (fresh.type !== kept.type) return;
+  }
+  // 値が違うなら、状態の側で書き換わった (添付の綴りを差し込んだ、など)。
+  // そのときは新しいほうを使う。持ち越すと、差し込んだ中身を古い値で潰す。
+  if (
+    (fresh instanceof HTMLInputElement || fresh instanceof HTMLTextAreaElement) &&
+    (kept instanceof HTMLInputElement || kept instanceof HTMLTextAreaElement) &&
+    fresh.value !== kept.value
+  ) {
+    return;
+  }
+  for (const name of kept.getAttributeNames()) {
+    if (name !== "value" && !fresh.hasAttribute(name)) kept.removeAttribute(name);
+  }
+  for (const attribute of Array.from(fresh.attributes)) {
+    if (attribute.name !== "value") kept.setAttribute(attribute.name, attribute.value);
+  }
+  fresh.replaceWith(kept);
+}
+
 function restoreFocus(snapshot: FocusSnapshot | null): void {
   if (!snapshot) return;
   const target = root.querySelector<HTMLElement>(`[data-focus="${CSS.escape(snapshot.key)}"]`);
@@ -917,6 +954,16 @@ function render(): void {
   document.documentElement.lang = lang();
   syncDueDate();
   const focus = captureFocus();
+  // 打ちかけの欄 (チェックや選択は除く) は、要素ごと持ち越す (`keepFocusedInput`)。
+  const active = document.activeElement;
+  const kept =
+    (active instanceof HTMLInputElement &&
+      active.type !== "checkbox" &&
+      active.type !== "radio" &&
+      root.contains(active)) ||
+    (active instanceof HTMLTextAreaElement && root.contains(active))
+      ? active
+      : null;
   clear(root);
 
   const editable = canWrite(state) || state.activeTab === "projects";
@@ -970,6 +1017,7 @@ function render(): void {
   const comments = renderCommentsModal(state, actions);
   if (comments) root.append(comments);
 
+  keepFocusedInput(kept);
   restoreFocus(focus);
 
   // 2 つの canvas が同じタブに並ぶので、まとめて描き直す。片方だけだと

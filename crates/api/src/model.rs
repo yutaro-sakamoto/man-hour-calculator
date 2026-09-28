@@ -395,35 +395,16 @@ pub struct Document {
     /// 「最後に実績を入れたのはいつか」が分からなくなっていた。
     pub edited_at: String,
     /// 日ごとの見通しの控え (古い順)。前回からどう変わったかを出すため。
-    pub history: Vec<Snapshot>,
+    ///
+    /// **中身は解釈しない** (`web/src/api/types.ts` の `Snapshot`)。書くのも
+    /// 読むのも画面だけで、API は預かって返すだけ。型にすると 11 個の欄の
+    /// 読み書きが WASM に生成され、配布物が 18 KiB 太った。`Value` のまま
+    /// 持てば、欄を落とすこともない。
+    pub history: Vec<serde_json::Value>,
     /// 予算 (人日)。無ければ `None`。予算内に収まる確率と着地見込みを出すため。
     pub budget: Option<f64>,
     /// 終わったタスクの「実績 ÷ 見積もり」を、残りの見積もりに掛けるか。
     pub calibrate: bool,
-}
-
-/// ある日の見通しの控え。
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Snapshot {
-    /// 基準日 (`YYYY-MM-DD`)。
-    pub date: String,
-    pub effort_p80: f64,
-    /// 完了日 (1970-01-01 からの日数)。期間内に終わらなければ `None`。
-    pub finish_p50: Option<i64>,
-    pub finish_p80: Option<i64>,
-    pub progress: f64,
-    pub spent: f64,
-    /// 残りの最可能値の合計 (人日)。
-    pub remaining: f64,
-    pub task_count: usize,
-    pub done_count: usize,
-    /// タスクごとの進捗率 (0〜100、タスクの id から)。止まっているタスクを見つけるため。
-    pub task_progress: std::collections::BTreeMap<String, f64>,
-    /// 期限までに終わる確率 (0〜1)。期限が無ければ `None`。
-    pub due_probability: Option<f64>,
-    /// 予算内に収まる確率 (0〜1)。予算が無ければ `None`。
-    pub budget_probability: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -102,6 +102,7 @@ say "文書のリンク: $links 本 (切れ $missing)"
 # 落ちる** (serde は知らない欄を捨てる)。実績工数を足したとき、Rust 側に
 # 足し忘れれば、日報から入れた時間が保存のたびに消えるところだった。
 # 画面の欄が API の型に全部あることを見る (逆向きはサーバだけの欄があるので見ない)。
+# 見通しの控え (`Snapshot`) は API が `serde_json::Value` のまま預かるので対象外。
 ts_fields() { # ファイル インタフェース名
   awk -v name="$2" '
     $0 ~ "^export interface " name " \\{" { on = 1; next }
@@ -124,7 +125,6 @@ for pair in \
   "web/src/types.ts:CalendarSettings:CalendarSettings" \
   "web/src/types.ts:ComputeSettings:ComputeSettings" \
   "web/src/api/types.ts:ProjectDocument:Document" \
-  "web/src/api/types.ts:Snapshot:Snapshot" \
   "web/src/api/types.ts:ProjectStatus:ProjectStatus"; do
   IFS=: read -r file ts rs <<<"$pair"
   ts_list=$(ts_fields "$file" "$ts")
