@@ -30,6 +30,7 @@ const LOOK: Record<ProjectHealth, Look> = {
   onTrack: { tone: "good", icon: "✓" },
   done: { tone: "good", icon: "✔" },
   noTasks: { tone: "muted", icon: "–" },
+  onHold: { tone: "muted", icon: "‖" },
 };
 
 export function healthLook(health: ProjectHealth): Look {
@@ -54,6 +55,7 @@ export function healthSeverity(health: ProjectHealth): number {
     "unknown",
     "inProgress",
     "onTrack",
+    "onHold",
     "noTasks",
     "done",
   ];

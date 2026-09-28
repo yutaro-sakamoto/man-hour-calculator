@@ -23,22 +23,24 @@ use crate::stats::{self, PCT_LEVELS};
 /// リクエストが正しいバッファであることを確認するための印。
 pub const MAGIC: f64 = 20_250_920.0;
 /// ABI のバージョン。レイアウトを変えたら上げる。
-pub const VERSION: f64 = 4.0;
+pub const VERSION: f64 = 5.0;
 
 /// リクエストのヘッダ長 (f64 の個数)。
 pub const REQ_HEADER: usize = 32;
 /// レスポンスのヘッダ長 (f64 の個数)。
 pub const RESP_HEADER: usize = 24;
 /// タスク 1 件がリクエストで占める要素数。
-pub const REQ_TASK_STRIDE: usize = 7;
-/// 人員 1 人がリクエストで占める要素数 (曜日ごとの開始 7 + 終了 7 + 休憩 1)。
-pub const REQ_MEMBER_STRIDE: usize = 15;
+pub const REQ_TASK_STRIDE: usize = 8;
+/// 人員 1 人がリクエストで占める要素数 (曜日ごとの開始 7 + 終了 7 + 休憩 1 + 使える割合 1)。
+pub const REQ_MEMBER_STRIDE: usize = 16;
 /// 予定 1 件がリクエストで占める要素数。
 pub const REQ_EVENT_STRIDE: usize = 6;
 /// 予定と人員の割当 1 件が占める要素数。
 pub const REQ_EVENT_MEMBER_STRIDE: usize = 2;
 /// 休みにした回 1 件が占める要素数 (`[予定の添字, 回の初日]`)。
 pub const REQ_EVENT_EXCEPTION_STRIDE: usize = 2;
+/// 前提 1 件が占める要素数 (`[タスクの添字, 前提のタスクの添字]`)。
+pub const REQ_DEPENDENCY_STRIDE: usize = 2;
 
 pub const MAX_TASKS: usize = 500;
 pub const MAX_MEMBERS: usize = 30;
@@ -46,6 +48,7 @@ pub const MAX_EVENTS: usize = 1_000;
 pub const MAX_EVENT_MEMBERS: usize = 10_000;
 pub const MAX_EVENT_EXCEPTIONS: usize = 10_000;
 pub const MAX_FORCED_WORKDAYS: usize = 2_000;
+pub const MAX_DEPENDENCIES: usize = 10_000;
 pub const MAX_ITERATIONS: usize = 2_000_000;
 pub const MIN_BINS: usize = 4;
 pub const MAX_BINS: usize = 512;
@@ -122,6 +125,8 @@ pub struct TaskInput {
     pub end_day: Option<i64>,
     /// 担当する人員の添字。
     pub assignee: usize,
+    /// 申告された実績工数 (人日)。無ければ `None`。
+    pub spent: Option<f64>,
 }
 
 impl TaskInput {
@@ -135,6 +140,7 @@ impl TaskInput {
             progress: 0.0,
             end_day: None,
             assignee: 0,
+            spent: None,
         }
     }
 
@@ -174,6 +180,18 @@ pub struct Request {
     /// 休みにした回。`(予定の添字, 回の初日)`。
     pub event_exceptions: Vec<EventException>,
     pub forced_workdays: Vec<i64>,
+    /// タスクの前提。前提のタスクが終わってから着手する。
+    pub dependencies: Vec<Dependency>,
+}
+
+/// 「`task` は `after` が終わってから着手する」。
+///
+/// `after < task` のものだけが効く (一覧で上にあるものしか待たない)。
+/// 上から順に着手するという前提と揃えるためで、これで循環も起きない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dependency {
+    pub task: usize,
+    pub after: usize,
 }
 
 /// 繰り返しのうち、休みにした 1 回。
@@ -209,6 +227,7 @@ impl Default for Request {
             event_members: Vec::new(),
             event_exceptions: Vec::new(),
             forced_workdays: Vec::new(),
+            dependencies: Vec::new(),
         }
     }
 }
@@ -275,6 +294,7 @@ impl Request {
         out[19] = f64::from(self.use_japanese_holidays);
         out[20] = self.today_day as f64;
         out[21] = self.event_exceptions.len() as f64;
+        out[22] = self.dependencies.len() as f64;
 
         for task in &self.tasks {
             out.extend_from_slice(&[
@@ -285,12 +305,14 @@ impl Request {
                 task.progress,
                 day_to_f64(task.end_day),
                 task.assignee as f64,
+                task.spent.unwrap_or(f64::NAN),
             ]);
         }
         for member in &self.members {
             out.extend(member.starts().iter().map(|&m| m as f64));
             out.extend(member.ends().iter().map(|&m| m as f64));
             out.push(f64::from(member.break_minutes()));
+            out.push(f64::from(member.allocation()));
         }
         for event in &self.events {
             out.extend_from_slice(&[
@@ -310,6 +332,9 @@ impl Request {
         }
         for &day in &self.forced_workdays {
             out.push(day as f64);
+        }
+        for dependency in &self.dependencies {
+            out.extend_from_slice(&[dependency.task as f64, dependency.after as f64]);
         }
         out
     }
@@ -334,6 +359,10 @@ impl Request {
         let n_members = as_index(buf[16]).ok_or((Status::BadMembers, buf[16]))?;
         let n_event_members = as_index(buf[18]).ok_or((Status::BadCalendar, buf[18]))?;
         let n_exceptions = as_index(buf[21]).ok_or((Status::BadCalendar, buf[21]))?;
+        let n_dependencies = as_index(buf[22]).ok_or((Status::BadTaskCount, buf[22]))?;
+        if n_dependencies > MAX_DEPENDENCIES {
+            return Err((Status::BadTaskCount, n_dependencies as f64));
+        }
 
         if n_tasks == 0 || n_tasks > MAX_TASKS {
             return Err((Status::BadTaskCount, n_tasks as f64));
@@ -355,7 +384,8 @@ impl Request {
         let links_at = events_at + n_events * REQ_EVENT_STRIDE;
         let skips_at = links_at + n_event_members * REQ_EVENT_MEMBER_STRIDE;
         let forced_at = skips_at + n_exceptions * REQ_EVENT_EXCEPTION_STRIDE;
-        if buf.len() < forced_at + n_forced {
+        let dependencies_at = forced_at + n_forced;
+        if buf.len() < dependencies_at + n_dependencies * REQ_DEPENDENCY_STRIDE {
             return Err((Status::BadTaskCount, n_tasks as f64));
         }
 
@@ -414,6 +444,8 @@ impl Request {
                 end_day: f64_to_day(buf[at + 5]),
                 // 存在しない人員を指していたら先頭に倒す。
                 assignee: if assignee < n_members { assignee } else { 0 },
+                // 負や非有限は「申告なし」。0 は「まだ使っていない」という申告。
+                spent: Some(buf[at + 7]).filter(|v| v.is_finite() && *v >= 0.0),
             });
         }
 
@@ -431,7 +463,16 @@ impl Request {
             } else {
                 0
             };
-            members.push(MemberSchedule::with_break(start, end, break_minutes));
+            // 読めない割合は「全部使える」。0 に倒すと、その人の仕事が
+            // 永遠に終わらない見通しになる。
+            let allocation = if buf[at + 15].is_finite() {
+                buf[at + 15].round() as i32
+            } else {
+                100
+            };
+            members.push(
+                MemberSchedule::with_break(start, end, break_minutes).with_allocation(allocation),
+            );
         }
 
         // 休みにした回を先に集める。予定ごとに昇順で持たせたいので、
@@ -508,7 +549,28 @@ impl Request {
             event_members,
             event_exceptions,
             forced_workdays,
+            dependencies: read_dependencies(buf, dependencies_at, n_dependencies, n_tasks),
         })
+    }
+
+    /// タスクごとの前提の一覧 (添字)。前提が 1 件も無ければ `None`。
+    pub fn predecessors(&self) -> Option<Vec<Vec<usize>>> {
+        if self.dependencies.is_empty() {
+            return None;
+        }
+        let mut preds = vec![Vec::new(); self.tasks.len()];
+        for dependency in &self.dependencies {
+            if dependency.after < dependency.task {
+                if let Some(list) = preds.get_mut(dependency.task) {
+                    list.push(dependency.after);
+                }
+            }
+        }
+        for list in &mut preds {
+            list.sort_unstable();
+            list.dedup();
+        }
+        Some(preds)
     }
 
     /// 人員ごとの予定を集める。予定は複数人で共有されうるので、
@@ -524,6 +586,81 @@ impl Request {
         }
         per_member
     }
+}
+
+/// 待ちが入ると、終わる位置は工数の和を超える。全部を最大値で流したときの
+/// 位置まで目盛りを広げる。期間内に終わらない人は、期間いっぱいの稼働まで
+/// (その先は「期間内に終わらない」)。
+fn widen_for_waits(
+    grid_hi: &mut [f64],
+    forecasts: &[actuals::Forecast],
+    assignees: &[usize],
+    waits: &montecarlo::Waits<'_>,
+) {
+    let maxima: Vec<f64> = forecasts.iter().map(|f| f.remaining.max()).collect();
+    let bound = montecarlo::upper_ends(
+        &maxima,
+        &Assignment {
+            members: assignees,
+            grid_hi,
+        },
+        waits,
+    );
+    for ((slot, line), &end) in grid_hi.iter_mut().zip(waits.cumulative).zip(&bound) {
+        let whole = line.last().copied().unwrap_or(0.0);
+        let reach = if end.is_finite() {
+            end.min(whole.max(*slot))
+        } else {
+            whole
+        };
+        *slot = slot.max(reach);
+    }
+}
+
+/// 着手を待たせる条件 (前提と、未来の着手日)。どちらも無ければ `None`。
+///
+/// 未来の着手日は、その前日までの担当者の稼働を「使えない」位置にする。
+/// 入れても黙って無視していたころは、着手日より前に完了する予測が出ていた。
+fn start_limits(
+    request: &Request,
+    forecasts: &[actuals::Forecast],
+    cumulative: &[Vec<f64>],
+) -> Option<(Vec<Vec<usize>>, Vec<f64>)> {
+    let not_before: Vec<f64> = request
+        .tasks
+        .iter()
+        .zip(forecasts)
+        .map(|(task, forecast)| match task.start_day {
+            Some(start) if forecast.state == TaskState::NotStarted && start > request.today_day => {
+                let line = cumulative.get(task.assignee).map_or(&[][..], Vec::as_slice);
+                let before = start - request.calendar.start_day - 1;
+                usize::try_from(before)
+                    .ok()
+                    .map_or(0.0, |at| line.get(at).copied().unwrap_or(f64::INFINITY))
+            }
+            _ => 0.0,
+        })
+        .collect();
+    let preds = request.predecessors();
+    if preds.is_none() && not_before.iter().all(|&v| v == 0.0) {
+        return None;
+    }
+    Some((
+        preds.unwrap_or_else(|| vec![Vec::new(); request.tasks.len()]),
+        not_before,
+    ))
+}
+
+/// 前提の区画を読む。範囲外や、自分より下のタスクを待つものは捨てる。
+fn read_dependencies(buf: &[f64], at: usize, count: usize, n_tasks: usize) -> Vec<Dependency> {
+    (0..count)
+        .filter_map(|i| {
+            let slot = at + i * REQ_DEPENDENCY_STRIDE;
+            let task = as_index(buf[slot])?;
+            let after = as_index(buf[slot + 1])?;
+            (after < task && task < n_tasks).then_some(Dependency { task, after })
+        })
+        .collect()
 }
 
 /// エラーだけを載せたレスポンスを作る。
@@ -592,6 +729,7 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
                 start_day: input.start_day,
                 progress: input.progress,
                 end_day: input.end_day,
+                spent: input.spent,
             };
             let calendar = calendars
                 .get(input.assignee)
@@ -624,22 +762,49 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
             *slot += forecast.remaining.max();
         }
     }
+    // --- 前提。あれば、待ちを試行ごとに解くのでモンテカルロで回す
+    // (畳み込みは「担当者ごとの工数の和」しか扱えず、日を待つことを表せない)。
+    let cumulative: Vec<Vec<f64>> = calendars
+        .iter()
+        .map(|calendar| calendar.cumulative_from(request.today_day))
+        .collect();
+    let limits = start_limits(&request, &forecasts, &cumulative);
+    let waits_needed = limits.is_some();
+    let (preds, not_before) = limits.unwrap_or_default();
+    let waits = montecarlo::Waits {
+        preds: &preds,
+        cumulative: &cumulative,
+        not_before: &not_before,
+    };
+    if waits_needed {
+        widen_for_waits(&mut member_grid_hi, &forecasts, &assignees, &waits);
+    }
     let assignment = Assignment {
         members: &assignees,
         grid_hi: &member_grid_hi,
     };
+    let engine = if waits_needed {
+        Engine::MonteCarlo
+    } else {
+        request.engine
+    };
+    let waits = waits_needed.then_some(waits);
 
     // --- 分布を求める
     let spec = PrefixSpec {
         bins: request.prefix_bins,
     };
-    let output = match request.engine {
+    let output = match engine {
         Engine::MonteCarlo => montecarlo::run(
             &samplers,
-            request.iterations,
+            // 畳み込みから切り替えたときも、計算量の上限は守る。
+            request
+                .iterations
+                .min(MAX_WORK / request.tasks.len().max(1)),
             request.seed,
             spec,
             &assignment,
+            waits.as_ref(),
         ),
         Engine::Convolution => convolve::run(&samplers, request.grid_points, spec, &assignment),
     };
@@ -689,6 +854,8 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     out[16] = total_spent;
     out[17] = n_members as f64;
     out[18] = calendars.iter().map(Calendar::total_capacity).sum();
+    // 実際に使ったエンジン。前提があるとモンテカルロに切り替わる。
+    out[19] = engine.code();
 
     out.reserve(offsets[LAST_OFFSET] - RESP_HEADER);
     out.extend_from_slice(&summary.probs);
@@ -717,8 +884,12 @@ pub fn handle(buf: &[f64]) -> Vec<f64> {
     for calendar in &calendars {
         out.extend_from_slice(calendar.capacity());
     }
-    for calendar in &calendars {
-        out.extend_from_slice(calendar.cumulative());
+    // 累積の稼働は**基準日から**数える。残りの工数は今日から先の稼働で
+    // 賄うもので、過ぎた日の稼働は使えない。開始日から数えていたころは、
+    // 何週間も放っておいた案件でも完了予測が 1 日も動かず、未着手の
+    // タスクが過去の日付に終わる見込みになっていた。
+    for line in &cumulative {
+        out.extend_from_slice(line);
     }
     for calendar in &calendars {
         out.extend(calendar.flags().iter().map(|&f| f64::from(f)));
@@ -1346,7 +1517,7 @@ mod tests {
             progress: 0.25,
             ..TaskInput::estimate_only(8.0, 8.0, 8.0)
         }];
-        r.today_day = monday() + 4;
+        r.today_day = monday() + 7; // 翌週の月曜の朝
 
         let raw = handle(&r.encode());
         let resp = Response::parse(&raw);
@@ -1356,6 +1527,203 @@ mod tests {
             (resp.percentiles()[4] - 11.0).abs() < 1e-9,
             "総工数は 5 + 6 = 11 人日 (当初の 8 より重い)"
         );
+    }
+
+    /// 残りの仕事は基準日から先の稼働で賄う。
+    ///
+    /// シミュレーションで見つかったもの。累積の稼働を開始日から返していた
+    /// ため、2 週間手を付けていない案件でも完了予測が動かず、未着手の
+    /// タスクが過去の日付に終わる見込みになっていた。
+    #[test]
+    fn remaining_work_is_scheduled_from_the_reference_day() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.tasks = vec![TaskInput::estimate_only(3.0, 3.0, 3.0)];
+        r.today_day = monday() + 14;
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        let cumulative = resp.cumulative(0);
+        assert!(
+            cumulative[..14].iter().all(|&c| c == 0.0),
+            "過ぎた日の稼働が残りの仕事に使われている: {:?}",
+            &cumulative[..14]
+        );
+        assert_eq!(cumulative[14], 1.0, "基準日の稼働は使える");
+    }
+
+    /// 画面と同じ読み方で「タスク `task` が `day` 日目までに終わっている確率」を出す
+    /// (`web/src/model/schedule.ts` の `prefixCdfAt` と同じ補間)。
+    fn done_by(resp: &Response<'_>, task: usize, day: usize) -> f64 {
+        let member = resp.assignees()[task] as usize;
+        let row = resp.prefix(task);
+        let width = row.len();
+        let step = resp.member_grid_hi()[member] / (width - 1) as f64;
+        let position = resp.cumulative(member)[day] / step;
+        if position <= 0.0 {
+            return row[0];
+        }
+        if position >= (width - 1) as f64 {
+            return row[width - 1];
+        }
+        let index = position.floor() as usize;
+        let frac = position - index as f64;
+        row[index] + frac * (row[index + 1] - row[index])
+    }
+
+    /// 前提のタスクが終わるまで、別の人のタスクは始まらない。
+    ///
+    /// シミュレーションで 4 つの立場すべてが挙げたもの。前提を入れられず、
+    /// 結合テストが製造より先に終わる計画が「12/25 までに 100%」と出ていた。
+    #[test]
+    fn a_task_waits_for_its_predecessor_on_another_member() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays(), eight_hour_weekdays()];
+        r.tasks = vec![
+            TaskInput::estimate_only(3.0, 3.0, 3.0),
+            TaskInput::estimate_only(2.0, 2.0, 2.0).assigned_to(1),
+        ];
+        r.prefix_bins = 1024;
+
+        // 前提なし: B は月・火で終わる。
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert!(done_by(&resp, 1, 1) > 0.99, "{}", done_by(&resp, 1, 1));
+        assert_eq!(
+            raw[19],
+            Engine::Convolution.code(),
+            "前提が無ければ指定のエンジン"
+        );
+
+        // 前提あり: A が水曜に終わるのを待ち、B は木・金で終わる。
+        r.dependencies = vec![Dependency { task: 1, after: 0 }];
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert_eq!(
+            raw[19],
+            Engine::MonteCarlo.code(),
+            "前提があればモンテカルロ"
+        );
+        assert!(
+            done_by(&resp, 1, 3) < 0.01,
+            "木曜にはまだ終わらない: {}",
+            done_by(&resp, 1, 3)
+        );
+        assert!(
+            done_by(&resp, 1, 4) > 0.99,
+            "金曜には終わる: {}",
+            done_by(&resp, 1, 4)
+        );
+        // A 自身は待たない。
+        assert!(done_by(&resp, 0, 2) > 0.99);
+        // 総工数は待ちに関係なく 5 人日。
+        assert!((resp.percentiles()[4] - 5.0).abs() < 1e-9);
+    }
+
+    /// 未来の着手日は、その日より前に仕事を始めさせない。
+    ///
+    /// シミュレーションで見つかったもの。着手日を入れても黙って無視され、
+    /// 着手日より前に完了する予測が出ていた。
+    #[test]
+    fn a_future_start_date_holds_the_task_back() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.tasks = vec![TaskInput {
+            start_day: Some(monday() + 7),
+            ..TaskInput::estimate_only(1.0, 1.0, 1.0)
+        }];
+        r.prefix_bins = 1024;
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert!(done_by(&resp, 0, 4) < 0.01, "着手日の前の週に終わっている");
+        assert!(done_by(&resp, 0, 7) > 0.99, "着手日の当日に終わる");
+    }
+
+    /// 自分より下のタスクを待つ前提は効かない (循環を作らせない)。
+    #[test]
+    fn a_dependency_on_a_later_task_is_ignored() {
+        let mut r = request(Engine::MonteCarlo);
+        r.members = vec![eight_hour_weekdays(), eight_hour_weekdays()];
+        r.tasks = vec![
+            TaskInput::estimate_only(3.0, 3.0, 3.0),
+            TaskInput::estimate_only(2.0, 2.0, 2.0).assigned_to(1),
+        ];
+        r.dependencies = vec![
+            Dependency { task: 0, after: 1 },
+            Dependency { task: 1, after: 1 },
+        ];
+        let decoded = Request::decode(&r.encode()).unwrap();
+        assert!(
+            decoded.dependencies.is_empty(),
+            "{:?}",
+            decoded.dependencies
+        );
+    }
+
+    /// 前提が期間内に終わらなければ、後ろのタスクも期間内に終わらない。
+    #[test]
+    fn waiting_past_the_horizon_never_finishes() {
+        let mut r = request(Engine::MonteCarlo);
+        r.calendar.horizon_days = 10;
+        r.members = vec![eight_hour_weekdays(), eight_hour_weekdays()];
+        r.tasks = vec![
+            TaskInput::estimate_only(20.0, 20.0, 20.0),
+            TaskInput::estimate_only(1.0, 1.0, 1.0).assigned_to(1),
+        ];
+        r.dependencies = vec![Dependency { task: 1, after: 0 }];
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert!(done_by(&resp, 1, 9) < 0.01, "{}", done_by(&resp, 1, 9));
+    }
+
+    /// 使える割合がバッファを往復し、日ごとの工数に効く。
+    #[test]
+    fn allocation_travels_through_the_buffer() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays().with_allocation(40)];
+        r.tasks = vec![TaskInput::estimate_only(1.0, 1.0, 1.0)];
+        let decoded = Request::decode(&r.encode()).unwrap();
+        assert_eq!(decoded.members[0].allocation(), 40);
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        let monday_at = (monday() - r.calendar.start_day) as usize;
+        assert!((resp.capacity(0)[monday_at] - 0.4).abs() < 1e-12);
+
+        // 読めない割合は「全部使える」。
+        let mut buf = r.encode();
+        let members_at = REQ_HEADER + REQ_TASK_STRIDE;
+        buf[members_at + 15] = f64::NAN;
+        assert_eq!(Request::decode(&buf).unwrap().members[0].allocation(), 100);
+    }
+
+    /// 申告した実績工数がバッファを往復して、消化工数になる。
+    #[test]
+    fn a_reported_effort_travels_through_the_buffer() {
+        let mut r = request(Engine::Convolution);
+        r.members = vec![eight_hour_weekdays()];
+        r.tasks = vec![TaskInput {
+            start_day: Some(monday()),
+            progress: 0.5,
+            spent: Some(2.5),
+            ..TaskInput::estimate_only(4.0, 6.0, 9.0)
+        }];
+        r.today_day = monday() + 14;
+        let decoded = Request::decode(&r.encode()).unwrap();
+        assert_eq!(decoded.tasks[0].spent, Some(2.5));
+
+        let raw = handle(&r.encode());
+        let resp = Response::parse(&raw);
+        assert_eq!(
+            resp.spent()[0],
+            2.5,
+            "カレンダーの 10 人日ではなく申告の 2.5 人日"
+        );
+
+        // 負の値は「申告なし」として読む。
+        let mut buf = r.encode();
+        buf[REQ_HEADER + 7] = -1.0;
+        assert_eq!(Request::decode(&buf).unwrap().tasks[0].spent, None);
     }
 
     #[test]

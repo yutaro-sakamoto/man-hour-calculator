@@ -14,7 +14,13 @@
 import type { ApiClient } from "../api/client.ts";
 import type { ProjectRole, ProjectSummary } from "../api/types.ts";
 import { PROJECT_ROLES } from "../api/types.ts";
-import { PROJECT_SORTS, type AppActions, type AppState, type ProjectSort } from "../app.ts";
+import {
+  PROJECT_SORTS,
+  canWrite,
+  type AppActions,
+  type AppState,
+  type ProjectSort,
+} from "../app.ts";
 import { formatDayShort, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
 import { emptyDocument, newId } from "../model/project.ts";
@@ -25,8 +31,10 @@ import { renderConnection } from "./connection.ts";
 import {
   button,
   card,
+  checkbox,
   committedTextInput,
   dateInput,
+  foldout,
   h,
   iconButton,
   select,
@@ -280,7 +288,33 @@ function renderRow(
       },
     },
     [
-      h("td", {}, [healthBadge(project.health)]),
+      h("td", {}, [
+        h("div", { class: "stack" }, [
+          healthBadge(project.health),
+          // 保留は内容の一部なので、開いているものだけ切り替えられる。
+          open && canWrite(state)
+            ? h(
+                "label",
+                { class: "toggle stack-sub", attrs: { title: t("projects.onHoldHint") } },
+                [
+                  checkbox(
+                    state.document.onHold,
+                    (checked) => {
+                      actions.mutate((document) => {
+                        document.onHold = checked;
+                      });
+                    },
+                    {
+                      dataset: { focus: `project:${project.id}:hold` },
+                      attrs: { "aria-label": t("projects.onHold") },
+                    },
+                  ),
+                  h("span", { text: t("projects.onHold") }),
+                ],
+              )
+            : null,
+        ]),
+      ]),
       // 名前と「いつ更新されたか」は 1 つの話。2 行にして列を増やさない。
       h("td", { class: "name-cell" }, [
         h("div", { class: "stack" }, [
@@ -290,9 +324,14 @@ function renderRow(
                 attrs: { "aria-label": t("projects.name") },
               })
             : h("span", { text: project.name }),
+          // 「最終入力」は利用者が内容を変えた時刻。`updatedAt` は見通しを
+          // 計算し直して保存するたびに動くので、開いただけで今日になっていた。
           h("span", {
             class: "stack-sub",
-            text: t("projects.updatedAt", { at: formatMoment(project.updatedAt) }),
+            text:
+              project.status !== null && project.status.editedAt !== ""
+                ? t("projects.editedAt", { at: formatMoment(project.status.editedAt) })
+                : t("projects.updatedAt", { at: formatMoment(project.updatedAt) }),
           }),
         ]),
       ]),
@@ -507,10 +546,25 @@ export function renderProjectsTab(state: AppState, actions: AppActions): HTMLEle
             commentButton(state, actions, null, t("comments.projectButton")),
           ]),
         ]),
-    renderSharing(state, actions),
-    // 一覧を主役にしたいので、管理まわりは畳んでおく。
-    renderGroups(state, actions),
-    renderAccounts(state, actions),
-    renderConnection(state, actions),
+    // 一覧を主役にしたいので、管理まわりは 1 つにまとめて畳んでおく。
+    // 4 つの見出しが並んでいたころは、1 人で使う人が「まずここを埋めるのか」と
+    // 迷い、何のためのものか分からないまま残っていた。
+    foldout(
+      {
+        id: "panel-team",
+        title: t("projects.teamSettings"),
+        open: state.openPanels["panel-team"] ?? false,
+        onToggle: (open) => {
+          state.openPanels["panel-team"] = open;
+        },
+      },
+      [
+        h("p", { class: "hint", text: t("projects.teamSettingsHint") }),
+        renderSharing(state, actions),
+        renderGroups(state, actions),
+        renderAccounts(state, actions),
+        renderConnection(state, actions),
+      ],
+    ),
   ]);
 }

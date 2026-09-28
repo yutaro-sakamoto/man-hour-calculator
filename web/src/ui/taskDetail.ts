@@ -10,14 +10,20 @@
 
 import type { AppActions, AppState } from "../app.ts";
 import { canWrite } from "../app.ts";
-import { formatDayShort, formatEstimateRange, formatNumber, formatPercent } from "../format.ts";
+import {
+  formatDayShort,
+  formatEstimateRange,
+  formatNumber,
+  formatPercent,
+  parseEffort,
+} from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { stateOfProgress, type Progress } from "../model/progress.ts";
-import { collectGroups, type TreeRow } from "../model/tree.ts";
+import { stateOfEntered, stateOfProgress, type Progress } from "../model/progress.ts";
+import { collectGroups, moveToFirst, type TreeRow } from "../model/tree.ts";
 import type { ScheduleRow } from "../model/schedule.ts";
 import type { TaskState } from "../types.ts";
 import { commentButton } from "./comments.ts";
-import { checkbox, field, h, iconButton, openLink } from "./dom.ts";
+import { button, checkbox, field, foldout, h, iconButton, openLink } from "./dom.ts";
 import { sparkline } from "./sparkline.ts";
 import {
   assigneeField,
@@ -27,7 +33,9 @@ import {
   groupOptions,
   nameField,
   priorityField,
+  addHoursField,
   progressField,
+  spentField,
   startField,
   taskWriter,
   type FieldOptions,
@@ -44,7 +52,7 @@ function readout(label: string, value: string, key: string): HTMLElement {
 }
 
 function stateOf(state: AppState, row: TreeRow): TaskState {
-  if (row.leafIndex === null) return "notStarted";
+  if (row.leafIndex === null) return stateOfEntered(row.task);
   return STATE_ORDER[state.result?.states[row.leafIndex] ?? 0] ?? "notStarted";
 }
 
@@ -72,10 +80,14 @@ function forecastSection(
   const l = lang();
   const schedule = state.schedule;
   const result = state.result;
+  // 計算に入っていない行 (`scheduleRow` が無い) は「—」。「期間内に終わり
+  // ません」と出すと、使用を外しただけの完了済みタスクが遅れて見える。
   const day = (mark: number | null | undefined): string =>
-    mark === null || mark === undefined || schedule === null
-      ? t("sched.notFinishing")
-      : formatDayShort(schedule.startDay + mark, l);
+    scheduleRow === undefined || schedule === null
+      ? "—"
+      : mark === null || mark === undefined
+        ? t("sched.notFinishing")
+        : formatDayShort(schedule.startDay + mark, l);
 
   const remaining = row.leafIndex === null ? null : remainingEstimate(state, row.leafIndex);
   const share =
@@ -135,6 +147,9 @@ function editSection(state: AppState, actions: AppActions, row: TreeRow): HTMLEl
     label: task.name.trim() === "" ? t("tasks.untitled") : task.name,
   };
   const l = lang();
+  const hoursPerDay = state.document.calendar.hoursPerPersonDay;
+  const parsedSpent = parseEffort(task.spent, hoursPerDay);
+  const spentInvalid = parsedSpent !== null && Number.isNaN(parsedSpent);
   const rolled = (key: "min" | "likely" | "max"): HTMLElement =>
     h("span", {
       class: "rollup",
@@ -196,10 +211,83 @@ function editSection(state: AppState, actions: AppActions, row: TreeRow): HTMLEl
           ? h("span", { class: "muted", text: t("detail.fromChildren") })
           : endField(task, set, options),
       ),
+      row.hasChildren
+        ? null
+        : field(
+            `${t("col.spent")} (${t("unit.days")})`,
+            spentField(task, set, { ...options, hoursPerDay }),
+            spentInvalid ? t("detail.spentInvalid") : t("detail.spentHint"),
+          ),
+      row.hasChildren || !canWrite(state)
+        ? null
+        : field(
+            t("detail.addHours"),
+            addHoursField(state, task, actions, { ...options, hoursPerDay }),
+          ),
     ]),
     row.hasChildren ? h("p", { class: "hint", text: t("detail.parentNote") }) : null,
     groupOptions(collectGroups(state.document.tasks)),
   ]);
+}
+
+/**
+ * 前提 (これが終わってから着手するもの)。一覧で上にある行だけを並べる。
+ *
+ * 前提が入れられなかったころは、結合テストが製造より先に終わる計画が
+ * 「期限までに 100%」と出ていた (4 つの立場のすべてが最初に挙げたもの)。
+ */
+function afterSection(state: AppState, actions: AppActions, row: TreeRow): HTMLElement | null {
+  const above = state.rows.slice(0, row.index);
+  if (above.length === 0) return null;
+  const chosen = new Set(row.task.after);
+  const label = (item: TreeRow): string =>
+    item.task.name.trim() === "" ? t("tasks.untitled") : item.task.name;
+  const key = `detail-after:${row.task.id}`;
+  const summary =
+    chosen.size === 0
+      ? t("detail.afterNone")
+      : above
+          .filter((item) => chosen.has(item.task.id))
+          .map(label)
+          .join(", ");
+
+  return foldout(
+    {
+      id: key,
+      title: `${t("detail.after")}: ${summary}`,
+      open: state.openPanels[key] ?? false,
+      onToggle: (open) => {
+        state.openPanels[key] = open;
+      },
+    },
+    [
+      h("p", { class: "hint", text: t("detail.afterHint") }),
+      h(
+        "div",
+        { class: "after-list" },
+        above.map((item) =>
+          h("label", { class: "toggle", style: { paddingLeft: `${String(item.depth * 16)}px` } }, [
+            checkbox(
+              chosen.has(item.task.id),
+              (checked) => {
+                actions.mutate((document) => {
+                  const target = document.tasks.find((task) => task.id === row.task.id);
+                  if (!target) return;
+                  const rest = target.after.filter((id) => id !== item.task.id);
+                  target.after = checked ? [...rest, item.task.id] : rest;
+                });
+              },
+              {
+                dataset: { focus: `detail:${row.task.id}:after:${item.task.id}` },
+                attrs: { "aria-label": `${t("detail.after")} — ${label(item)}` },
+              },
+            ),
+            h("span", { class: item.hasChildren ? "strong" : "", text: label(item) }),
+          ]),
+        ),
+      ),
+    ],
+  );
 }
 
 /** 直接の子。押すと窓がその子に移る (掘り下げになる)。 */
@@ -265,6 +353,7 @@ export function renderTaskDetailModal(state: AppState, actions: AppActions): HTM
   const body = h("div", { class: "detail-body" }, [
     forecastSection(state, row, scheduleRow, progress),
     editSection(state, actions, row),
+    afterSection(state, actions, row),
     childrenSection(state, actions, row),
   ]);
 
@@ -281,6 +370,17 @@ export function renderTaskDetailModal(state: AppState, actions: AppActions): HTM
         h("span", { class: `pill pill-${taskState}`, text: t(`state.${taskState}`) }),
         row.hasChildren ? h("span", { class: "chip muted", text: t("detail.group") }) : null,
         h("span", { class: "spacer" }),
+        canWrite(state) && at > 0
+          ? button(
+              t("detail.moveFirst"),
+              () => {
+                actions.mutate((document) => {
+                  document.tasks = moveToFirst(document.tasks, row.task.id);
+                });
+              },
+              { class: "small", title: t("detail.moveFirstHint") },
+            )
+          : null,
         commentButton(state, actions, row.task.id, t("comments.taskButton")),
         iconButton(
           "←",

@@ -22,6 +22,7 @@ import type { AppActions, AppState, AppWidgets } from "../app.ts";
 import { t } from "../i18n.ts";
 import { card, h, type Child } from "./dom.ts";
 import { renderProgressCard } from "./progress.ts";
+import { renderReportCard } from "./report.ts";
 import { renderDistributionCard, renderSensitivityCard, renderSettingsCard } from "./results.ts";
 import { renderMemberCard, renderScheduleCard } from "./schedule.ts";
 
@@ -38,6 +39,7 @@ export function renderForecastTab(
   widgets: AppWidgets,
 ): HTMLElement {
   const sections: Child[] = [
+    tagged("report", renderReportCard(state, actions)),
     tagged("progress", renderProgressCard(state)),
     tagged("schedule", renderScheduleCard(state, actions, widgets)),
     tagged("distribution", renderDistributionCard(state, widgets)),

@@ -26,9 +26,33 @@ const openTab = (page, tab) => page.click(`.tabs button[data-tab="${tab}"]`);
 /** 畳んであるカードを id で開く。言語に依らないので、英語の画面でも使える。 */
 async function openCard(page, id) {
   // `foldout` (カードそのもの) と `subfold` (カードの中の節) の両方。
-  const panel = page.locator(`details#${id}`);
-  if (await panel.evaluate((node) => node.open)) return;
-  await panel.locator("summary").click();
+  await openDetails(page.locator(`details#${id}`));
+}
+
+/**
+ * 畳みを開く。**外側の畳みから順に**開く (チームで使う設定のように、
+ * 畳みの中に畳みがあるため。外が閉じたままだと中の見出しは押せない)。
+ */
+async function openDetails(panel) {
+  // 1 段ずつ、いちばん外の閉じた畳みを開く。描き直しと競らないよう、
+  // 探すのと押すのを同じ評価のなかで済ませる (印を付けてから押すと、
+  // その間の描き直しで印が消えて時間切れになった)。
+  for (let step = 0; step < 5; step++) {
+    const opened = await panel.evaluate((node) => {
+      let outer = null;
+      for (
+        let at = node;
+        at !== null;
+        at = at.parentElement?.closest("details") ?? null
+      ) {
+        if (!at.open) outer = at;
+      }
+      if (outer === null) return false;
+      outer.querySelector(":scope > summary").click();
+      return true;
+    });
+    if (!opened) break;
+  }
   await expect(panel).toHaveAttribute("open", "");
 }
 
@@ -154,9 +178,13 @@ test("親タスクは配下の合計を表示し、直接は編集できない",
   await expect(rowEstimate(page, 0)).toHaveText("8.0 – 13.0 – 32.0");
   await expect(rowEstimate(page, 0).locator(".rollup")).toHaveCount(1);
 
-  // 一覧には入力欄を置かない。書き換えは詳細の窓で行う。
-  await expect(rows(page).locator('input[type="number"]')).toHaveCount(0);
+  // 一覧に置く入力欄は、毎週書き換える進捗 (と担当の選択) だけ。それも末端の
+  // タスクだけで、親の行には無い。ほかの書き換えは詳細の窓で行う。
   await expect(rows(page).locator('input[type="text"]')).toHaveCount(0);
+  await expect(parent.locator('input[type="number"]')).toHaveCount(0);
+  await expect(rows(page).nth(1).locator('input[type="number"]')).toHaveCount(
+    1,
+  );
 
   // 親の詳細では見積もりは読むだけ、子の詳細では書き換えられる。
   await openDetail(page, 0);
@@ -322,9 +350,10 @@ test("完了日を入れると実績工数に置き換わる", async ({ page }) 
   );
   await closeDetail(page);
   await expect(target.locator(".pill")).toHaveText("完了");
+  // 末端のタスクは、入れた進捗をそのまま出す (計算した比率ではない)。
   await expect(target.locator("td[data-progress]")).toHaveAttribute(
     "data-progress",
-    "1.0000",
+    "100",
   );
   expect(spent).toBeGreaterThan(4.5);
   expect(spent).toBeLessThan(5);
@@ -731,7 +760,7 @@ test("プロジェクトを改名・複製・削除できる", async ({ page }) 
   await open(page);
   await openTab(page, "projects");
 
-  const nameInput = page.locator("tr[data-project] input").first();
+  const nameInput = page.locator('tr[data-project] input[type="text"]').first();
   await nameInput.fill("名前を変えた案件");
   await nameInput.blur();
   await expect(page.locator(".project-picker option").first()).toHaveText(
@@ -744,7 +773,9 @@ test("プロジェクトを改名・複製・削除できる", async ({ page }) 
     .click();
   await expect(page.locator("tr[data-project]")).toHaveCount(2);
   await expect(
-    page.locator('tr[data-project][data-open="true"] input').first(),
+    page
+      .locator('tr[data-project][data-open="true"] input[type="text"]')
+      .first(),
   ).toHaveValue(/のコピー/);
   // 複製した中身も引き継がれる。
   await openTab(page, "tasks");
@@ -933,11 +964,17 @@ test("見通しでは 2 つのグラフが両方とも描かれる", async ({ pa
     1000,
   );
 
-  // 区画の並びは「どこまで来たか → いつ終わるか → どれだけぶれるか」。
+  // 区画の並びは「要点 → どこまで来たか → いつ終わるか → どれだけぶれるか」。
+  // 要点は週報に書くこと (期限・予算・前回比) を 1 枚に集めたもの。
   const order = await page.$$eval(".forecast [data-card]", (cards) =>
     cards.map((card) => card.dataset.card),
   );
-  expect(order.slice(0, 3)).toEqual(["progress", "schedule", "distribution"]);
+  expect(order.slice(0, 4)).toEqual([
+    "report",
+    "progress",
+    "schedule",
+    "distribution",
+  ]);
 });
 
 test("進捗カードは summary バーと同じ進捗を出す", async ({ page }) => {
@@ -1073,11 +1110,17 @@ test("帯グラフの行を押すと、そのタスクの詳細が開く", async
   await open(page);
   await openTab(page, "forecast");
   const chart = page.locator("#schedule-chart");
-  await chart.scrollIntoViewIfNeeded();
-  const box = await chart.boundingBox();
-  // 見出しの下から 1 行 26px。2 行目は Requirements。
-  await page.mouse.click(box.x + 60, box.y + 30 + 26 + 13);
-  await expect(page.locator(".detail-heading")).toHaveText("Requirements");
+  // 帯グラフは要点カードの下にあり、画面の外から scroll して押す。押す前に
+  // 自動保存の描き直しが入ると座標がずれるので、測るところからやり直せるように。
+  await expect(async () => {
+    await chart.scrollIntoViewIfNeeded();
+    const box = await chart.boundingBox();
+    // 見出しの下から 1 行 26px。2 行目は Requirements。
+    await page.mouse.click(box.x + 60, box.y + 30 + 26 + 13);
+    await expect(page.locator(".detail-heading")).toHaveText("Requirements", {
+      timeout: 1000,
+    });
+  }).toPass({ timeout: 10_000 });
   await closeDetail(page);
 
   // キーボードでも: ↓ で行を選び、Enter で開く。
@@ -1201,14 +1244,12 @@ async function addProject(page, name, due) {
  * 開いているものをもう一度押すと閉じてしまう。
  */
 async function openPanel(page, title) {
+  // 見出しそのもので選ぶ。中身の文字で選ぶと、それを含む外側の畳みに当たる。
   const panel = page
     .locator("details.foldout")
-    .filter({ hasText: title })
+    .filter({ has: page.locator(":scope > summary", { hasText: title }) })
     .first();
-  if (!(await panel.evaluate((element) => element.open))) {
-    await panel.locator("summary").click();
-  }
-  await expect(panel).toHaveAttribute("open", "");
+  await openDetails(panel);
 }
 
 const listRow = (page, name) =>

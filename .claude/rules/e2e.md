@@ -24,6 +24,7 @@ paths:
 | `chaos.spec.js` | localStorage が壊れているとき |
 | `performance.spec.js` | 上限いっぱいの大きさと、繰り返し (ソーク) |
 | `compat.spec.js` | 狭い画面とタッチ |
+| `field.spec.js` | 現場を模したシミュレーションで見つかった、実務での誤読・遠回り |
 
 - **`page.evaluate` の中は CSP の外。** そこで `eval` しても止まらないので、
   CSP が効いているかはそこで試さない (`<script>` を差し込んで試す)

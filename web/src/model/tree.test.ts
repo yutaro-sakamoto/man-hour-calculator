@@ -5,10 +5,12 @@ import { createTask } from "./project.ts";
 import { at } from "../testing.ts";
 import {
   buildRows,
+  dependencyPairs,
   collectGroups,
   indentTask,
   insertAfterSubtree,
   moveSubtree,
+  moveToFirst,
   outdentTask,
   parseEstimate,
   removeSubtree,
@@ -220,4 +222,41 @@ test("グループ名は重複なく並べ替えて集める", () => {
     at(tasks, index).group = group;
   }
   assert.deepEqual(collectGroups(tasks), ["実装", "設計"]);
+});
+
+test("前提は葉どうしの組に直す。親を選べば配下の葉すべてを待つ", () => {
+  const design = createTask({ name: "design" });
+  const spec = createTask({ name: "spec", parentId: design.id });
+  const arch = createTask({ name: "arch", parentId: design.id });
+  const build = createTask({ name: "build", after: [design.id] });
+  const test_ = createTask({ name: "test", after: [build.id] });
+  const rows = buildRows([design, spec, arch, build, test_]);
+  // 葉の添字: spec 0, arch 1, build 2, test 3
+  assert.deepEqual(dependencyPairs(rows), [
+    [2, 0],
+    [2, 1],
+    [3, 2],
+  ]);
+});
+
+test("自分より下の行を待つ前提と、計算から外した行は落とす", () => {
+  const a = createTask({ name: "a" });
+  const b = createTask({ name: "b" });
+  a.after = [b.id];
+  const off = createTask({ name: "off", enabled: false });
+  const c = createTask({ name: "c", after: [off.id] });
+  assert.deepEqual(dependencyPairs(buildRows([a, b, off, c])), []);
+});
+
+test("最初に着手する: 同じ親の下で一番上に動く", () => {
+  const parent = createTask({ name: "p" });
+  const a = createTask({ name: "a", parentId: parent.id });
+  const b = createTask({ name: "b", parentId: parent.id });
+  const c = createTask({ name: "c", parentId: parent.id });
+  const other = createTask({ name: "other" });
+  const moved = moveToFirst([parent, a, b, c, other], c.id);
+  assert.deepEqual(
+    moved.map((task) => task.name),
+    ["p", "c", "a", "b", "other"],
+  );
 });

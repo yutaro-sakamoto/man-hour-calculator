@@ -22,6 +22,12 @@ pub struct MemberSchedule {
     end: [i32; 7],
     /// 稼働日 1 日あたりの休憩分数。
     break_minutes: i32,
+    /// 稼働のうち、この案件に使える割合 (%、`0..=100`)。
+    ///
+    /// 兼務 (週の半分は別案件) や、日常の問い合わせ・障害対応のような
+    /// 割り込みを表す。時間帯や休憩をいじって表すと、他の人には意味が
+    /// 読めないうえ、予定との重なりの計算まで狂う。
+    allocation: i32,
 }
 
 impl Default for MemberSchedule {
@@ -37,6 +43,7 @@ impl Default for MemberSchedule {
             start,
             end,
             break_minutes: 60,
+            allocation: 100,
         }
     }
 }
@@ -61,7 +68,19 @@ impl MemberSchedule {
             start: normalized_start,
             end: normalized_end,
             break_minutes: break_minutes.clamp(0, MINUTES_PER_DAY),
+            allocation: 100,
         }
+    }
+
+    /// この案件に使える割合 (%) を決める。`0..=100` に丸める。
+    pub fn with_allocation(mut self, percent: i32) -> Self {
+        self.allocation = percent.clamp(0, 100);
+        self
+    }
+
+    /// この案件に使える割合 (%)。
+    pub fn allocation(&self) -> i32 {
+        self.allocation
     }
 
     /// その曜日の稼働時間帯。非稼働なら `None`。

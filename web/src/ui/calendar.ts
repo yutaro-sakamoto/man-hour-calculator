@@ -72,6 +72,7 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
             if (value !== null) document.calendar.startDate = value;
           });
         }),
+        t("cal.startHint"),
       ),
       field(
         t("cal.today"),
@@ -80,6 +81,7 @@ function renderBasics(state: AppState, actions: AppActions): HTMLElement {
             if (value !== null) document.calendar.today = value;
           });
         }),
+        t("cal.todayHint"),
       ),
       field(
         t("cal.horizon"),
@@ -134,13 +136,27 @@ function renderEditor(state: AppState, actions: AppActions): HTMLElement | null 
   // 消された直後などは、黙って閉じる。
   if (event === undefined) return null;
 
+  // 升を押して作ったまま、まだ何も書き換えていない予定。× で閉じると消える。
+  const isNew = state.editingEventIsNew;
   const close = (): void => {
     actions.patch((draft) => {
       draft.editingEventId = null;
       draft.editingEventDay = null;
+      draft.editingEventIsNew = false;
     });
   };
+  /** 閉じる。作ったばかりの下書きなら、やめたものとして消す。 */
+  const dismiss = (): void => {
+    if (isNew) {
+      actions.mutate((document) => {
+        document.calendar.events = document.calendar.events.filter((item) => item.id !== editingId);
+      });
+    }
+    close();
+  };
   const patch = (change: Partial<CalendarEventItem>): void => {
+    // 1 か所でも書き換えたら、もう下書きではない (× で閉じても残す)。
+    state.editingEventIsNew = false;
     actions.mutate((document) => {
       const target = document.calendar.events[index];
       if (target) Object.assign(target, change);
@@ -189,7 +205,10 @@ function renderEditor(state: AppState, actions: AppActions): HTMLElement | null 
       attrs: { role: "dialog", "aria-modal": "true", "aria-label": t("cal.editEvent") },
     },
     [
-      h("div", { class: "event-head" }, [nameInput, iconButton("×", t("cal.closeEditor"), close)]),
+      h("div", { class: "event-head" }, [
+        nameInput,
+        iconButton("×", t("cal.closeEditor"), dismiss),
+      ]),
       h("div", { class: "controls" }, [
         field(
           t("cal.eventFrom"),
@@ -297,18 +316,21 @@ function renderEditor(state: AppState, actions: AppActions): HTMLElement | null 
               { dataset: { action: "skip-occurrence" } },
             )
           : null,
-        button(
-          event.repeatWeeks === 0 ? t("cal.removeEvent") : t("cal.removeAllOccurrences"),
-          () => {
-            if (!confirm(t("cal.confirmRemoveEvent", { name: title }))) return;
-            actions.mutate((document) => {
-              document.calendar.events.splice(index, 1);
-            });
-            close();
-          },
-          { dataset: { action: "remove-event" } },
-        ),
-        button(t("cal.doneEditing"), close, { class: "primary" }),
+        isNew ? button(t("cal.cancelNew"), dismiss, { dataset: { action: "cancel-new" } }) : null,
+        isNew
+          ? null
+          : button(
+              event.repeatWeeks === 0 ? t("cal.removeEvent") : t("cal.removeAllOccurrences"),
+              () => {
+                if (!confirm(t("cal.confirmRemoveEvent", { name: title }))) return;
+                actions.mutate((document) => {
+                  document.calendar.events.splice(index, 1);
+                });
+                close();
+              },
+              { dataset: { action: "remove-event" } },
+            ),
+        button(isNew ? t("cal.addEvent") : t("cal.doneEditing"), close, { class: "primary" }),
       ]),
     ],
   );
@@ -325,10 +347,10 @@ function renderEditor(state: AppState, actions: AppActions): HTMLElement | null 
       class: "modal-backdrop",
       on: {
         click: (domEvent) => {
-          if (domEvent.target === domEvent.currentTarget) close();
+          if (domEvent.target === domEvent.currentTarget) dismiss();
         },
         keydown: (domEvent) => {
-          if (domEvent.key === "Escape") close();
+          if (domEvent.key === "Escape") dismiss();
         },
       },
     },
@@ -425,6 +447,7 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
     actions.patch((draft) => {
       draft.editingEventId = id;
       draft.editingEventDay = iso;
+      draft.editingEventIsNew = true;
     });
   };
 
@@ -466,22 +489,26 @@ function renderMonth(state: AppState, actions: AppActions): HTMLElement {
           h("div", { class: "day-head" }, [
             // 数字を押すと、休日でもその日は稼働する扱いにできる。
             // 空いているところは「予定を足す」に使うので、切り替えはここに置く。
-            h("button", {
-              class: "day-number",
-              text: String(offset + 1),
-              title: t("cal.toggleForced", { date: iso }),
-              attrs: { type: "button", "aria-label": t("cal.toggleForced", { date: iso }) },
-              on: {
-                click: () => {
-                  actions.mutate((document) => {
-                    const list = document.calendar.forcedWorkdays;
-                    const at = list.indexOf(iso);
-                    if (at >= 0) list.splice(at, 1);
-                    else list.push(iso);
-                  });
-                },
-              },
-            }),
+            // **切り替えられるのは休みの日 (と、休日出勤にした日) だけ。** 平日の
+            // 数字も押せたころは、予定を足すつもりで押して休日出勤の印が付いていた。
+            (flags & (DAY_FLAG.weekend | DAY_FLAG.holiday | DAY_FLAG.forcedWorkday)) === 0
+              ? h("span", { class: "day-number", text: String(offset + 1) })
+              : h("button", {
+                  class: "day-number",
+                  text: String(offset + 1),
+                  title: t("cal.toggleForced", { date: iso }),
+                  attrs: { type: "button", "aria-label": t("cal.toggleForced", { date: iso }) },
+                  on: {
+                    click: () => {
+                      actions.mutate((document) => {
+                        const list = document.calendar.forcedWorkdays;
+                        const at = list.indexOf(iso);
+                        if (at >= 0) list.splice(at, 1);
+                        else list.push(iso);
+                      });
+                    },
+                  },
+                }),
             h("span", {
               class: "day-capacity",
               text: inRange && capacity > 0 ? formatNumber(capacity, lang(), 1) : "",

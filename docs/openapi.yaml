@@ -976,6 +976,10 @@ components:
         progress: { type: number, minimum: 0, maximum: 1 }
         taskCount: { type: integer, minimum: 0 }
         doneCount: { type: integer, minimum: 0 }
+        onHold: { type: boolean, description: 保留中か (内容の onHold の写し) }
+        editedAt:
+          type: string
+          description: 利用者が最後に内容を変えた時刻 (内容の editedAt の写し)。空なら不明
 
     ProjectHealth:
       type: string
@@ -989,6 +993,7 @@ components:
           late,
           behindPace,
           inProgress,
+          onHold,
         ]
       description: |
         一覧に出す状態。サーバが `status` と `dueDate` から判定する
@@ -997,13 +1002,14 @@ components:
         | 値 | 意味 |
         |---|---|
         | `noTasks` | タスクが 1 件も無い |
-        | `unknown` | 控えが無い、または内容と対応していない (再計算が必要) |
+        | `unknown` | 控えが無い、内容と対応していない、または 7 日より古い (再計算が必要) |
         | `done` | すべてのタスクが完了 |
-        | `onTrack` | 期限あり。8 割の確からしさで間に合う |
-        | `atRisk` | 期限あり。5 割では間に合うが 8 割では危うい |
+        | `onTrack` | 期限あり。8 割の確からしさで、3 日以上の余裕をもって間に合う |
+        | `atRisk` | 期限あり。8 割で間に合うが余裕が 3 日未満、または 5 割では間に合うが 8 割では危うい |
         | `late` | 期限あり。5 割でも間に合わない — **遅延** |
         | `behindPace` | 期限なし。工数の消化率が進捗率を 10pt 以上上回る — **遅延** |
         | `inProgress` | 期限なし。上記以外 |
+        | `onHold` | 保留中。期限やペースでは判定しない |
 
     ProjectSummary:
       type: object
@@ -1083,6 +1089,33 @@ components:
           items: { $ref: "#/components/schemas/Task" }
         calendar: { $ref: "#/components/schemas/CalendarSettings" }
         settings: { $ref: "#/components/schemas/ComputeSettings" }
+        onHold: { type: boolean, description: 保留中か }
+        editedAt:
+          type: string
+          description: 利用者が最後に内容を変えた時刻。開いただけでは動かない
+        history:
+          type: array
+          description: 日ごとの見通しの控え (古い順)。前回からの差を出すため
+          items: { $ref: "#/components/schemas/Snapshot" }
+        budget: { type: [number, "null"], description: 予算 (人日) }
+
+    Snapshot:
+      type: object
+      required: [date]
+      properties:
+        date: { type: string, format: date, description: 基準日 }
+        effortP80: { type: number }
+        finishP50: { type: [integer, "null"] }
+        finishP80: { type: [integer, "null"] }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        spent: { type: number }
+        remaining: { type: number, description: 残りの最可能値の合計 (人日) }
+        taskCount: { type: integer, minimum: 0 }
+        doneCount: { type: integer, minimum: 0 }
+        taskProgress:
+          type: object
+          additionalProperties: { type: number }
+          description: タスクの id ごとの進捗率 (0〜100)
 
     Task:
       type: object
@@ -1106,6 +1139,13 @@ components:
         assigneeId:
           type: [string, "null"]
           description: 担当する人員の id。null なら未割当
+        spent:
+          type: string
+          description: 実績工数。人日 (`3.5`) か時間 (`28h`)。空なら未入力
+        after:
+          type: array
+          items: { type: string }
+          description: 前提となるタスクの id。一覧で上にあるものだけが効く
 
     Member:
       type: object
@@ -1121,6 +1161,11 @@ components:
           description: 日曜から土曜まで。start と end が同じ曜日は休み
           items: { $ref: "#/components/schemas/WorkWindow" }
         breakMinutes: { type: number, minimum: 0 }
+        allocation:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: 稼働のうち、この案件に使える割合 (%)。既定 100
         userId:
           type: [string, "null"]
           description: 対応するアカウント。紐づいていなければ null

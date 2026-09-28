@@ -96,6 +96,52 @@ done < <(
 )
 say "文書のリンク: $links 本 (切れ $missing)"
 
+# ------------------------------------ 画面の型 ⇔ API の型 (内容の欄)
+# 内容 (タスク・人員・予定…) は、ローカルでもサーバでも `crates/api` の
+# 型を通って保存される。**TypeScript にだけ欄を足すと、保存のたびに黙って
+# 落ちる** (serde は知らない欄を捨てる)。実績工数を足したとき、Rust 側に
+# 足し忘れれば、日報から入れた時間が保存のたびに消えるところだった。
+# 画面の欄が API の型に全部あることを見る (逆向きはサーバだけの欄があるので見ない)。
+# 見通しの控え (`Snapshot`) は API が `serde_json::Value` のまま預かるので対象外。
+ts_fields() { # ファイル インタフェース名
+  awk -v name="$2" '
+    $0 ~ "^export interface " name " \\{" { on = 1; next }
+    on && /^}/ { exit }
+    on && match($0, /^  [a-zA-Z]+\??:/) { f = substr($0, 3, RLENGTH - 3); sub(/\?$/, "", f); print f }
+  ' "$1"
+}
+rs_fields() { # 構造体名 (crates/api/src/model.rs)
+  awk -v name="$1" '
+    $0 ~ "^pub struct " name " \\{" { on = 1; next }
+    on && /^}/ { exit }
+    on && match($0, /^    pub [a-z_]+:/) { print substr($0, 9, RLENGTH - 9) }
+  ' crates/api/src/model.rs | sed -E 's/_([a-z])/\U\1/g'
+}
+type_pairs=0
+for pair in \
+  "web/src/types.ts:Task:Task" \
+  "web/src/types.ts:Member:Member" \
+  "web/src/types.ts:CalendarEventItem:CalendarEvent" \
+  "web/src/types.ts:CalendarSettings:CalendarSettings" \
+  "web/src/types.ts:ComputeSettings:ComputeSettings" \
+  "web/src/api/types.ts:ProjectDocument:Document" \
+  "web/src/api/types.ts:ProjectStatus:ProjectStatus"; do
+  IFS=: read -r file ts rs <<<"$pair"
+  ts_list=$(ts_fields "$file" "$ts")
+  rs_list=$(rs_fields "$rs")
+  # **読み取れないことを「ずれ無し」と読まない。**
+  if [ -z "$ts_list" ] || [ -z "$rs_list" ]; then
+    bad "型の欄を読み取れません ($file の $ts / model.rs の $rs)"
+    continue
+  fi
+  type_pairs=$((type_pairs + 1))
+  for field in $ts_list; do
+    grep -qxF -e "$field" <<<"$rs_list" ||
+      bad "$file の $ts.$field が crates/api/src/model.rs の $rs にありません (保存で落ちます)"
+  done
+done
+say "画面と API の型: $type_pairs 組"
+
 # -------------------------------------------- 保存データと表の版 ⇔ 移行の段
 # `STORE_VERSION` を上げたら、サーバの表にも段が要る (その逆も)。
 store_version=$(grep -oP 'pub const STORE_VERSION: u32 = \K[0-9]+' crates/api/src/store/mod.rs)

@@ -53,7 +53,7 @@ export function renderMemberCard(state: AppState): HTMLElement | null {
           h("tr", {}, [
             h("th", { text: t("sched.memberCol") }),
             h("th", { class: "num", text: t("members.tasks", { count: "" }).trim() }),
-            h("th", { class: "num", text: `${t("col.forecast")} (${t("unit.days")})` }),
+            h("th", { class: "num", text: `${t("progress.remaining")} (${t("unit.days")})` }),
             h("th", { text: t("summary.finishP50") }),
             h("th", { text: t("summary.finishP80") }),
           ]),
@@ -65,7 +65,7 @@ export function renderMemberCard(state: AppState): HTMLElement | null {
             h("tr", {}, [
               h("td", { text: member.label }),
               h("td", { class: "num", text: String(member.taskCount) }),
-              h("td", { class: "num", text: formatNumber(member.gridHi, l) }),
+              h("td", { class: "num", text: formatNumber(member.remaining, l) }),
               ...([member.marks.p50, member.marks.p80] as const).map((mark) =>
                 h("td", {
                   text:
@@ -157,7 +157,8 @@ function renderForecastTable(
   const l = lang();
   // 既定は「全体の P50 完了日」。期間の真ん中を出しても、そこはたいてい
   // 全部 100% で何も読み取れない。
-  const defaultDay = model.overallMarks.p50 ?? Math.floor(model.displayDays / 2);
+  // 期限があれば、期限の日。報告で聞かれるのは「期限に間に合うか」なので。
+  const defaultDay = model.dueIndex ?? model.overallMarks.p50 ?? Math.floor(model.displayDays / 2);
   const probeIso = state.probeDate ?? isoFromDay(model.startDay + defaultDay);
   const probeDay = dayFromIso(probeIso);
   const at =

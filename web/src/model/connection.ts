@@ -68,3 +68,43 @@ export function normalizeBaseUrl(value: string): string | null {
   // 末尾のスラッシュは落とす (パスと二重にならないように)。
   return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
 }
+
+const LAST_PROJECT_KEY = "mhc.lastProject.v1";
+
+/**
+ * 最後に開いていたプロジェクトの id。接続先ごとに覚える。
+ *
+ * 覚えていなかったころは、開き直すたびに一覧の先頭 (手当てが要る順の
+ * 先頭) が開いていた。気づかずにそこへ CSV を読み込み、別の案件の
+ * タスクを上書きしてしまった。
+ */
+export function loadLastProject(connection: Connection | null): string | null {
+  try {
+    const raw = localStorage.getItem(LAST_PROJECT_KEY);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const id = (parsed as Record<string, unknown>)[connectionKey(connection)];
+    return typeof id === "string" ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 開いたプロジェクトを覚える。書けなくても困らない (次に先頭が開くだけ)。 */
+export function saveLastProject(connection: Connection | null, id: string): void {
+  try {
+    const raw = localStorage.getItem(LAST_PROJECT_KEY);
+    const parsed: unknown = raw === null ? {} : JSON.parse(raw);
+    const table =
+      typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    table[connectionKey(connection)] = id;
+    localStorage.setItem(LAST_PROJECT_KEY, JSON.stringify(table));
+  } catch {
+    // 覚えられないだけで、動作には関わらない。
+  }
+}
+
+function connectionKey(connection: Connection | null): string {
+  return connection === null ? "local" : connection.baseUrl;
+}

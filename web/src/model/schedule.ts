@@ -96,8 +96,13 @@ export interface MemberSummary {
   marks: ScheduleMarks;
   /** 担当タスクの件数。 */
   taskCount: number;
-  /** 担当ぶんの工数 (最大側)。 */
-  gridHi: number;
+  /**
+   * 担当ぶんの残り (最可能値の合計、人日)。
+   *
+   * 以前は累積和の目盛りの上限 (残りの**最大値**の合計) を「予測工数」として
+   * 出していた。全員ぶん足すと総工数より大きくなり、人を増やす判断を誤らせる。
+   */
+  remaining: number;
 }
 
 export interface ScheduleModel {
@@ -108,6 +113,8 @@ export interface ScheduleModel {
   /** 全員が非稼働の日を示すフラグ。 */
   dayFlags: Uint8Array;
   todayIndex: number | null;
+  /** 期限 (期間の初日からの日数)。期限が無い・期間の外なら `null`。 */
+  dueIndex: number | null;
   rows: ScheduleRow[];
   members: MemberSummary[];
   overall: Float64Array;
@@ -240,8 +247,14 @@ export function buildScheduleModel(
     const last = lastTaskPerMember(rows, i, result);
     if (last.size === 0) continue;
     const parts = [...last.values()].map(probabilitiesOf);
-    const probabilities =
-      parts.length === 1 ? (parts[0] ?? new Float64Array(days)) : combine(parts, days);
+    const progress = progressOfSubtree(result, rows, i);
+    const actual = actualSpanOf(subtreeLeafRows(rows, i), result.calendarStartDay);
+    const finished = progress.leafCount > 0 && progress.doneCount === progress.leafCount;
+    const probabilities = finished
+      ? finishedOn(finishIndex(actual, todayDay - result.calendarStartDay), days)
+      : parts.length === 1
+        ? (parts[0] ?? new Float64Array(days))
+        : combine(parts, days);
     scheduleRows.push({
       id: row.task.id,
       label: row.task.name.trim() === "" ? untitled : row.task.name,
@@ -251,21 +264,15 @@ export function buildScheduleModel(
       members: [...last.keys()].sort((a, b) => a - b),
       probabilities,
       marks: marksOf(probabilities),
-      progress: progressOfSubtree(result, rows, i),
-      actual: actualSpanOf(subtreeLeafRows(rows, i), result.calendarStartDay),
+      progress,
+      actual,
     });
   }
 
   // 人員ごとのまとめ。その人の最後のタスクが終われば担当ぶんは終わり。
   const members: MemberSummary[] = [];
   for (let member = 0; member < result.nMembers; member++) {
-    let lastTask: number | null = null;
-    let count = 0;
-    for (let task = 0; task < result.nTasks; task++) {
-      if ((result.assignees[task] ?? 0) !== member) continue;
-      count += 1;
-      lastTask = task;
-    }
+    const { lastTask, count, remaining } = memberLoad(result, member);
     const probabilities =
       lastTask === null ? new Float64Array(days).fill(1) : probabilitiesOf(lastTask);
     members.push({
@@ -274,13 +281,19 @@ export function buildScheduleModel(
       probabilities,
       marks: marksOf(probabilities),
       taskCount: count,
-      gridHi: result.memberGridHi[member] ?? 0,
+      remaining,
     });
   }
 
-  // 全体は「全員が担当ぶんを終えている」確率。
-  const overall = combine(
-    members.filter((member) => member.taskCount > 0).map((member) => member.probabilities),
+  const overallProgress = progressOverall(result);
+  const overallActual = actualSpanOf(
+    rows.filter((row) => row.leafIndex !== null),
+    result.calendarStartDay,
+  );
+  const overall = overallProbabilities(
+    members,
+    overallProgress,
+    finishIndex(overallActual, todayDay - result.calendarStartDay),
     days,
   );
 
@@ -312,15 +325,90 @@ export function buildScheduleModel(
     displayDays,
     dayFlags,
     todayIndex,
+    dueIndex: null,
     rows: scheduleRows,
     members,
     overall,
     overallMarks: marksOf(overall),
-    overallProgress: progressOverall(result),
-    overallActual: actualSpanOf(
-      rows.filter((row) => row.leafIndex !== null),
-      result.calendarStartDay,
-    ),
+    overallProgress,
+    overallActual,
+  };
+}
+
+/**
+ * 全体は「全員が担当ぶんを終えている」確率。すべて終わっていれば、
+ * 最後に終わった日 (予測ではなく実績)。
+ */
+function overallProbabilities(
+  members: readonly MemberSummary[],
+  progress: Progress,
+  finishedAt: number,
+  days: number,
+): Float64Array {
+  if (progress.leafCount > 0 && progress.doneCount === progress.leafCount) {
+    return finishedOn(finishedAt, days);
+  }
+  return combine(
+    members.filter((member) => member.taskCount > 0).map((member) => member.probabilities),
+    days,
+  );
+}
+
+/**
+ * 終わったものの完了日 (期間の初日からの日数)。
+ *
+ * 完了日が入っていればそれ。進捗 100% だけで完了日が無いものは、基準日の
+ * 前日に終わったとみなす (少なくとも今朝には終わっていた)。
+ */
+function finishIndex(actual: ActualSpan, todayIndex: number): number {
+  return actual.end ?? todayIndex - 1;
+}
+
+/**
+ * 終わった日から先がずっと 1 の確率。
+ *
+ * **終わったものの日付を予測から引かない。** 残りが 0 のタスクは、累積の
+ * 稼働が 0 の日 (= 期間の初日) にもう「終わっている」ので、予測から引くと
+ * 完了日が開始日になっていた。入力された完了日をそのまま出す。
+ */
+function finishedOn(index: number, days: number): Float64Array {
+  const out = new Float64Array(days);
+  out.fill(1, Math.max(0, Math.min(days, index)));
+  return out;
+}
+
+/** 担当者 1 人ぶんの件数・最後のタスク・残り (最可能値の合計)。 */
+function memberLoad(
+  result: ComputeResult,
+  member: number,
+): { lastTask: number | null; count: number; remaining: number } {
+  let lastTask: number | null = null;
+  let count = 0;
+  let remaining = 0;
+  for (let task = 0; task < result.nTasks; task++) {
+    if ((result.assignees[task] ?? 0) !== member) continue;
+    count += 1;
+    lastTask = task;
+    remaining += Math.max(0, (result.effective[task * 3 + 1] ?? 0) - (result.spent[task] ?? 0));
+  }
+  return { lastTask, count, remaining };
+}
+
+/**
+ * 期限を載せる。期限が表示の範囲より先なら、そこまで見えるように広げる。
+ *
+ * 期限はプロジェクトの情報 (内容の外) にあるので、組み立てたあとで載せる。
+ * 載せなかったころは、グラフが期限の手前で切れ、期限での確率を
+ * 吹き出しを横に掃いて探すしかなかった。
+ */
+export function withDueDate(model: ScheduleModel, dueDay: number | null): ScheduleModel {
+  if (dueDay === null) return { ...model, dueIndex: null };
+  const index = dueDay - model.startDay;
+  if (index < 0 || index >= model.days) return { ...model, dueIndex: null };
+  return {
+    ...model,
+    dueIndex: index,
+    displayDays: Math.min(model.days, Math.max(model.displayDays, index + 7)),
   };
 }
 
@@ -328,4 +416,57 @@ export function buildScheduleModel(
 export function isNonWorkingDay(flags: number): boolean {
   const off = (flags & DAY_FLAG.weekend) !== 0 || (flags & DAY_FLAG.holiday) !== 0;
   return off && (flags & DAY_FLAG.forcedWorkday) === 0;
+}
+
+/**
+ * 完了日を決めている流れ。最後に終わるタスクから、前にさかのぼる。
+ *
+ * 各タスクの「前」は、前提のタスクと、同じ担当者の直前のタスク。その中で
+ * いちばん遅く終わるものが、このタスクの着手を決めている。人ではなく
+ * タスクの流れで出すのは、前提があると「最後のタスクの担当者」が完了日を
+ * 決めているとは限らないため (シミュレーションで、別の人の流れが決めて
+ * いるのに、最後のタスクの人の名前が出つづけていた)。
+ *
+ * 返すのは葉の添字の並び (前から後ろへ)。
+ */
+export function criticalChain(
+  result: ComputeResult,
+  model: ScheduleModel,
+  rows: readonly TreeRow[],
+  pairs: readonly (readonly [number, number])[],
+  limit = 8,
+): number[] {
+  const finishOf = new Map<number, number>();
+  const byId = new Map(model.rows.map((row) => [row.id, row]));
+  for (const row of rows) {
+    if (row.leafIndex === null) continue;
+    const mark = byId.get(row.task.id)?.marks.p80;
+    finishOf.set(row.leafIndex, mark ?? Number.POSITIVE_INFINITY);
+  }
+  const finish = (leaf: number): number => finishOf.get(leaf) ?? Number.NEGATIVE_INFINITY;
+
+  let current: number | null = null;
+  for (const leaf of finishOf.keys()) {
+    if (current === null || finish(leaf) >= finish(current)) current = leaf;
+  }
+  const chain: number[] = [];
+  while (current !== null && chain.length < limit) {
+    chain.unshift(current);
+    const at: number = current;
+    const member = result.assignees[at] ?? 0;
+    const before = [
+      ...pairs.filter(([task]) => task === at).map(([, after]) => after),
+      // 同じ担当者の直前のタスク。
+      ...[...finishOf.keys()]
+        .filter((leaf) => leaf < at && (result.assignees[leaf] ?? 0) === member)
+        .slice(-1),
+    ];
+    let next: number | null = null;
+    for (const leaf of before) {
+      if (next === null || finish(leaf) > finish(next)) next = leaf;
+    }
+    // 前のものが今日までに終わっている (完了日の印が 0 以下) なら、そこで止める。
+    current = next !== null && finish(next) > (model.todayIndex ?? 0) ? next : null;
+  }
+  return chain;
 }

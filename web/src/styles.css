@@ -1910,3 +1910,108 @@ td.num.short {
   color: var(--critical);
   font-weight: 600;
 }
+
+/* ===== 見通しの要点 (週報用) ===== */
+.report-lines {
+  display: grid;
+  grid-template-columns: minmax(10em, max-content) 1fr;
+  gap: 6px 16px;
+  margin: 8px 0 12px;
+}
+.report-lines dt {
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+.report-lines dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.report-text {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  font: 12px / 1.5 var(--font);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  resize: vertical;
+}
+.after-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.after-list .strong {
+  font-weight: 620;
+}
+.inline-add {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.inline-add input {
+  width: 6em;
+}
+.progress-cell input.num {
+  width: 4.5em;
+}
+td select.assignee {
+  max-width: 9em;
+}
+
+@media (max-width: 720px) {
+  .report-lines {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .report-lines dd {
+    margin-bottom: 8px;
+  }
+}
+
+/* ===== 狭い画面 ===== */
+.mobile-meta {
+  display: none;
+}
+@media (max-width: 720px) {
+  /* タブは折り返す。横に流すと「見通し」が画面の外に隠れていた。 */
+  .tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+  .tabs button {
+    padding: 6px 10px 8px;
+  }
+  /*
+   * タスクの表は「使用・名前・状態」だけを残し、進捗・担当・完了予測は
+   * 名前の下の 1 行に寄せる。列を横に流すと、要る数字が画面の外に出ていた。
+   */
+  .task-table {
+    min-width: 0;
+  }
+  .task-table th:nth-child(n + 4),
+  .task-table td:nth-child(n + 4) {
+    display: none;
+  }
+  .task-table .name-cell {
+    min-width: 0;
+  }
+  .task-table .name-inner {
+    flex-wrap: wrap;
+  }
+  .mobile-meta {
+    display: block;
+    flex-basis: 100%;
+    font-size: 12px;
+    color: var(--ink-muted);
+  }
+}

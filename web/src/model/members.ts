@@ -75,7 +75,10 @@ export function participantsOf(resolved: ResolvedMembers, memberIds: readonly st
     .filter((index): index is number => index !== undefined);
 }
 
-/** 人員の稼働予定を、その人が 1 週間に働ける分数にまとめる。 */
+/**
+ * 人員の稼働予定を、その人が 1 週間に**この案件へ**使える分数にまとめる。
+ * 兼務・割り込みのぶん (`allocation`) を除く。
+ */
 export function weeklyMinutes(member: Member): number {
   let total = 0;
   for (const window of member.workdays) {
@@ -83,7 +86,8 @@ export function weeklyMinutes(member: Member): number {
     const to = timeToMinutes(window.end);
     if (to > from) total += Math.max(0, to - from - member.breakMinutes);
   }
-  return total;
+  const share = Number.isFinite(member.allocation) ? member.allocation : 100;
+  return (total * Math.min(100, Math.max(0, share))) / 100;
 }
 
 function timeToMinutes(time: string): number {

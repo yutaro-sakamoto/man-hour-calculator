@@ -275,3 +275,59 @@ export function collectGroups(tasks: readonly Task[]): string[] {
   }
   return [...groups].sort((a, b) => a.localeCompare(b));
 }
+
+/**
+ * 前提を、計算に渡す葉の添字の組 `[タスク, 前提]` に直す。
+ *
+ * 前提に親を選んでいれば、その配下の葉すべてを待つ。前提の側が親でも子でも、
+ * 待つのは**葉**どうし (計算は葉しか知らない)。自分より下の行を指す前提は
+ * 効かない (上から順に着手する、という前提と揃えるため) ので、ここで落とす。
+ * 計算から外した行 (使用を外した・読めない見積もり) も落とす。
+ */
+export function dependencyPairs(rows: readonly TreeRow[]): [number, number][] {
+  const leavesOf = new Map<string, number[]>();
+  // 下から見れば、子の葉を親に足していくだけで部分木の葉が集まる。
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (row === undefined) continue;
+    const own = row.leafIndex === null ? [] : [row.leafIndex];
+    const children = rows
+      .filter((child) => child.task.parentId === row.task.id)
+      .flatMap((child) => leavesOf.get(child.task.id) ?? []);
+    leavesOf.set(row.task.id, [...own, ...children]);
+  }
+
+  const pairs: [number, number][] = [];
+  for (const row of rows) {
+    if (row.task.after.length === 0) continue;
+    const targets = leavesOf.get(row.task.id) ?? [];
+    for (const id of row.task.after) {
+      for (const before of leavesOf.get(id) ?? []) {
+        for (const task of targets) {
+          if (before < task) pairs.push([task, before]);
+        }
+      }
+    }
+  }
+  return pairs;
+}
+
+/**
+ * 同じ親の下で一番上へ動かす (部分木ごと)。
+ *
+ * 途中で割り込んだ緊急のタスクを先に着手させるのに、↑ を何度も押して
+ * いた (追加 1 件に 15 操作)。1 回で済むようにする。
+ */
+export function moveToFirst(tasks: Task[], id: string): Task[] {
+  let current = tasks;
+  // 1 回で 1 つ上がる。兄弟の数より多くは回らない (止まったら終わり)。
+  let index = current.findIndex((task) => task.id === id);
+  while (index > 0) {
+    const next = moveSubtree(current, index, -1);
+    const moved = next.findIndex((task) => task.id === id);
+    if (moved === index) break;
+    current = next;
+    index = moved;
+  }
+  return current;
+}

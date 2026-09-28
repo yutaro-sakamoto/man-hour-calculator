@@ -1,4 +1,4 @@
-# JS ↔ WASM の ABI (version 4)
+# JS ↔ WASM の ABI (version 5)
 
 `crates/core/src/abi.rs` と `web/src/wasm.ts` / `web/src/abi.ts` は、この文書の表どおりの
 バッファをやり取りする。どちらかを変えたら `VERSION` を上げること。起動時に
@@ -32,7 +32,7 @@ new Float64Array(memory.buffer, ptr, length)
 | `dealloc` | `(ptr: *mut u8, len_bytes: usize)` | `alloc` した領域を解放する |
 | `compute` | `(ptr: *const f64, len: usize) -> *const f64` | 計算してレスポンス先頭を返す |
 | `last_response_len` | `() -> usize` | 直前のレスポンスの長さ (`f64` の個数) |
-| `abi_version` | `() -> u32` | この文書のバージョン (= 4) |
+| `abi_version` | `() -> u32` | この文書のバージョン (= 5) |
 
 `compute` が返すポインタは**次に `compute` を呼ぶまで**しか有効でない。
 JS 側は必ずコピーしてから使う。また `compute` の内部で線形メモリが伸びると
@@ -52,15 +52,15 @@ wasm.dealloc(ptr, bytes);
 ## リクエスト
 
 長さは
-`32 + 7 * n_tasks + 15 * n_members + 6 * n_events + 2 * n_event_members
-+ 2 * n_event_exceptions + n_forced_workdays`。
+`32 + 8 * n_tasks + 16 * n_members + 6 * n_events + 2 * n_event_members
++ 2 * n_event_exceptions + n_forced_workdays + 2 * n_dependencies`。
 
 ### ヘッダ (32 要素)
 
 | 添字 | 名前 | 値 |
 |---:|---|---|
 | 0 | `magic` | `20250920` 固定 |
-| 1 | `version` | `4` |
+| 1 | `version` | `5` |
 | 2 | `engine` | `0` = モンテカルロ、`1` = 数値畳み込み |
 | 3 | `dist_kind` | `0` = PERT、`1` = 三角分布 (未知の値は PERT にフォールバック) |
 | 4 | `lambda` | PERT の形状パラメータ。`0..=100` に丸められる。既定 `4` |
@@ -79,31 +79,45 @@ wasm.dealloc(ptr, bytes);
 | 17 | `hours_per_person_day` | 1 人日あたりの時間 (`> 0`) |
 | 18 | `n_event_members` | 予定と人員の割当件数。`0..=10000` |
 | 19 | `use_japanese_holidays` | `0` / `1` |
-| 20 | `today_day` | 進捗を測る基準日 (日数) |
+| 20 | `today_day` | 進捗を測る基準日 (日数)。その日の朝の時点を指す |
 | 21 | `n_event_exceptions` | 予定の除外日の件数。`0..=10000` |
-| 22..31 | — | 予約 (`0`) |
+| 22 | `n_dependencies` | タスクの前提の件数。`0..=10000` |
+| 23..31 | — | 予約 (`0`) |
 
 ### 本体 (この順に連結)
 
 | 区画 | 要素数 | 内容 |
 |---|---:|---|
-| タスク | `7 * n_tasks` | `min, likely, max, start_day, progress, end_day, assignee` |
-| 人員 | `15 * n_members` | 稼働開始 × 7、稼働終了 × 7、休憩分数 |
+| タスク | `8 * n_tasks` | `min, likely, max, start_day, progress, end_day, assignee, spent` |
+| 人員 | `16 * n_members` | 稼働開始 × 7、稼働終了 × 7、休憩分数、使える割合 (%) |
 | 予定 | `6 * n_events` | `start_day, end_day, start_minute, end_minute, repeat_weeks, until_day` |
 | 予定の参加者 | `2 * n_event_members` | `event_index, member_index` |
 | 予定の除外日 | `2 * n_event_exceptions` | `event_index, day` |
 | 休日出勤 | `n_forced_workdays` | `day` |
+| 前提 | `2 * n_dependencies` | `task_index, after_index` (`after` が終わってから `task` に着手) |
 
 - `start_day` / `end_day` / `until_day` は未入力なら `NaN`。
 - `progress` は `0.0..=1.0`。`assignee` は人員の添字 (範囲外なら 0 に倒す)。
+- `spent` は申告された実績工数 (人日)。未入力なら `NaN`。負・非有限も未入力として読む。
+  **入っていればカレンダーから推し量らずにこれを使う** (兼務・割り込みがあると、
+  担当者が働けた時間はこのタスクに使った時間より大きい)。無ければ着手日から
+  `today_day` の**前日**までに担当者が投入できた工数を消化とみなす。
 - 人員の稼働時間は曜日ごとの `[開始, 終了)` を分で表す。添字 0 が日曜。
   開始と終了が同じ曜日は非稼働。**休憩分数は稼働日から一律で差し引く**。
+- 使える割合は `0..=100` (%)。兼務・割り込みのぶんを除いた、この案件に使える割合。
+  読めなければ `100`。
 - 予定の `start_minute` / `end_minute` が `NaN` なら終日 (稼働時間をまるごと潰す)。
 - `repeat_weeks` は繰り返しの週数。`0` = 繰り返さない、`1` = 毎週、`2` = 隔週。
   `until_day` まで続く。
 - 予定の除外日は、休みにする回の**初日**を指す。複数日にまたがる回はまるごと消える。
   並び順は問わない (受け取った側で整列して重複を落とす)。範囲外の `event_index` は捨てる。
 - 予定は複数の人員に割り当てられる。同じ `event_index` が複数行に現れてよい。
+- 前提は `after_index < task_index` のものだけが効く (一覧で上にあるものしか待たない)。
+  それ以外と範囲外は捨てる。これで循環は起きない。
+- 未着手のタスクの `start_day` が `today_day` より後なら、その前日までは着手しない
+  (前提と同じく待ちとして扱う)。
+- **前提か未来の着手日が 1 件でもあれば、`engine` の指定にかかわらずモンテカルロで計算する**
+  (畳み込みは待ちを表せない)。試行回数は `iterations * n_tasks <= 50_000_000` に収める。
 
 制限値は `crates/core/src/abi.rs` の定数がすべて。ほかに
 `iterations * n_tasks <= 50_000_000` と `n_tasks * (prefix_bins + 1) <= 200_000`
@@ -115,7 +129,7 @@ wasm.dealloc(ptr, bytes);
 稼働分数 = その曜日の稼働時間帯の長さ
            − 休憩分数
            − 予定が稼働時間帯を覆う分数 (重なりは 1 回だけ数える)
-工数     = 稼働分数 ÷ 60 ÷ hours_per_person_day
+工数     = 稼働分数 ÷ 60 ÷ hours_per_person_day × 使える割合 ÷ 100
 週末・祝日 → 0 (ただし休日出勤に指定されていれば通常どおり)
 ```
 
@@ -133,7 +147,7 @@ wasm.dealloc(ptr, bytes);
 | 添字 | 名前 | 内容 |
 |---:|---|---|
 | 0 | `status` | `0` なら成功。それ以外はエラー (下表) |
-| 1 | `version` | `4` |
+| 1 | `version` | `5` |
 | 2 | `n_bins` | 本体のビン数 |
 | 3 | `n_percentiles` | 分位点の個数 (現在は 7) |
 | 4 | `n_tasks` | タスク数 |
@@ -151,7 +165,8 @@ wasm.dealloc(ptr, bytes);
 | 16 | `total_spent` | 消化済み工数の合計 |
 | 17 | `n_members` | 人員の数 |
 | 18 | `total_capacity` | 全員・全期間で投入できる工数 |
-| 19..23 | — | 予約 |
+| 19 | `engine_used` | 実際に使ったエンジン (`0` モンテカルロ / `1` 畳み込み)。前提があると `0` |
+| 20..23 | — | 予約 |
 
 ### 本体 (この順に連結)
 
@@ -163,13 +178,13 @@ wasm.dealloc(ptr, bytes);
 | `percentile_values` | `n_percentiles` | 上に対応する総工数 |
 | `sensitivity` | `n_tasks` | 各タスクの分散が総分散に占める割合 (総和 1) |
 | `effective` | `3 * n_tasks` | 実績を反映した `min, likely, max` |
-| `spent` | `n_tasks` | 消化済み工数 (担当者のカレンダーで測ったもの) |
+| `spent` | `n_tasks` | 消化済み工数 (申告があればそれ、無ければ担当者のカレンダーで測ったもの) |
 | `state` | `n_tasks` | `0` 未着手 / `1` 進行中 / `2` 完了 |
 | `assignee` | `n_tasks` | 実際に使われた担当者の添字 |
 | `prefix_cdf` | `n_tasks * prefix_width` | 担当者内での累積工数の CDF |
 | `member_grid_hi` | `n_members` | 担当者ごとの累積和グリッドの上限 |
 | `member_capacity` | `n_members * n_days` | その日に投入できる工数 (人員ごと) |
-| `member_cumulative` | `n_members * n_days` | 開始日からの累積 (人員ごと) |
+| `member_cumulative` | `n_members * n_days` | **`today_day` から**の累積 (人員ごと)。それより前の日は `0` |
 | `member_flags` | `n_members * n_days` | ビット: 1 週末 / 2 祝日 / 4 予定あり / 8 休日出勤 |
 
 人員ごとの配列は `member * n_days + day` の順に並ぶ。
@@ -182,6 +197,17 @@ i 番目のビンは `[lo + i*step, lo + (i+1)*step)`、`step = (hi - lo) / n_bi
 ここでの「そこまで」は**同じ担当者のタスクの中で**数える。別の人のタスクは
 並行して進むので、一列に足してはいけない。これを `member_cumulative` と
 突き合わせると、**タスク i が d 日までに終わっている確率**が出る。
+
+前提があるとき、`prefix_cdf` は「累積工数」ではなく**担当者の稼働の座標で測った、
+終わる位置**の分布になる。前提のタスクが終わった日までは、その担当者の稼働を
+使わずに待つ (待ちの分だけ位置が先へずれる)。前提が無ければ両者は一致するので、
+読み方は変わらない。`member_grid_hi` は、全タスクを最大値で流したときの終わる
+位置まで広がる。目盛りの外 (期間内に終わらない試行) は数えないので、行の末尾が
+`1` に届かないことがある。
+
+`member_cumulative` を基準日から数えるのは、`prefix_cdf` が**残り**の工数の
+分布だから。残りは今日から先の稼働でしか賄えない。開始日から数えると、
+放っておいた案件でも完了予測が動かず、未着手のタスクが過去の日付に終わる。
 
 複数人にまたがるまとまり (親タスクや全体) が終わっている確率は、
 関わる人ごとの確率の**積**になる。タスクは独立としているので、

@@ -6,6 +6,7 @@ import {
   progressOfSubtree,
   progressOfTask,
   progressOverall,
+  stateOfEntered,
   stateOfProgress,
 } from "./progress.ts";
 import { createTask } from "./project.ts";
@@ -172,4 +173,10 @@ test("まとまりの状態は配下の葉から決まる", () => {
     "done",
   );
   assert.equal(stateOfProgress(progressOfLeaves(result([]), [])), "notStarted");
+});
+
+test("計算に入っていないタスクの状態は、入れた実績から読む", () => {
+  assert.equal(stateOfEntered({ endDate: "2026-10-01", progress: 90, startDate: null }), "done");
+  assert.equal(stateOfEntered({ endDate: null, progress: 30, startDate: null }), "inProgress");
+  assert.equal(stateOfEntered({ endDate: null, progress: 0, startDate: null }), "notStarted");
 });

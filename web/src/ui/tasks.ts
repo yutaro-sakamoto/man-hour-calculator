@@ -5,11 +5,11 @@
  * 詳細の窓 (`taskDetail.ts`) に集めてある。
  */
 
-import type { AppActions, AppState } from "../app.ts";
+import { canWrite, type AppActions, type AppState } from "../app.ts";
 import type { ProjectDocument } from "../api/types.ts";
 import { formatDayShort, formatEstimateRange, formatNumber, formatPercent } from "../format.ts";
 import { lang, t } from "../i18n.ts";
-import { stateOfProgress } from "../model/progress.ts";
+import { stateOfEntered, stateOfProgress } from "../model/progress.ts";
 import { createTask, sampleDocument } from "../model/project.ts";
 import type { ScheduleRow } from "../model/schedule.ts";
 import {
@@ -27,7 +27,7 @@ import type { Priority, Task, TaskState } from "../types.ts";
 import { button, card, checkbox, h, headerRow, iconButton, openLink, select } from "./dom.ts";
 import { commentButton } from "./comments.ts";
 import { openTaskDetail } from "./schedule.ts";
-import { priorityChoices } from "./taskFields.ts";
+import { assigneeField, priorityChoices, progressField, taskWriter } from "./taskFields.ts";
 
 const STATE_ORDER: readonly TaskState[] = ["notStarted", "inProgress", "done"];
 
@@ -46,7 +46,7 @@ function stateOf(state: AppState, row: TreeRow, scheduleRow: ScheduleRow | undef
   if (row.hasChildren) {
     return scheduleRow === undefined ? "notStarted" : stateOfProgress(scheduleRow.progress);
   }
-  if (row.leafIndex === null) return "notStarted";
+  if (row.leafIndex === null) return stateOfEntered(row.task);
   const code = state.result?.states[row.leafIndex] ?? 0;
   return STATE_ORDER[code] ?? "notStarted";
 }
@@ -218,11 +218,32 @@ function estimateText(row: TreeRow): string {
     .join(" – ");
 }
 
+/**
+ * 進捗の欄。**末端のタスクは入れた値をそのまま出し、その場で書き換えられる。**
+ *
+ * 計算で出した比率 (消化 ÷ 全体) を出していたころは、90% と入れた行が
+ * 93% と出て、報告する数字が 2 つになっていた。毎週の実績入力のために
+ * 行を 1 件ずつ開いて閉じるのも重かった (1 件 3〜4 操作)。
+ * 親の行は配下を工数で重み付けたもの (`model/progress.ts`)。
+ */
 function progressCell(
   state: AppState,
+  actions: AppActions,
   row: TreeRow,
   scheduleRow: ScheduleRow | undefined,
 ): HTMLElement {
+  if (!row.hasChildren) {
+    const task = row.task;
+    const label = task.name.trim() === "" ? t("tasks.untitled") : task.name;
+    return h("td", { class: "num progress-cell", dataset: { progress: String(task.progress) } }, [
+      canWrite(state)
+        ? progressField(task, taskWriter(actions, task.id), {
+            focusPrefix: `row:${task.id}`,
+            label,
+          })
+        : h("span", { class: "bar-value", text: `${String(task.progress)}%` }),
+    ]);
+  }
   // 計算に入っていない行 (使用を外した行・不正な行) には進捗が無い。
   const progress = state.result === null || !row.active ? null : (scheduleRow?.progress ?? null);
   if (progress === null || progress.leafCount === 0) {
@@ -234,6 +255,48 @@ function progressCell(
     ]),
     h("span", { class: "bar-value", text: formatPercent(progress.ratio, lang(), 0) }),
   ]);
+}
+
+/** 担当の欄。書ける人には、その場で選ばせる (1 件ずつ開かずに割り当てられる)。 */
+function assigneeCell(state: AppState, actions: AppActions, row: TreeRow): HTMLElement {
+  if (row.hasChildren || !canWrite(state)) {
+    return h("td", {}, [
+      h("span", { class: row.hasChildren ? "muted" : "", text: assigneeText(state, row) }),
+    ]);
+  }
+  const task = row.task;
+  const label = task.name.trim() === "" ? t("tasks.untitled") : task.name;
+  return h("td", {}, [
+    assigneeField(state, task, taskWriter(actions, task.id), {
+      focusPrefix: `row:${task.id}`,
+      label,
+    }),
+  ]);
+}
+
+/**
+ * 狭い画面でだけ出す、名前の下の 1 行 (進捗・担当・完了予測)。
+ *
+ * スマホ幅では表の列が画面の外に出て、見積もりも担当も完了予測も、1 件ずつ
+ * 開かないと見えなかった。狭い画面では列を隠し、要るものをここに寄せる。
+ */
+function mobileMeta(
+  state: AppState,
+  row: TreeRow,
+  scheduleRow: ScheduleRow | undefined,
+): HTMLElement {
+  const l = lang();
+  const progress = row.hasChildren
+    ? formatPercent(scheduleRow?.progress.ratio ?? 0, l, 0)
+    : `${String(row.task.progress)}%`;
+  const finish =
+    state.schedule === null || scheduleRow?.marks.p80 == null
+      ? "—"
+      : formatDayShort(state.schedule.startDay + scheduleRow.marks.p80, l);
+  return h("span", {
+    class: "mobile-meta",
+    text: `${progress} · ${assigneeText(state, row)} · P80 ${finish}`,
+  });
 }
 
 function assigneeText(state: AppState, row: TreeRow): string {
@@ -307,21 +370,36 @@ function renderRow(
         task.priority === "high"
           ? h("span", { class: "chip priority-high", text: t("priority.high") })
           : null,
+        mobileMeta(state, row, scheduleRow),
+        task.after.length === 0
+          ? null
+          : h("span", {
+              class: "chip muted",
+              text: `⇠ ${String(task.after.length)}`,
+              title: t("detail.afterCount", { count: task.after.length }),
+            }),
       ]),
     ]),
   );
 
   cells.push(
     h("td", {}, [h("span", { class: `pill pill-${state_}`, text: t(`state.${state_}`) })]),
-    progressCell(state, row, scheduleRow),
+    progressCell(state, actions, row, scheduleRow),
     h("td", { class: "num estimate" }, [
       row.hasChildren
         ? h("span", { class: "rollup", text: estimateText(row), title: t("tasks.rollupHint") })
         : h("span", { text: estimateText(row) }),
+      // 読めない見積もりは、その行で言う。上の帯の 1 行だけでは、どの行か分からない。
+      row.active && !row.valid && !row.hasChildren
+        ? h("span", {
+            class: "chip warn",
+            text: [row.task.min, row.task.likely, row.task.max].every((v) => v.trim() === "")
+              ? t("tasks.missingEstimate")
+              : t("tasks.unreadableEstimate"),
+          })
+        : null,
     ]),
-    h("td", {}, [
-      h("span", { class: row.hasChildren ? "muted" : "", text: assigneeText(state, row) }),
-    ]),
+    assigneeCell(state, actions, row),
   );
 
   // 完了予測は常に見せる。これがこのアプリの答えそのもの。
@@ -383,7 +461,9 @@ function renderRow(
           (document, child) => {
             document.tasks = insertAfterSubtree(document.tasks, index, child);
           },
-          createTask({ parentId: task.id, group: task.group }),
+          // 見積もりは空で始める。仮の値を入れておくと、書き忘れたまま
+          // 合計に入ってしまう (未入力の行は計算から外し、印を付ける)。
+          createTask({ parentId: task.id, group: task.group, min: "", likely: "", max: "" }),
         );
       }),
       commentButton(state, actions, row.task.id, t("comments.taskButton")),
@@ -489,7 +569,7 @@ export function renderTasksTab(state: AppState, actions: AppActions): HTMLElemen
             (document, task) => {
               document.tasks.push(task);
             },
-            createTask(),
+            createTask({ min: "", likely: "", max: "" }),
           );
         },
         { id: "add-row", class: "primary" },

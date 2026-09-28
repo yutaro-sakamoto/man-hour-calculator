@@ -680,7 +680,14 @@ impl<S: Store> Service<S> {
         name: &str,
     ) -> ApiResult<Project> {
         let source = self.get_project(actor, id)?;
-        self.create_project(actor, now, new_id, name, source.document)
+        let mut copy = self.create_project(actor, now, new_id, name, source.document)?;
+        // 期限も内容の一部として持っていく。持っていかなかったころは、
+        // 複製した途端に「余裕 n 日」が消え、状態が「進行中」になっていた。
+        if source.meta.due_date.is_some() {
+            copy.meta.due_date = source.meta.due_date;
+            self.store.put_project(copy.clone())?;
+        }
+        Ok(copy)
     }
 
     /* ===== 権限 ===== */
@@ -1180,6 +1187,8 @@ mod tests {
             progress: 0.0,
             end_date: None,
             assignee_id: None,
+            spent: String::new(),
+            after: Vec::new(),
         }
     }
 
@@ -1367,6 +1376,38 @@ mod tests {
         );
         assert_eq!(copy.meta.access.len(), 1, "共有は引き継がない");
         assert_eq!(copy.document, Document::default());
+    }
+
+    /// 期限も複製に持っていく (シミュレーションで、複製すると期限が消えていた)。
+    #[test]
+    fn duplicating_keeps_the_due_date() {
+        let mut service = setup();
+        make_project(&mut service, "alice", "p1");
+        let alice = actor(&service, "alice");
+        service
+            .update_project(
+                &alice,
+                &ProjectId::new("p1"),
+                NOW,
+                ProjectPatch {
+                    name: None,
+                    group_id: None,
+                    due_date: Some(Some("2026-12-25".into())),
+                },
+            )
+            .unwrap();
+        let copy = service
+            .duplicate_project(
+                &alice,
+                &ProjectId::new("p1"),
+                LATER,
+                ProjectId::new("p2"),
+                "複製",
+            )
+            .unwrap();
+        assert_eq!(copy.meta.due_date.as_deref(), Some("2026-12-25"));
+        let stored = service.get_project(&alice, &ProjectId::new("p2")).unwrap();
+        assert_eq!(stored.meta.due_date.as_deref(), Some("2026-12-25"));
     }
 
     #[test]

@@ -21,6 +21,7 @@
       ],
       "createdAt": "2026-01-05T00:00:00Z",
       "document": {
+        "budget": null,
         "calendar": {
           "events": [],
           "forcedWorkdays": [],
@@ -31,6 +32,10 @@
           "today": "",
           "useJapaneseHolidays": true
         },
+        "calibrate": false,
+        "editedAt": "",
+        "history": [],
+        "onHold": false,
         "settings": {
           "bins": 48,
           "dist": 0,
@@ -42,6 +47,7 @@
         },
         "tasks": [
           {
+            "after": [],
             "assigneeId": null,
             "enabled": true,
             "endDate": null,
@@ -54,6 +60,7 @@
             "parentId": null,
             "priority": "high",
             "progress": 0.0,
+            "spent": "",
             "startDate": null
           }
         ]
@@ -84,5 +91,5 @@
       "systemRole": "member"
     }
   ],
-  "version": 3
+  "version": 4
 }

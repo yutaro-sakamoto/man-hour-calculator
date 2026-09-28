@@ -5,7 +5,15 @@ import { DAY_FLAG } from "../abi.ts";
 import { dayFromIso } from "../format.ts";
 import type { ComputeResult } from "../wasm.ts";
 import { createTask } from "./project.ts";
-import { actualSpanOf, buildScheduleModel, isNonWorkingDay, prefixCdfAt } from "./schedule.ts";
+import {
+  actualSpanOf,
+  buildScheduleModel,
+  criticalChain,
+  isNonWorkingDay,
+  prefixCdfAt,
+  withDueDate,
+  type ScheduleModel,
+} from "./schedule.ts";
 import { buildRows } from "./tree.ts";
 
 const START = dayFromIso("2026-09-01") ?? 0;
@@ -109,8 +117,10 @@ test("行ごとに完了確率・進捗・実績がそろう", () => {
 
   // 同じ人の後ろのタスクが終われば前も終わっているので、親は最後の葉と同じ。
   assert.deepEqual([...parent.probabilities], [...b.probabilities]);
-  assert.deepEqual([...a.probabilities], [0.5, 1, 1, 1]);
-  assert.equal(a.marks.p50, 0);
+  // a は終わっている。予測ではなく、入れた完了日 (9/03 = 添字 2) に終わる。
+  // 予測から引いていたころは、残り 0 のタスクが期間の初日に「終わって」いた。
+  assert.deepEqual([...a.probabilities], [0, 0, 1, 1]);
+  assert.equal(a.marks.p50, 2);
   assert.equal(b.marks.p50, 2);
   assert.equal(b.label, "untitled");
   assert.ok(a.done);
@@ -129,7 +139,39 @@ test("行ごとに完了確率・進捗・実績がそろう", () => {
 
   assert.equal(model.todayIndex, 1);
   assert.equal(model.overallMarks.p80, 3);
-  assert.equal(model.members[0]?.taskCount, 2);
+  const alice = model.members[0];
+  assert.ok(alice);
+  assert.equal(alice.taskCount, 2);
+  // 人員の残りは最可能値の合計から消化を引いたもの (目盛りの上限 4 ではない)。
+  assert.equal(alice.remaining, 2);
+});
+
+test("すべて終わっていれば、全体の完了日は最後の完了日", () => {
+  const parent = createTask({ name: "parent" });
+  const a = createTask({ parentId: parent.id, startDate: "2026-09-01", endDate: "2026-09-02" });
+  const b = createTask({ parentId: parent.id, startDate: "2026-09-02", endDate: "2026-09-04" });
+  const result = {
+    ...tinyResult(),
+    spent: new Float64Array([2, 2]),
+    states: new Float64Array([2, 2]),
+  } as ComputeResult;
+  const model = buildScheduleModel(result, buildRows([parent, a, b]), START + 3, "u", ["A"]);
+  assert.equal(model.overallMarks.p80, 3);
+  assert.equal(model.rows[0]?.marks.p80, 3, "親も最後の完了日");
+  assert.equal(model.rows[1]?.marks.p80, 1);
+});
+
+test("進捗 100% だけで完了日が無ければ、基準日の前日に終わったとみなす", () => {
+  const only = createTask({ progress: 100 });
+  const result = {
+    ...tinyResult(),
+    nTasks: 1,
+    assignees: new Float64Array([0]),
+    spent: new Float64Array([2]),
+    states: new Float64Array([2]),
+  } as ComputeResult;
+  const model = buildScheduleModel(result, buildRows([only]), START + 3, "u", ["A"]);
+  assert.equal(model.rows[0]?.marks.p50, 2);
 });
 
 test("基準日が期間の外なら、今日の印は無い", () => {
@@ -152,4 +194,33 @@ test("休日出勤は非稼働日にしない", () => {
   );
   assert.ok(isNonWorkingDay(model.dayFlags[0] ?? 0));
   assert.ok(!isNonWorkingDay(model.dayFlags[1] ?? 0));
+});
+
+test("期限を載せ直すと確率の日が動き、外すと消える", () => {
+  const model = buildScheduleModel(tinyResult(), tinyRows(), START, "u", ["A"]);
+  const due = withDueDate(model, START + 2);
+  assert.equal(due.dueIndex, 2);
+  assert.equal(withDueDate(due, START + 1).dueIndex, 1);
+  assert.equal(withDueDate(due, null).dueIndex, null);
+});
+
+test("完了日を決めている流れは、前提と同じ担当者の直前をさかのぼる", () => {
+  // A (Alice, 3 日目に終わる) → C (Bob, A を待って 5 日目)。B (Bob, 1 日目) は流れに無い。
+  const a = createTask({ name: "A" });
+  const b = createTask({ name: "B" });
+  const c = createTask({ name: "C", after: [a.id] });
+  const rows = buildRows([a, b, c]);
+  const marks = (p80: number) => ({ p10: p80, p25: p80, p50: p80, p75: p80, p80, p90: p80 });
+  const model = {
+    todayIndex: 0,
+    rows: [
+      { id: a.id, marks: marks(3) },
+      { id: b.id, marks: marks(1) },
+      { id: c.id, marks: marks(5) },
+    ],
+  } as unknown as ScheduleModel;
+  const result = { assignees: new Float64Array([0, 1, 1]) } as unknown as ComputeResult;
+  assert.deepEqual(criticalChain(result, model, rows, [[2, 0]]), [0, 2]);
+  // 前提が無ければ、Bob の直前 (B) が流れになる。
+  assert.deepEqual(criticalChain(result, model, rows, []), [1, 2]);
 });

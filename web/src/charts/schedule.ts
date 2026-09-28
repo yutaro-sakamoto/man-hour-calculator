@@ -76,7 +76,17 @@ interface Layout {
   curveTop: number;
   curveBottom: number;
   nameWidth: number;
+  /**
+   * 狭い画面か。進捗と日付の列を省き、帯に幅を回す。
+   *
+   * スマホ幅では、名前・進捗・日付の列だけで幅を使い切り、帯が描けて
+   * いなかった (幅 0 のグラフ)。日付と進捗は下の表と詳細でも読める。
+   */
+  compact: boolean;
 }
+
+/** これより狭いと、進捗と日付の列を省く。 */
+const COMPACT_WIDTH = 560;
 
 export function createScheduleChart(
   canvas: HTMLCanvasElement,
@@ -92,8 +102,11 @@ export function createScheduleChart(
   let focusRow = -1;
 
   const layoutFor = (width: number, rowCount: number): Layout => {
-    const nameWidth = Math.max(NAME_MIN, Math.min(NAME_MAX, width * 0.26));
-    const plotLeft = nameWidth + PROGRESS_WIDTH + DATE_WIDTH + 8;
+    const compact = width < COMPACT_WIDTH;
+    const nameWidth = compact
+      ? Math.max(64, Math.round(width * 0.3))
+      : Math.max(NAME_MIN, Math.min(NAME_MAX, width * 0.26));
+    const plotLeft = nameWidth + (compact ? 0 : PROGRESS_WIDTH + DATE_WIDTH) + 8;
     const rowsTop = PAD.top;
     const rowsBottom = rowsTop + Math.max(1, rowCount + 1) * ROW_HEIGHT;
     return {
@@ -106,6 +119,7 @@ export function createScheduleChart(
       curveTop: rowsBottom + PANEL_GAP,
       curveBottom: rowsBottom + PANEL_GAP + CURVE_HEIGHT,
       nameWidth,
+      compact,
     };
   };
 
@@ -222,7 +236,7 @@ export function createScheduleChart(
     centerY: number,
     lang: Lang,
   ): void {
-    if (!layout) return;
+    if (!layout || layout.compact) return;
     const left = layout.nameWidth + 4;
     ctx.fillStyle = colors.grid;
     ctx.fillRect(left, centerY - 2, PROGRESS_BAR, 4);
@@ -324,14 +338,16 @@ export function createScheduleChart(
       const indent = row.depth * 12;
       ctx.fillText(ellipsize(ctx, row.label, plot.nameWidth - indent - 6), indent, centerY);
 
-      ctx.font = `11px ${colors.font}`;
-      ctx.fillStyle = colors.muted;
-      ctx.textAlign = "right";
-      ctx.fillText(
-        row.marks.p80 === null ? "—" : formatDayShort(data.startDay + row.marks.p80, lang),
-        plot.nameWidth + PROGRESS_WIDTH + DATE_WIDTH,
-        centerY,
-      );
+      if (!plot.compact) {
+        ctx.font = `11px ${colors.font}`;
+        ctx.fillStyle = colors.muted;
+        ctx.textAlign = "right";
+        ctx.fillText(
+          row.marks.p80 === null ? "—" : formatDayShort(data.startDay + row.marks.p80, lang),
+          plot.nameWidth + PROGRESS_WIDTH + DATE_WIDTH,
+          centerY,
+        );
+      }
 
       drawProgress(ctx, colors, row.progress, centerY, lang);
       drawRow(ctx, colors, row.marks, centerY);
@@ -344,16 +360,18 @@ export function createScheduleChart(
     ctx.fillStyle = colors.ink;
     ctx.textAlign = "left";
     ctx.fillText(t("sched.overall"), 0, overallY);
-    ctx.font = `11px ${colors.font}`;
-    ctx.fillStyle = colors.secondary;
-    ctx.textAlign = "right";
-    ctx.fillText(
-      data.overallMarks.p80 === null
-        ? "—"
-        : formatDayShort(data.startDay + data.overallMarks.p80, lang),
-      plot.nameWidth + PROGRESS_WIDTH + DATE_WIDTH,
-      overallY,
-    );
+    if (!plot.compact) {
+      ctx.font = `11px ${colors.font}`;
+      ctx.fillStyle = colors.secondary;
+      ctx.textAlign = "right";
+      ctx.fillText(
+        data.overallMarks.p80 === null
+          ? "—"
+          : formatDayShort(data.startDay + data.overallMarks.p80, lang),
+        plot.nameWidth + PROGRESS_WIDTH + DATE_WIDTH,
+        overallY,
+      );
+    }
     drawProgress(ctx, colors, data.overallProgress, overallY, lang);
     drawRow(ctx, colors, data.overallMarks, overallY);
     drawActual(ctx, colors, data.overallActual, overallY);
@@ -420,6 +438,25 @@ export function createScheduleChart(
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
       ctx.fillText(t("sched.today"), x + 4, plot.rowsTop - 8);
+    }
+
+    // --- 期限
+    if (data.dueIndex !== null) {
+      const x = Math.round(xOfDay(data.dueIndex + 1)) + 0.5;
+      ctx.save();
+      ctx.strokeStyle = colors.critical;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(x, plot.rowsTop - 6);
+      ctx.lineTo(x, plot.curveBottom);
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = colors.critical;
+      ctx.font = `10px ${colors.font}`;
+      ctx.textAlign = "right";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(t("sched.due"), x - 4, plot.rowsTop - 8);
     }
 
     // --- カーソル
@@ -549,7 +586,14 @@ export function createScheduleChart(
   canvas.addEventListener("pointermove", onPointer);
   canvas.addEventListener("pointerdown", onPointer);
   canvas.addEventListener("pointerleave", onLeave);
-  canvas.addEventListener("blur", onLeave);
+  // 描き直しで図が一瞬外れると `blur` が起きる。すぐに焦点が戻る (`main.ts` の
+  // `restoreFocus`) なら、選んでいた行を消さない。消していたころは、↓ で
+  // 行を選んでいる最中に自動保存が入ると、選択が先頭に戻っていた。
+  canvas.addEventListener("blur", () => {
+    setTimeout(() => {
+      if (document.activeElement !== canvas) onLeave();
+    }, 0);
+  });
   canvas.addEventListener("keydown", (event: KeyboardEvent) => {
     if (!model) return;
     const rowCount = model.rows.length;

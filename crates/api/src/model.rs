@@ -293,6 +293,12 @@ pub struct ProjectStatus {
     pub progress: f64,
     pub task_count: usize,
     pub done_count: usize,
+    /// 保留中か (内容の `on_hold` の写し)。
+    #[serde(default)]
+    pub on_hold: bool,
+    /// 利用者が最後に内容を変えた時刻 (内容の `edited_at` の写し)。
+    #[serde(default)]
+    pub edited_at: String,
 }
 
 /// 一覧に出すためのプロジェクトの見出し。
@@ -380,6 +386,25 @@ pub struct Document {
     pub tasks: Vec<Task>,
     pub calendar: CalendarSettings,
     pub settings: ComputeSettings,
+    /// 保留中か。一覧で「遅延」と見分けるため (稼働を 0 にして表すと遅延に、
+    /// タスクを外して表すと完了に見えていた)。
+    pub on_hold: bool,
+    /// 利用者が最後に内容を変えた時刻。開いただけでは動かない。
+    ///
+    /// `updated_at` は見通しを計算し直して保存するたびに動くので、
+    /// 「最後に実績を入れたのはいつか」が分からなくなっていた。
+    pub edited_at: String,
+    /// 日ごとの見通しの控え (古い順)。前回からどう変わったかを出すため。
+    ///
+    /// **中身は解釈しない** (`web/src/api/types.ts` の `Snapshot`)。書くのも
+    /// 読むのも画面だけで、API は預かって返すだけ。型にすると 11 個の欄の
+    /// 読み書きが WASM に生成され、配布物が 18 KiB 太った。`Value` のまま
+    /// 持てば、欄を落とすこともない。
+    pub history: Vec<serde_json::Value>,
+    /// 予算 (人日)。無ければ `None`。予算内に収まる確率と着地見込みを出すため。
+    pub budget: Option<f64>,
+    /// 終わったタスクの「実績 ÷ 見積もり」を、残りの見積もりに掛けるか。
+    pub calibrate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -398,6 +423,12 @@ pub struct Task {
     pub progress: f64,
     pub end_date: Option<String>,
     pub assignee_id: Option<String>,
+    /// 日報から書き写した実績工数。`3.5` (人日) か `28h` (時間)。空なら未入力。
+    #[serde(default)]
+    pub spent: String,
+    /// 前提となるタスクの id。これらが終わってから着手する。親の id なら配下すべて。
+    #[serde(default)]
+    pub after: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -418,9 +449,17 @@ pub struct Member {
     /// 日曜から土曜までの 7 件。
     pub workdays: Vec<WorkWindow>,
     pub break_minutes: f64,
+    /// 稼働のうち、この案件に使える割合 (%)。兼務・割り込みを除いたもの。
+    #[serde(default = "full_allocation")]
+    pub allocation: f64,
     /// この人員に対応するアカウント。紐づいていなければ `None`。
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub user_id: Option<UserId>,
+}
+
+/// 使える割合の既定値。版 3 までの保存データには無いので、全部使えるとみなす。
+fn full_allocation() -> f64 {
+    100.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
