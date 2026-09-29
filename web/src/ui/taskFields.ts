@@ -8,6 +8,7 @@
 import type { AppActions, AppState } from "../app.ts";
 import { t } from "../i18n.ts";
 import { memberLabel } from "../model/members.ts";
+import { progressChange } from "../model/progress.ts";
 import { PRIORITIES, type Priority, type Task } from "../types.ts";
 import { formatNumber, parseEffort } from "../format.ts";
 import { lang } from "../i18n.ts";
@@ -149,10 +150,13 @@ export function endField(task: Task, set: SetTask, options: FieldOptions): HTMLE
 
 /** 進捗率は 0〜100。ここで挟むので、0〜1 と取り違えようがない。 */
 export function progressField(task: Task, set: SetTask, options: FieldOptions): HTMLElement {
+  // 100 未満にすると完了日も消える (`progressChange`)。打ち直しの途中で
+  // 消えた日付を戻せるよう、欄を作った時点の完了日を覚えておく。
+  const endDateAtRender = task.endDate;
   return numberInput(
     task.progress,
     (value) => {
-      set({ progress: Math.min(100, Math.max(0, Number(value) || 0)) });
+      set(progressChange(value, endDateAtRender));
     },
     {
       dataset: { focus: `${options.focusPrefix}:progress` },

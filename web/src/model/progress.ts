@@ -104,6 +104,28 @@ export function stateOfEntered(task: {
   return "notStarted";
 }
 
+/**
+ * 進捗の欄に打った値を、タスクへの書き込みに直す。
+ *
+ * 完了日があれば完了、という決めごと (`stateOfEntered`・`crates/core` の
+ * `actuals.rs`) なので、**100 未満にしたら完了日も消す。** 消さないと
+ * 表は 60% なのに状態は「完了」、計算も残り 0 のまま、と食い違っていた。
+ *
+ * 欄は 1 打鍵ごとに書き込む。`100` を打ち直す途中の `10` で完了日を
+ * 失わないよう、欄を作ったときの完了日 (`endDateAtRender`) を覚えておき、
+ * 100 に戻ったらそれを戻す。
+ */
+export function progressChange(
+  raw: string,
+  endDateAtRender: string | null,
+): { progress: number; endDate?: string | null } {
+  const progress = Math.min(100, Math.max(0, Number(raw) || 0));
+  if (progress < 100) return { progress, endDate: null };
+  // 覚えている完了日が無いときは触らない。詳細の窓で完了日を入れた直後
+  // (まだ描き直していない) に 100 と打っても、入れた日付を消さないため。
+  return endDateAtRender === null ? { progress } : { progress, endDate: endDateAtRender };
+}
+
 /** プロジェクト全体。 */
 export function progressOverall(result: ComputeResult): Progress {
   return progressOfLeaves(result, range(result.nTasks));
