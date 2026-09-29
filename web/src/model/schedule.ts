@@ -75,6 +75,8 @@ export interface ActualSpan {
 
 export interface ScheduleRow {
   id: string;
+  /** `rows` (元の表) での添字。同じ id のタスクが 2 つあっても行を取り違えない。 */
+  index: number;
   label: string;
   depth: number;
   isParent: boolean;
@@ -257,6 +259,7 @@ export function buildScheduleModel(
         : combine(parts, days);
     scheduleRows.push({
       id: row.task.id,
+      index: i,
       label: row.task.name.trim() === "" ? untitled : row.task.name,
       depth: row.depth,
       isParent: row.hasChildren,

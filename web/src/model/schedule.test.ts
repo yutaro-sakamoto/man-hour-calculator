@@ -174,6 +174,35 @@ test("進捗 100% だけで完了日が無ければ、基準日の前日に終�
   assert.equal(model.rows[0]?.marks.p50, 2);
 });
 
+test("同じ id の行が 2 つあっても、添字で正しい行を引ける", () => {
+  // 一覧・詳細の窓は以前「id で `schedule.rows` から探す」実装だったので、
+  // 同じ id のタスクが 2 つある文書 (取り込み時に片方を黙って捨てない設計 —
+  // `project.ts` の `toPreorder`) では、両方の行が `find` で先に見つかった
+  // 方の進捗・完了予測を表示してしまっていた。行の添字 (`ScheduleRow.index`)
+  // なら取り違えない。
+  const dup = "dup-id";
+  const a = createTask({ id: dup, name: "a" });
+  const b = createTask({ id: dup, name: "b" });
+  const model = buildScheduleModel(tinyResult(), buildRows([a, b]), START, "untitled", ["Alice"]);
+  assert.equal(model.rows.length, 2);
+  const [first, second] = model.rows;
+  assert.ok(first && second);
+  assert.equal(first.id, dup);
+  assert.equal(second.id, dup);
+
+  // a (添字 0) は終わっている、b (添字 1) はまだ。id では区別できない。
+  assert.equal(first.progress.ratio, 1);
+  assert.equal(second.progress.ratio, 0);
+  assert.equal(
+    model.rows.find((row) => row.index === 0),
+    first,
+  );
+  assert.equal(
+    model.rows.find((row) => row.index === 1),
+    second,
+  );
+});
+
 test("基準日が期間の外なら、今日の印は無い", () => {
   const model = buildScheduleModel(tinyResult(), tinyRows(), START - 10, "untitled", ["Alice"]);
   assert.equal(model.todayIndex, null);

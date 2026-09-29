@@ -67,6 +67,21 @@ test("工数 0 のタスクは、終わっていれば 100%", () => {
   assert.equal(progressOverall(result([{ total: 0, spent: 0 }])).ratio, 0);
 });
 
+test("工数 0 の葉が一部だけ終わっていれば、件数比の進捗になる", () => {
+  // 分母が 0 のときを「全部終われば 1、それ以外は 0」の二値にしていると、
+  // 1 件だけ終わっていても進捗バーは 0% のまま留まる。一方 `stateOfProgress`
+  // は 1 件でも終われば「進行中」と言うので、同じ行で「進行中なのに 0%」
+  // という食い違いが起きていた。
+  const progress = progressOverall(
+    result([
+      { total: 0, spent: 0, state: 2 },
+      { total: 0, spent: 0 },
+    ]),
+  );
+  assert.equal(progress.ratio, 0.5);
+  assert.equal(stateOfProgress(progress), "inProgress");
+});
+
 test("葉が 1 つも無ければ 0", () => {
   const progress = progressOfLeaves(result([{ total: 5, spent: 1 }]), []);
   assert.equal(progress.ratio, 0);
